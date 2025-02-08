@@ -18,7 +18,7 @@ fn main() {
         Ok(contents) => {
             // Right now the program will only output a list of scanned tokens and then exit
             let parser = Parser::new();
-            match parser.parse(&contents) {
+            match parser.scan(&contents) {
                 Ok(_) => { },
                 Err(errors) => report_errors(errors)
             }
