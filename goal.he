@@ -15,17 +15,17 @@ alias {
 
 // Setup block (do once block)
 setup {
-    pinMode Button = INPUT;
-    pinMode Led = OUTPUT;
+    pinMode Button, INPUT;
+    pinMode Led, OUTPUT;
 }
 
 // Loop block (do infinitely)
 loop {
     // No parenthesis if
-    if digitalRead Button == LOW {
-        digitalWrite Led = HIGH;
+    if Button == LOW {
+        Led = HIGH;
     }
     else {
-        digitalWrite Led = LOW;
+        Led = LOW;
     }
 }

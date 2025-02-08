@@ -1,5 +1,6 @@
 ﻿/// Holder for current scanner position inside the source file. 
 /// Also keeps track of current line and useful offsets 
+#[derive(Debug, Clone)]
 pub struct PositionInfo {
     /// Beginning position of a lexeme
     pub start: usize,

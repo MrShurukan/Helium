@@ -8,6 +8,7 @@ use crate::parser::token_type::TokenType;
 /// and a `line_offset` + `lexeme_size` are used to reconstruct the lexeme if necessary.
 /// I decided it was a little bit excessive to store strings or construct str slices (it's rarely
 /// required, just for error printing)
+#[derive(Debug)]
 pub struct Token {
     pub token_type: TokenType,
     pub line: usize,

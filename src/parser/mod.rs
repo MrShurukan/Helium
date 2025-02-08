@@ -1,8 +1,8 @@
-﻿use std::error::Error;
+﻿use crate::parser::scanner::{Scanner, ScannerError};
 use crate::parser::statement::Statement;
-use std::fmt::{Display, Formatter};
-use crate::parser::scanner::{Scanner, ScannerError, ScannerErrorType};
 use crate::parser::token::Token;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 
 mod scanner;
 mod statement;

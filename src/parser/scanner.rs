@@ -4,11 +4,12 @@ use std::iter::Peekable;
 use unicode_segmentation::Graphemes;
 use crate::parser::position_info::PositionInfo;
 use crate::parser::token::Token;
-use crate::parser::token_type::TokenType;
+use crate::parser::token_type::{LiteralType, TokenType};
 use crate::parser::utils::ReadOnlyGraphemeSlice;
 
 use ScannerErrorType as SET;
 use ScannerError as SE;
+use crate::parser;
 
 /// This struct is responsible for converting the source file to a list of tokens.
 /// This list will later be used by other parts of the front-end (like `Parser`) to create
@@ -126,6 +127,8 @@ impl Scanner<'_> {
             " " => None,
             "\r" => None,
             "\t" => None,
+            // BOM
+            "\u{FEFF}" => None,
 
             "\n" | "\r\n" => { position_info.advance_line(); None },
 
@@ -138,9 +141,10 @@ impl Scanner<'_> {
                 Some(Self::parse_number_literal(peekable, position_info, source)?)
             },
 
-            // Identifiers and reserve words are a different story. Could be pretty complex.
+            // Identifiers and reserve words are a different story than numbers. But we still limit
+            // this to alphabetic characters
             alpha if alpha.chars().all(|x| x.is_alphabetic() || x == '_') => {
-                Some(Self::parse_alpha(peekable, position_info, source?))
+                Some(Self::parse_alpha(peekable, position_info, source)?)
             },
             
             _ => {
@@ -156,7 +160,7 @@ impl Scanner<'_> {
                          position_info: &mut PositionInfo, 
                          source: &ReadOnlyGraphemeSlice) -> Result<(), ScannerError> {
         // Remember where the multiline comment started
-        let multiline_comment_start = position_info.current;
+        let multiline_comment_start = position_info.clone();
 
         let mut nesting_level = 1;
 
@@ -190,9 +194,119 @@ impl Scanner<'_> {
 
         // If we finished reading the source but never reached the end of a multiline - it's an error!
         if nesting_level != 0 {
-            Err(SE::new_with_location(SET::UnterminatedMultilineComment, position_info, source))
+            Err(SE::new_with_location(SET::UnterminatedMultilineComment, &multiline_comment_start, source))
         } else {
             unreachable!();
+        }
+    }
+    
+    fn parse_string_literal(peekable: &mut Peekable<Graphemes>,
+                            position_info: &mut PositionInfo,
+                            source: &ReadOnlyGraphemeSlice) -> Result<Token, ScannerError> {
+        let start_string_position = position_info.clone();
+        while let Some(current_char) = peekable.next() {
+            position_info.advance();
+            match current_char {
+                "\n" | "\r\n" => return Err(SE::new_with_location(SET::MultilineStringNotSupported, position_info, source)),
+                "\"" => break,
+                _ => {}
+            }
+        }
+
+        if peekable.peek().is_none() {
+            return Err(
+                SE::new_with_location(SET::UnterminatedString, &start_string_position, source)
+            );
+        }
+
+        // Get the string value
+        let str = source.grapheme_peekable()
+            .skip(position_info.start + 1)
+            .take(position_info.current - position_info.start - 2)
+            .collect();
+
+        Ok(Self::produce_token(TokenType::Literal(LiteralType::String(str)), position_info))
+    }
+    
+    fn parse_number_literal(peekable: &mut Peekable<Graphemes>,
+                            position_info: &mut PositionInfo,
+                            source: &ReadOnlyGraphemeSlice) -> Result<Token, ScannerError> {
+        // Advance until there are no more digits
+        Self::advance_while_digit(peekable, position_info);
+
+        // Look for a fractional part.
+        let current_grapheme = peekable.peek();
+        match current_grapheme {
+            // Fractional number
+            Some(current_char) if *current_char == "." => {
+                Self::advance(peekable, position_info);
+                // Using peek_no_borrow here because it's an arbitrary peek ahead function
+                let char_after_that = peekable.peek()
+                    .ok_or_else(||
+                        SE::new_with_location(SET::TrailingNumber, position_info, source)
+                    )?;
+
+                if char_after_that.chars().all(|c| c.is_ascii_digit()) {
+                    // Consume the "."
+                    Self::advance(peekable, position_info);
+                    // Advance until there are no more digits
+                    Self::advance_while_digit(peekable, position_info);
+                }
+                else {
+                    let position_info_copy = PositionInfo { current: position_info.current + 1, ..*position_info };
+                    return Err(SE::new_with_location(SET::TrailingNumber, &position_info_copy, source));
+                }
+
+                // Get the number itself
+                let str: String = Self::get_current_lexeme(position_info, source);
+                let value: f64 = str.parse().map_err(|_| SE::new_with_location(
+                    SET::IncorrectNumberToken { reason: "Couldn't convert to a double".parse().unwrap() },
+                    position_info, source))?;
+                Ok(Self::produce_token(TokenType::Literal(LiteralType::Float(value)), position_info))
+            },
+            // Integer
+            _ => {
+                // Get the number itself
+                let str: String = Self::get_current_lexeme(position_info, source);
+                let value: i64 = str.parse().map_err(|_| SE::new_with_location(
+                    SET::IncorrectNumberToken { reason: "Couldn't convert to an integer".parse().unwrap() },
+                    position_info, source))?;
+                Ok(Self::produce_token(TokenType::Literal(LiteralType::Integer(value)), position_info))
+            }
+        }
+    }
+    
+    fn parse_alpha(peekable: &mut Peekable<Graphemes>,
+                   position_info: &mut PositionInfo,
+                   source: &ReadOnlyGraphemeSlice) -> Result<Token, ScannerError> {
+        while let Some(_) = peekable.next_if(|grapheme| 
+                                            grapheme.chars().all(|x| x.is_alphanumeric() || x == '_')) {
+            position_info.advance();
+        }
+
+        let lexeme = Self::get_current_lexeme(position_info, source);
+
+        // Check if it's reserved
+        let keyword_type = parser::token_type::KEYWORDS.get(lexeme.as_str());
+        if let Some(keyword_type) = keyword_type {
+            Ok(Self::produce_token(TokenType::Keyword(keyword_type), position_info))
+        }
+        // Otherwise it's just a user defined lexeme
+        else {
+            Ok(Self::produce_token(TokenType::Literal(LiteralType::Identifier(lexeme)), position_info))
+        }
+    }
+
+    fn get_current_lexeme(position_info: &mut PositionInfo, source: &ReadOnlyGraphemeSlice) -> String {
+        let take_count = position_info.current - position_info.start;
+        source.grapheme_peekable().skip(position_info.start).take(take_count).collect()
+    }
+
+    fn advance_while_digit(peekable: &mut Peekable<Graphemes>, position_info: &mut PositionInfo) {
+        while let Some(_) = peekable.next_if(|grapheme| {
+            grapheme.chars().any(|c| c.is_ascii_digit())
+        }) {
+            position_info.advance();
         }
     }
     
@@ -300,7 +414,8 @@ pub enum ScannerErrorType {
     IncorrectNumberToken { reason: String },
     TrailingNumber,
     NoMoreTokens,
-    UnterminatedMultilineComment
+    UnterminatedMultilineComment,
+    MultilineStringNotSupported
 }
 
 impl Error for ScannerError {}
@@ -316,7 +431,8 @@ impl Display for ScannerError {
                 => &format!("The number was written in an incorrect format: {}", reason),
             ScannerErrorType::NoMoreTokens => "There were no more tokens to parse",
             ScannerErrorType::UnterminatedMultilineComment => "Multiline comment was not terminated",
-            ScannerErrorType::TrailingNumber => "Trailing literals are not supported"
+            ScannerErrorType::TrailingNumber => "Trailing literals are not supported",
+            ScannerErrorType::MultilineStringNotSupported => "Multiline strings are not supported"
         };
 
         write!(f, "{error_header}: {}", output)?;

@@ -19,7 +19,11 @@ fn main() {
             // Right now the program will only output a list of scanned tokens and then exit
             let parser = Parser::new();
             match parser.scan(&contents) {
-                Ok(_) => { },
+                Ok(tokens) => { 
+                    for token in tokens {
+                        println!("{token}");
+                    }
+                },
                 Err(errors) => report_errors(errors)
             }
         },
