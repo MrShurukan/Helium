@@ -4,7 +4,7 @@ use std::iter::Peekable;
 use unicode_segmentation::Graphemes;
 use crate::parser::position_info::PositionInfo;
 use crate::parser::token::Token;
-use crate::parser::token_type::{LiteralType, TokenType};
+use crate::parser::token_type::{LiteralType, TokenType, CONSTANTS, KEYWORDS};
 use crate::parser::utils::ReadOnlyGraphemeSlice;
 
 use ScannerErrorType as SET;
@@ -287,9 +287,11 @@ impl Scanner<'_> {
         let lexeme = Self::get_current_lexeme(position_info, source);
 
         // Check if it's reserved
-        let keyword_type = parser::token_type::KEYWORDS.get(lexeme.as_str());
-        if let Some(keyword_type) = keyword_type {
+        if let Some(keyword_type) = KEYWORDS.get(lexeme.as_str()) {
             Ok(Self::produce_token(TokenType::Keyword(keyword_type), position_info))
+        }
+        else if let Some(constant_type) = CONSTANTS.get(lexeme.as_str()) {
+            Ok(Self::produce_token(TokenType::Constant(constant_type), position_info))
         }
         // Otherwise it's just a user defined lexeme
         else {
