@@ -1,0 +1,31 @@
+// Comments
+/*
+    Multiline comments
+    /* Nested too */
+*/
+
+// Const declaration
+alias Button = PortB.2;
+
+// Large alias declaration
+alias {
+    Button = PortB.2;
+    Led = PortC.3;
+}
+
+// Setup block (do once block)
+setup {
+    pinMode Button = INPUT;
+    pinMode Led = OUTPUT;
+}
+
+// Loop block (do infinitely)
+loop {
+    // No parenthesis if
+    if digitalRead Button == LOW {
+        digitalWrite Led = HIGH;
+    }
+    else {
+        digitalWrite Led = LOW;
+    }
+}
