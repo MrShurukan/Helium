@@ -49,7 +49,7 @@ impl Error for ParserError {}
 impl Display for ParserError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.error_type {
-            ParserErrorType::ScannerError(scanner_error) => write!(f, "Scanner: {scanner_error}")
+            ParserErrorType::ScannerError(scanner_error) => write!(f, "{scanner_error}")
         }
     }
 }

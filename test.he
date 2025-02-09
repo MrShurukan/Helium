@@ -4,10 +4,29 @@
     /* Nested too */
 */
 
-(()) >= != <= {}
-true ? 1 : 2;
+// Const declaration
+alias Button = PortB.2;
 
-var a = 1;
-var b = 1.25;
-var c = "Привет!";
-var d = "";
+// Large alias declaration
+alias {
+    Button = PortB.2;
+    Led = PortC.3;
+}
+
+// Setup block (do once block)
+setup {
+    Button = INPUT;
+    Led = OUTPUT;
+}
+
+// Loop block (do infinitely)
+loop {
+    var test: i32 = 25;
+    // No parenthesis if
+    if Button == LOW {
+        Led = HIGH;
+    }
+    else {
+        Led = LOW;
+    }
+}

@@ -40,8 +40,8 @@ fn report_errors(errors: Vec<ParserError>) {
     let error_errors = if errors.len() == 1 { "error" } else { "errors" };
     eprintln!("{} {error_errors} found.", errors.len());
 
-    for error in errors {
-        eprintln!("{error}");
+    for (i, error) in errors.iter().enumerate() {
+        eprintln!("{}. {error}", i+1);
     }
     exit(3);
 }

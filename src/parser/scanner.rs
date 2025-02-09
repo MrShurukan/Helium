@@ -1,10 +1,11 @@
 ﻿use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::iter::Peekable;
+use colored::Colorize;
 use unicode_segmentation::Graphemes;
 use crate::parser::position_info::PositionInfo;
 use crate::parser::token::Token;
-use crate::parser::token_type::{LiteralType, TokenType, CONSTANTS, KEYWORDS};
+use crate::parser::token_type::{LiteralType, TokenType, CONSTANTS, KEYWORDS, TYPES};
 use crate::parser::utils::ReadOnlyGraphemeSlice;
 
 use ScannerErrorType as SET;
@@ -139,7 +140,7 @@ impl Scanner<'_> {
             // Identifiers and reserve words are a different story than numbers. But we still limit
             // this to alphabetic characters
             alpha if alpha.chars().all(|x| x.is_alphabetic() || x == '_') => {
-                Some(Self::parse_alpha(peekable, position_info, source))
+                Some(Self::parse_alpha(peekable, position_info, source)?)
             },
             
             _ => {
@@ -271,7 +272,7 @@ impl Scanner<'_> {
     
     fn parse_alpha(peekable: &mut Peekable<Graphemes>,
                    position_info: &mut PositionInfo,
-                   source: &ReadOnlyGraphemeSlice) -> Token {
+                   source: &ReadOnlyGraphemeSlice) -> Result<Token, ScannerError> {
         while peekable.next_if(|grapheme| 
                                grapheme.chars().all(|x| x.is_alphanumeric() || x == '_')).is_some() {
             position_info.advance();
@@ -281,14 +282,27 @@ impl Scanner<'_> {
 
         // Check if it's reserved
         if let Some(keyword_type) = KEYWORDS.get(lexeme.as_str()) {
-            Self::produce_token(TokenType::Keyword(keyword_type), position_info)
+            Ok(Self::produce_token(TokenType::Keyword(keyword_type), position_info))
         }
         else if let Some(constant_type) = CONSTANTS.get(lexeme.as_str()) {
-            Self::produce_token(TokenType::Constant(constant_type), position_info)
+            Ok(Self::produce_token(TokenType::Constant(constant_type), position_info))
         }
-        // Otherwise it's just a user defined lexeme
+        else if let Some(static_type) = TYPES.get(lexeme.as_str()) {
+            Ok(Self::produce_token(TokenType::Type(static_type), position_info))
+        }
+        // Otherwise it's just a user defined lexeme / port ref
         else {
-            Self::produce_token(TokenType::Literal(LiteralType::Identifier(lexeme)), position_info)
+            if lexeme.starts_with("Port") {
+                let port_name = lexeme.split("Port").nth(1);
+                if port_name.is_none() || port_name.unwrap().is_empty() {
+                    return Err(SE::new_with_location(SET::MissingPortName, position_info, source));
+                }
+                
+                Ok(Self::produce_token(TokenType::Port(port_name.unwrap().to_owned()), position_info))
+            }
+            else {
+                Ok(Self::produce_token(TokenType::Literal(LiteralType::Identifier(lexeme)), position_info))
+            }
         }
     }
 
@@ -391,7 +405,7 @@ impl ScannerError {
         let line_number_string = format!("{line_number}. ");
         let spaces = " ".repeat(line_number_string.len() + marker_position - 1);
 
-        Some(format!("{line_number_string}{line}\n{spaces}^"))
+        Some(format!("{line_number_string}{line}\n{spaces}{}", "^".red()))
     }
 }
 
@@ -403,7 +417,8 @@ pub enum ScannerErrorType {
     TrailingNumber,
     NoMoreTokens,
     UnterminatedMultilineComment,
-    MultilineStringNotSupported
+    MultilineStringNotSupported,
+    MissingPortName
 }
 
 impl Error for ScannerError {}
@@ -420,12 +435,13 @@ impl Display for ScannerError {
             ScannerErrorType::NoMoreTokens => "There were no more tokens to parse",
             ScannerErrorType::UnterminatedMultilineComment => "Multiline comment was not terminated",
             ScannerErrorType::TrailingNumber => "Trailing literals are not supported",
-            ScannerErrorType::MultilineStringNotSupported => "Multiline strings are not supported"
+            ScannerErrorType::MultilineStringNotSupported => "Multiline strings are not supported",
+            ScannerErrorType::MissingPortName => "Port name was not specified"
         };
 
-        write!(f, "{error_header}: {output}")?;
+        write!(f, "{error_header}: {}", output.red())?;
         if let Some(location) = &self.location {
-            write!(f, "\n\nHappened here:\n{location}")?;
+            write!(f, "\n\n{}\n{location}", "Happened here:".green())?;
         }
 
         Ok(())

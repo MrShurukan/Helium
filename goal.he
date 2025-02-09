@@ -15,12 +15,13 @@ alias {
 
 // Setup block (do once block)
 setup {
-    pinMode Button, INPUT;
-    pinMode Led, OUTPUT;
+    Button = INPUT;
+    Led = OUTPUT;
 }
 
 // Loop block (do infinitely)
 loop {
+    var test: i32 = 25;
     // No parenthesis if
     if Button == LOW {
         Led = HIGH;

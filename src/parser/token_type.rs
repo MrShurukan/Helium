@@ -5,10 +5,12 @@ use lazy_static::lazy_static;
 #[derive(Debug, Clone)]
 pub enum TokenType {
     Literal(LiteralType),
+    Port(String),
     // static lifetime, as we will read from KEYWORDS and CONSTANTS HashMaps
     // see those hashmaps below in a lazy_static! block
     Keyword(&'static KeywordType),
     Constant(&'static ConstantType),
+    Type(&'static StaticType),
     Punctuation(PunctuationType),
 
     Eof
@@ -27,6 +29,10 @@ lazy_static! {
         m.insert("return",  KeywordType::Return);
         m.insert("var",     KeywordType::Var);
         m.insert("while",   KeywordType::While);
+        m.insert("alias",   KeywordType::Alias);
+        m.insert("setup",   KeywordType::Setup);
+        m.insert("loop",    KeywordType::Loop);
+        m.insert("not",     KeywordType::Not);
 
         m
     };
@@ -36,7 +42,35 @@ lazy_static! {
 
         m.insert("false",   ConstantType::False);
         m.insert("true",    ConstantType::True);
+        m.insert("LOW",     ConstantType::Low);
+        m.insert("HIGH",    ConstantType::High);
+        m.insert("INPUT",     ConstantType::Input);
+        m.insert("OUTPUT",    ConstantType::Output);
 
+        m
+    };
+
+    pub static ref TYPES: HashMap<&'static str, StaticType> = {
+        let mut m = HashMap::new();
+        
+        m.insert("i8",      StaticType::Int8);
+        m.insert("i16",     StaticType::Int16);
+        m.insert("i32",     StaticType::Int32);
+        m.insert("i64",     StaticType::Int64);
+        m.insert("u8",      StaticType::Uns8);
+        m.insert("u16",     StaticType::Uns16);
+        m.insert("u32",     StaticType::Uns32);
+        m.insert("u64",     StaticType::Uns64);
+        
+        m.insert("f32",     StaticType::Float32);
+        m.insert("f64",     StaticType::Float64);
+
+        m.insert("PinState",    StaticType::PinState);
+        m.insert("PinMode",     StaticType::PinMode);
+
+        m.insert("bool",    StaticType::Boolean);
+        m.insert("string",  StaticType::String);
+        
         m
     };
 }
@@ -54,12 +88,34 @@ pub enum LiteralType {
 #[derive(Debug)]
 pub enum KeywordType {
     And, Else, Fun, For, If, Or,
-    Return, Var, While
+    Return, Var, While, Alias, Setup,
+    Loop, Not
 }
 
 #[derive(Debug, Clone)]
 pub enum ConstantType {
-    True, False
+    True, False, 
+    
+    Low, High,
+    Input, Output
+}
+
+#[derive(Debug, Clone)]
+pub enum StaticType {
+    Int8, Int16, Int32, Int64,
+    Uns8, Uns16, Uns32, Uns64,
+
+    Float32, Float64,
+
+    // LOW, HIGH
+    PinState,
+    // INPUT, OUTPUT, INPUT_PULLUP, INPUT_PULLDOWN
+    PinMode,
+
+    Boolean,
+    String,
+    
+    Array(Box<StaticType>)
 }
 
 #[derive(Debug, Clone)]
