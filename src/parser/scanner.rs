@@ -232,15 +232,15 @@ impl Scanner<'_> {
         let current_grapheme = peekable.peek();
         match current_grapheme {
             // Fractional number
-            Some(current_char) if *current_char == "." => {
+            Some(current_grapheme) if *current_grapheme == "." => {
                 Self::advance(peekable, position_info);
                 // Using peek_no_borrow here because it's an arbitrary peek ahead function
-                let char_after_that = peekable.peek()
+                let grapheme_after_that = peekable.peek()
                     .ok_or_else(||
                         SE::new_with_location(SET::TrailingNumber, position_info, source)
                     )?;
 
-                if char_after_that.chars().all(|c| c.is_ascii_digit()) {
+                if grapheme_after_that.chars().all(|c| c.is_ascii_digit()) {
                     // Consume the "."
                     Self::advance(peekable, position_info);
                     // Advance until there are no more digits
@@ -260,16 +260,21 @@ impl Scanner<'_> {
             },
             // Integer
             _ => {
-                // Get the number itself
-                let str: String = Self::get_current_lexeme(position_info, source);
-                let value: i64 = str.parse().map_err(|_| SE::new_with_location(
-                    SET::IncorrectNumberToken { reason: "Couldn't convert to an integer".parse().unwrap() },
-                    position_info, source))?;
-                Ok(Self::produce_token(TokenType::Literal(LiteralType::Integer(value)), position_info))
+                Self::produce_integer_token(position_info, source)
             }
         }
     }
-    
+
+    fn produce_integer_token(position_info: &mut PositionInfo, source: &ReadOnlyGraphemeSlice) -> Result<Token, ScannerError> {
+        // Get the number itself
+        let str: String = Self::get_current_lexeme(position_info, source);
+        let value: i64 = str.parse().map_err(|_| SE::new_with_location(
+            SET::IncorrectNumberToken { reason: "Couldn't convert to an integer".parse().unwrap() },
+            position_info, source))?;
+        
+        Ok(Self::produce_token(TokenType::Literal(LiteralType::Integer(value)), position_info))
+    }
+
     fn parse_alpha(peekable: &mut Peekable<Graphemes>,
                    position_info: &mut PositionInfo,
                    source: &ReadOnlyGraphemeSlice) -> Result<Token, ScannerError> {

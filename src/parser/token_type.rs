@@ -33,6 +33,7 @@ lazy_static! {
         m.insert("setup",   KeywordType::Setup);
         m.insert("loop",    KeywordType::Loop);
         m.insert("not",     KeywordType::Not);
+        m.insert("to",      KeywordType::To);
 
         m
     };
@@ -52,7 +53,7 @@ lazy_static! {
 
     pub static ref TYPES: HashMap<&'static str, StaticType> = {
         let mut m = HashMap::new();
-        
+
         m.insert("i8",      StaticType::Int8);
         m.insert("i16",     StaticType::Int16);
         m.insert("i32",     StaticType::Int32);
@@ -61,7 +62,7 @@ lazy_static! {
         m.insert("u16",     StaticType::Uns16);
         m.insert("u32",     StaticType::Uns32);
         m.insert("u64",     StaticType::Uns64);
-        
+
         m.insert("f32",     StaticType::Float32);
         m.insert("f64",     StaticType::Float64);
 
@@ -70,7 +71,7 @@ lazy_static! {
 
         m.insert("bool",    StaticType::Boolean);
         m.insert("string",  StaticType::String);
-        
+
         m
     };
 }
@@ -89,13 +90,13 @@ pub enum LiteralType {
 pub enum KeywordType {
     And, Else, Fun, For, If, Or,
     Return, Var, While, Alias, Setup,
-    Loop, Not
+    Loop, Not, To
 }
 
 #[derive(Debug, Clone)]
 pub enum ConstantType {
-    True, False, 
-    
+    True, False,
+
     Low, High,
     Input, Output
 }
@@ -114,7 +115,7 @@ pub enum StaticType {
 
     Boolean,
     String,
-    
+
     Array(Box<StaticType>)
 }
 
@@ -155,7 +156,7 @@ impl Display for PunctuationType {
             PunctuationType::Greater => ">",
             PunctuationType::GreaterEqual => ">=",
             PunctuationType::Less => "<",
-            PunctuationType::LessEqual => "<=",
+            PunctuationType::LessEqual => "<="
         };
 
         write!(f, "{str}")?;

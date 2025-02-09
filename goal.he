@@ -4,19 +4,24 @@
     /* Nested too */
 */
 
-// Const declaration
-alias Button = PortB.2;
+// Port declaration
+def Button = PortB.2 INPUT;
 
-// Large alias declaration
-alias {
-    Button = PortB.2;
-    Led = PortC.3;
+// Large def declaration
+def {
+    Button = PortB.2 INPUT_PULLUP;
+    Led = PortC.3 OUTPUT;
 }
 
 // Setup block (do once block)
 setup {
-    Button = INPUT;
-    Led = OUTPUT;
+    // Loop
+    for i = 1 to 10 {
+        Led = HIGH;
+        delay 100ms;
+        Led = LOW;
+        delay 100ms;
+    }
 }
 
 // Loop block (do infinitely)

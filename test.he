@@ -1,32 +1,5 @@
-﻿// Comments
-/*
-    Multiline comments
-    /* Nested too */
-*/
+﻿if Button == LOW {
 
-// Const declaration
-alias Button = PortB.2;
-
-// Large alias declaration
-alias {
-    Button = PortB.2;
-    Led = PortC.3;
-}
-
-// Setup block (do once block)
-setup {
-    Button = INPUT;
-    Led = OUTPUT;
-}
-
-// Loop block (do infinitely)
-loop {
-    var test: i32 = 25;
-    // No parenthesis if
-    if Button == LOW {
-        Led = HIGH;
-    }
-    else {
-        Led = LOW;
-    }
+} else {
+    
 }
