@@ -33,7 +33,7 @@ impl Parser {
         scanner.scan_tokens().map_err(|errors| {
             let mut new_vec: Vec<ParserError> = Vec::with_capacity(errors.len());
             for error in errors {
-                new_vec.push(error.into())
+                new_vec.push(error.into());
             }
             new_vec
         })

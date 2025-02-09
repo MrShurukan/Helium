@@ -9,6 +9,7 @@ use crate::parser::token_type::TokenType;
 /// I decided it was a little bit excessive to store strings or construct str slices (it's rarely
 /// required, just for error printing)
 #[derive(Debug)]
+#[allow(clippy::struct_field_names)]
 pub struct Token {
     pub token_type: TokenType,
     pub line: usize,

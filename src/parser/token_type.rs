@@ -11,7 +11,7 @@ pub enum TokenType {
     Constant(&'static ConstantType),
     Punctuation(PunctuationType),
 
-    EOF
+    Eof
 }
 
 lazy_static! {
@@ -102,7 +102,7 @@ impl Display for PunctuationType {
             PunctuationType::LessEqual => "<=",
         };
 
-        write!(f, "{}", str)?;
+        write!(f, "{str}")?;
         Ok(())
     }
 }

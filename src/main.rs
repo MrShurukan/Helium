@@ -41,7 +41,7 @@ fn report_errors(errors: Vec<ParserError>) {
     eprintln!("{} {error_errors} found.", errors.len());
 
     for error in errors {
-        eprintln!("{}", error);
+        eprintln!("{error}");
     }
     exit(3);
 }

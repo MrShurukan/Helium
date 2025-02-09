@@ -9,7 +9,6 @@ use crate::parser::utils::ReadOnlyGraphemeSlice;
 
 use ScannerErrorType as SET;
 use ScannerError as SE;
-use crate::parser;
 
 /// This struct is responsible for converting the source file to a list of tokens.
 /// This list will later be used by other parts of the front-end (like `Parser`) to create
@@ -55,11 +54,11 @@ impl Scanner<'_> {
         }
 
         tokens.push(
-            Token { token_type: TokenType::EOF, line: self.position_info.line,
+            Token { token_type: TokenType::Eof, line: self.position_info.line,
                 lexeme_size: 1, line_offset: self.position_info.current_from_line_start + 1 }
         );
 
-        if errors.len() > 0 {
+        if !errors.is_empty() {
             Err(errors)
         }
         else {
@@ -70,14 +69,13 @@ impl Scanner<'_> {
     fn scan_token(position_info: &mut PositionInfo,
                       peekable: &mut Peekable<Graphemes>,
                       source: &ReadOnlyGraphemeSlice) -> Result<Option<Token>, ScannerError> {
-
-        let grapheme = match Self::advance(peekable, position_info) {
-            Some(grapheme) => grapheme,
-            None => return Err(SE::new_with_location(SET::NoMoreTokens, position_info, source))
-        };
-
+        
         use TokenType::Punctuation as P;
         use crate::parser::token_type::PunctuationType as PT;
+        
+        let grapheme = Self::advance(peekable, position_info).ok_or_else(|| {
+            SE::new_with_location(SET::NoMoreTokens, position_info, source)
+        })?;
 
         let token = match grapheme {
             // Single char punctuation
@@ -124,11 +122,8 @@ impl Scanner<'_> {
             },
 
             // Stuff to skip
-            " " => None,
-            "\r" => None,
-            "\t" => None,
-            // BOM
-            "\u{FEFF}" => None,
+            // \u{FEFF} - BOM
+            " " | "\r" | "\t" | "\u{FEFF}" => None,
 
             "\n" | "\r\n" => { position_info.advance_line(); None },
 
@@ -144,7 +139,7 @@ impl Scanner<'_> {
             // Identifiers and reserve words are a different story than numbers. But we still limit
             // this to alphabetic characters
             alpha if alpha.chars().all(|x| x.is_alphabetic() || x == '_') => {
-                Some(Self::parse_alpha(peekable, position_info, source)?)
+                Some(Self::parse_alpha(peekable, position_info, source))
             },
             
             _ => {
@@ -168,7 +163,7 @@ impl Scanner<'_> {
             position_info.advance();
             
             if Self::is_newline(current_char) {
-                position_info.advance_line()
+                position_info.advance_line();
             }
             // I support nested multiline comments. We need to account for that
             else if current_char == "/" {
@@ -178,16 +173,14 @@ impl Scanner<'_> {
                 }
             }
             // If we encounter a star, that could mean we are at the end of the comment
-            else if current_char == "*" {
-                if Self::consume_if_matches("/", peekable, position_info) {
-                    // We found the end of a block! Decrease the nesting_level
-                    // Check if we are out of nesting by making sure nesting_level == 0, 
-                    // otherwise continue
+            else if current_char == "*" && Self::consume_if_matches("/", peekable, position_info) {
+                // We found the end of a block! Decrease the nesting_level
+                // Check if we are out of nesting by making sure nesting_level == 0, 
+                // otherwise continue
 
-                    nesting_level -= 1;
-                    if nesting_level == 0 {
-                        return Ok(());
-                    }
+                nesting_level -= 1;
+                if nesting_level == 0 {
+                    return Ok(());
                 }
             }
         }
@@ -278,9 +271,9 @@ impl Scanner<'_> {
     
     fn parse_alpha(peekable: &mut Peekable<Graphemes>,
                    position_info: &mut PositionInfo,
-                   source: &ReadOnlyGraphemeSlice) -> Result<Token, ScannerError> {
-        while let Some(_) = peekable.next_if(|grapheme| 
-                                            grapheme.chars().all(|x| x.is_alphanumeric() || x == '_')) {
+                   source: &ReadOnlyGraphemeSlice) -> Token {
+        while peekable.next_if(|grapheme| 
+                               grapheme.chars().all(|x| x.is_alphanumeric() || x == '_')).is_some() {
             position_info.advance();
         }
 
@@ -288,14 +281,14 @@ impl Scanner<'_> {
 
         // Check if it's reserved
         if let Some(keyword_type) = KEYWORDS.get(lexeme.as_str()) {
-            Ok(Self::produce_token(TokenType::Keyword(keyword_type), position_info))
+            Self::produce_token(TokenType::Keyword(keyword_type), position_info)
         }
         else if let Some(constant_type) = CONSTANTS.get(lexeme.as_str()) {
-            Ok(Self::produce_token(TokenType::Constant(constant_type), position_info))
+            Self::produce_token(TokenType::Constant(constant_type), position_info)
         }
         // Otherwise it's just a user defined lexeme
         else {
-            Ok(Self::produce_token(TokenType::Literal(LiteralType::Identifier(lexeme)), position_info))
+            Self::produce_token(TokenType::Literal(LiteralType::Identifier(lexeme)), position_info)
         }
     }
 
@@ -305,21 +298,19 @@ impl Scanner<'_> {
     }
 
     fn advance_while_digit(peekable: &mut Peekable<Graphemes>, position_info: &mut PositionInfo) {
-        while let Some(_) = peekable.next_if(|grapheme| {
+        while peekable.next_if(|grapheme| {
             grapheme.chars().any(|c| c.is_ascii_digit())
-        }) {
+        }).is_some() {
             position_info.advance();
         }
     }
     
     /// Checks if the next grapheme in `peekable` matches `grapheme`. If it does - produces 
-    /// token with `if_matches` token_type and advances position_info. Otherwise, produces
-    /// token with `id_doesnt_match` token_type.
+    /// token with `if_matches` token type and advances `position_info`. Otherwise, produces
+    /// token with `id_doesnt_match` token type.
     fn next_grapheme_check(grapheme: &'static str, if_matches: TokenType, if_doesnt_match: TokenType,
         peekable: &mut Peekable<Graphemes>, position_info: &mut PositionInfo) -> Token {
         
-        // TODO: Potentially doesn't work?
-        // It seems this compares references to str, not str slices themselves. Gotta check for that.
         match peekable.next_if_eq(&grapheme) {
             Some(_) => { position_info.advance(); Self::produce_token(if_matches, position_info) },
             None => Self::produce_token(if_doesnt_match, position_info)
@@ -352,10 +343,7 @@ impl Scanner<'_> {
     }
     
     fn is_newline(grapheme: &str) -> bool {
-        match grapheme {
-            "\r\n" | "\n" => true,
-            _ => false
-        }
+        matches!(grapheme, "\r\n" | "\n")
     }
 }
 
@@ -377,10 +365,8 @@ impl ScannerError {
             position_info.line,
             position_info.current_from_line_start);
 
-        // Something went horribly wrong, not supposed to happen
-        if location.is_none() {
-            panic!("Couldn't get the line #{}", position_info.line);
-        }
+        // Something went horribly wrong if we didn't get the line, not supposed to happen
+        assert!(location.is_some(), "Couldn't get the line #{}", position_info.line);
 
         ScannerError { error_type, line: position_info.line, location: Some(location.unwrap()) }
     }
@@ -427,19 +413,19 @@ impl Display for ScannerError {
             format!("[line {}] Scanner Error", self.line);
 
         let output = match &self.error_type {
-            ScannerErrorType::UnknownToken(lexeme) => &format!("Unknown token ('{}')", lexeme),
+            ScannerErrorType::UnknownToken(lexeme) => &format!("Unknown token ('{lexeme}')"),
             ScannerErrorType::UnterminatedString => "Unterminated string",
             ScannerErrorType::IncorrectNumberToken { reason }
-                => &format!("The number was written in an incorrect format: {}", reason),
+                => &format!("The number was written in an incorrect format: {reason}"),
             ScannerErrorType::NoMoreTokens => "There were no more tokens to parse",
             ScannerErrorType::UnterminatedMultilineComment => "Multiline comment was not terminated",
             ScannerErrorType::TrailingNumber => "Trailing literals are not supported",
             ScannerErrorType::MultilineStringNotSupported => "Multiline strings are not supported"
         };
 
-        write!(f, "{error_header}: {}", output)?;
+        write!(f, "{error_header}: {output}")?;
         if let Some(location) = &self.location {
-            write!(f, "\n\nHappened here:\n{}", location)?;
+            write!(f, "\n\nHappened here:\n{location}")?;
         }
 
         Ok(())
