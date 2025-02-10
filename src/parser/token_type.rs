@@ -28,6 +28,7 @@ lazy_static! {
         m.insert("or",      KeywordType::Or);
         m.insert("return",  KeywordType::Return);
         m.insert("var",     KeywordType::Var);
+        m.insert("def",     KeywordType::Def);
         m.insert("while",   KeywordType::While);
         m.insert("alias",   KeywordType::Alias);
         m.insert("setup",   KeywordType::Setup);
@@ -89,8 +90,8 @@ pub enum LiteralType {
 #[derive(Debug)]
 pub enum KeywordType {
     And, Else, Fun, For, If, Or,
-    Return, Var, While, Alias, Setup,
-    Loop, Not, To
+    Return, Var, Def, While, Alias, 
+    Setup, Loop, Not, To
 }
 
 #[derive(Debug, Clone)]

@@ -17,11 +17,11 @@ fn main() {
     match fs::read_to_string(file_path) {
         Ok(contents) => {
             // Right now the program will only output a list of scanned tokens and then exit
-            let parser = Parser::new();
-            match parser.scan(&contents) {
-                Ok(tokens) => { 
-                    for token in tokens {
-                        println!("{token}");
+            let mut parser = Parser::new(&contents);
+            match parser.parse() {
+                Ok(statements) => { 
+                    for statement in statements {
+                        println!("{statement:?}");
                     }
                 },
                 Err(errors) => report_errors(errors)

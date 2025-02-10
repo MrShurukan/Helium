@@ -1,5 +1,6 @@
 ﻿use std::iter::Peekable;
 use unicode_segmentation::{Graphemes, UnicodeSegmentation};
+use crate::parser::token::Token;
 
 /// Helper struct for holding string slice and working with graphemes
 pub struct ReadOnlyGraphemeSlice<'a> {
