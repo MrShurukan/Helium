@@ -27,6 +27,107 @@ pub enum ExpressionType {
     Assignment { identifier: String, expression: Box<Expression> }
 }
 
+// TODO: Code inconsistency! These functions panic instead of returning a result like similar parts
+// TODO: (like `PinRef`) 
+// I'm not sure of the solution as of right now
+impl Expression {
+    pub fn new_assignment(identifier: Expression, expression: Expression) -> Self {
+        if let ExpressionType::Literal { value: LiteralType::Identifier(name) } = &identifier.expression_type {
+            Self {
+                line_start: identifier.line_start,
+                line_end: expression.line_end,
+                start_offset: identifier.start_offset,
+                end_offset: expression.end_offset,
+                expression_type: ExpressionType::Assignment {
+                    identifier: name.to_owned(),
+                    expression: Box::new(expression),
+                },
+            }
+        }
+        else {
+            unreachable!("Non-identifier token passed to new_assignment expression function");
+        }
+    }
+
+    pub fn new_ternary(first: Expression, second: Expression, third: Expression) -> Self {
+        Self {
+            line_start: first.line_start,
+            line_end: third.line_end,
+            start_offset: first.start_offset,
+            end_offset: third.end_offset,
+            expression_type: ExpressionType::Ternary {
+                first: Box::new(first),
+                second: Box::new(second),
+                third: Box::new(third)
+            },
+        }
+    }
+
+    pub fn new_binary(left: Expression, operator: &Token, right: Expression) -> Self {
+        Self {
+            line_start: left.line_start,
+            line_end: right.line_end,
+            start_offset: left.start_offset,
+            end_offset: right.end_offset,
+            expression_type: ExpressionType::Binary {
+                left: Box::new(left),
+                operator: operator.token_type.to_owned(),
+                right: Box::new(right)
+            },
+        }
+    }
+
+    pub fn new_unary(operator: &Token, expression: Expression) -> Self {
+        if let Token { token_type: TokenType::Punctuation(op), .. } = operator {
+            Self {
+                line_start: operator.line,
+                line_end: expression.line_end,
+                start_offset: operator.line_offset,
+                end_offset: expression.end_offset,
+                expression_type: ExpressionType::Unary { operator: op.to_owned(), right: Box::new(expression) },
+            }
+        }
+        else {
+            unreachable!("Non-punctuation token passed to new_unary expression function");
+        }
+    }
+
+    pub fn new_literal(token: &Token) -> Self {
+        if let Token { token_type: TokenType::Literal(literal_type), .. } = token {
+            Self {
+                expression_type: ExpressionType::Literal { value: literal_type.to_owned() },
+                line_start: token.line,
+                line_end: token.line,
+                start_offset: token.line_offset,
+                end_offset: token.line_offset + token.lexeme_size,
+            }
+        }
+        else {
+            unreachable!("Non-literal token passed to new_literal expression function");
+        }
+    }
+
+    pub fn new_literal_custom_type(token: &Token, literal_type: LiteralType) -> Self {
+        Self {
+            expression_type: ExpressionType::Literal { value: literal_type },
+            line_start: token.line,
+            line_end: token.line,
+            start_offset: token.line_offset,
+            end_offset: token.line_offset + token.lexeme_size,
+        }
+    }
+
+    pub fn new_grouping(expression: Expression) -> Self {
+        Self {
+            line_start: expression.line_start,
+            line_end: expression.line_end,
+            start_offset: expression.start_offset - 1,
+            end_offset: expression.end_offset + 1,
+            expression_type: ExpressionType::Grouping { expression: Box::new(expression) },
+        }
+    }
+}
+
 /// A reference to a pin
 /// Like `PortB.2`
 #[derive(Debug, Clone)]
@@ -58,7 +159,7 @@ impl PinRef {
 
 #[derive(Debug)]
 pub struct PinRefError {
-    pub(crate) token: Token,
+    pub token: Token,
     message: &'static str
 }
 

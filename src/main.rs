@@ -36,12 +36,12 @@ fn main() {
 }
 
 fn report_errors(errors: &[ParserError]) {
-    eprintln!("{}", "Wasn't able to parse the file".red());
+    eprintln!("{}", "Wasn't able to parse the file!".yellow());
     let error_errors = if errors.len() == 1 { "error" } else { "errors" };
-    eprintln!("{} {error_errors} found.", errors.len());
+    eprintln!("{} {error_errors} found.\n", errors.len());
 
     for (i, error) in errors.iter().enumerate() {
-        eprintln!("{}. {error}", i+1);
+        eprintln!("{} {error}", format!("{})", i+1).red());
     }
     exit(3);
 }

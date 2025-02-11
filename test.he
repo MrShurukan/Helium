@@ -1,7 +1,7 @@
-﻿/*var a;
-var b;
+﻿var a = 1 + 2;
+var b = a = 3;
 
-def Test = PortB.2 INPUT;*/
+def Test = PortB.2 INPUT;
 
 def {
     Test1 = PortB.1 INPUT;

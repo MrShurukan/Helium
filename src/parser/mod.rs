@@ -1,14 +1,15 @@
-﻿use crate::parser::expression::{Expression, PinRef, PinRefError};
+﻿use crate::parser::expression::{Expression, ExpressionType, PinRef, PinRefError};
 use crate::parser::scanner::{Scanner, ScannerError};
 use crate::parser::statement::{DefDeclarationError, SingleDefDeclaration, Statement};
 use crate::parser::token::Token;
 use crate::parser::token_type::{KeywordType as KT, LiteralType as LT, PunctuationType as PT,
-                                TokenType as TT, ConstantType as CT};
+                                TokenType as TT, ConstantType as CT, BooleanConstantType as BCT};
 use crate::parser::utils::TokenIterator;
 use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
+use std::thread::current;
 
 mod scanner;
 mod statement;
@@ -42,6 +43,82 @@ macro_rules! check_and_consume {
     };
 }
 
+/// This macro is used to automate binary operator parsing.
+/// All binary operators are right-associative with themselves (at least in the moment of
+/// writing, check `grammar.txt`).
+///
+/// This means there is a loop to read them
+macro_rules! parse_binary {
+    ($self:ident, $enum_types:pat_param, $expression:ident, $tokens:ident, $next_precedence:ident) => {
+        while let token @ Token { token_type: $enum_types, .. } = Self::peek($tokens)? {
+            let token = token.clone();
+            $tokens.advance();
+            let right = $self.$next_precedence($tokens)?;
+
+            $expression = Expression::new_binary($expression, &token, right);
+        }
+    };
+}
+
+/// This macro is used to create error producing.
+///
+/// It's used to capture erroneous tokens to alert the user of a potential problem.
+/// For instance, catching something like `* 3 + 1` and warning that the user didn't
+/// provide a value on the left side of the star.
+///
+/// Otherwise, this error will go all the way to the bottom of precedence and just get
+/// reported as "Incorrect token in this place"
+macro_rules! binary_error_produce {
+    ($self:ident, $error_enum_types:pat_param, $tokens:ident, $next_precedence:ident) => {
+        let current_token = Self::peek($tokens)?;
+        if let $error_enum_types = current_token.token_type {
+            let current_token = current_token.clone();
+            $tokens.advance();
+            // Discard the right part
+            _ = $self.$next_precedence($tokens)?;
+
+            // Discard the expression entirely. Report an error
+            return Err($self.get_error_marked_line(ParserErrorType::BinaryOperatorNoLeftPart,
+                current_token));
+        }
+    };
+}
+
+/// A combination of two macros - `parse_binary` and `binary_error_produce`.
+///
+/// Read their comments for more info. There are two versions of the macro - simplified and extended.
+/// ## Arguments
+/// * `$self` - reference to self
+/// * `$enum_types` - token type pattern to match for error producing and binary parsing
+/// * `$error_enum_types` - if this argument is passed (extended version) then it's used for binary
+///    producing instead of `$enum_types`. The latter is still used for parsing the binary operator
+/// * `$tokens` - mutable reference to `TokenIterator`
+/// * `$next_precedence` - function for the next precedence after current one (like `ternary` after
+///    `assignment`)
+macro_rules! parse_binary_with_error_produce {
+    ($self:ident, $enum_types:pat_param, $tokens:ident, $next_precedence:ident) => {
+        {
+            binary_error_produce!($self, $enum_types, $tokens, $next_precedence);
+
+            let mut expr = $self.$next_precedence($tokens)?;
+            parse_binary!($self, $enum_types, expr, $tokens, $next_precedence);
+
+            expr
+        }
+    };
+
+    ($self:ident, $enum_types:pat_param, $error_enum_types:pat_param, $tokens:ident, $next_precedence:ident) => {
+        {
+            binary_error_produce!($self, $error_enum_types, $tokens, $next_precedence);
+
+            let mut expr = $self.$next_precedence($tokens)?;
+            parse_binary!($self, $enum_types, expr, $tokens, $next_precedence);
+
+            expr
+        }
+    };
+}
+
 impl Parser<'_> {
     pub fn new(source: &str) -> Parser {
         Parser { source }
@@ -61,7 +138,7 @@ impl Parser<'_> {
         for (i, token) in tokens.iter().enumerate() {
             println!("{i}. {token}");
         }
-        
+
         let mut tokens = TokenIterator::new(tokens.as_slice());
 
         while let Some(Token { token_type, ..}) = tokens.peek() {
@@ -128,7 +205,7 @@ impl Parser<'_> {
         //     Button = PortC.2;
         // }
 
-        let token = Self::peek(tokens)?.clone();
+        let token = Self::peek(tokens)?;
         match token {
             // Identifier = it's a one-liner
             Token { token_type: TT::Literal(LT::Identifier(_)), .. } => {
@@ -137,6 +214,9 @@ impl Parser<'_> {
             },
             // Left brace = it's a multiline version
             Token { token_type: TT::Punctuation(PT::LeftBrace), .. } => {
+                let token = token.clone();
+                tokens.advance();
+                
                 let mut def_declarations: Vec<SingleDefDeclaration> = Vec::new();
                 loop {
                     let next_token = tokens.peek();
@@ -221,8 +301,161 @@ impl Parser<'_> {
     }
 
     // --------------------------- THIS PART IS EXPRESSIONS --------------------------- //
+    /// Root of the expression tree. Always defaults to the next precedence level.
+    /// This is done so that adding new precedence levels won't change other parts of the
+    /// program that call `expression` to get any expression.
     fn expression(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
-        todo!("expression")
+        self.assignment(tokens)
+    }
+
+    // a = b
+    fn assignment(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+        // We don't know if it's the assignment yet, so we read anything of higher precedence
+        // If it's not the assignment, we will just return this value
+        let l_value = self.ternary(tokens)?;
+
+        let equals = Self::peek(tokens)?;
+        if let TT::Punctuation(PT::Equal) = equals.token_type {
+            if let ExpressionType::Literal { value: LT::Identifier(_) } = &l_value.expression_type {
+                tokens.advance();
+                // Assignments are right associative
+                let r_value = self.assignment(tokens)?;
+                return Ok(Expression::new_assignment(l_value, r_value));
+            }
+
+            return Err(self.get_error_marked_line(ParserErrorType::InvalidAssignmentTarget, equals.clone()))
+        }
+
+        // It wasn't an assignment
+        Ok(l_value)
+    }
+
+    // expr ? expr : expr
+    fn ternary<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+        let mut expr = self.logic_or(tokens)?;
+
+        let question_token = Self::peek(tokens)?;
+        if let TT::Punctuation(PT::Question) = question_token.token_type {
+            let question_token = question_token.clone();
+            tokens.advance();
+            let second = self.logic_or(tokens)?;
+
+            let third_token = Self::peek(tokens)?;
+            if let TT::Punctuation(PT::Colon) = third_token.token_type {
+                tokens.advance();
+                let third = self.logic_or(tokens)?;
+
+                expr = Expression::new_ternary(expr, second, third);
+            }
+            else {
+                return Err(
+                    self.get_error_marked_line(ParserErrorType::UnfinishedTernary, question_token)
+                );
+            }
+        }
+
+
+        Ok(expr)
+    }
+
+    fn logic_or(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+        let expr = parse_binary_with_error_produce!(self, TT::Keyword(KT::Or), tokens, logic_and);
+
+        Ok(expr)
+    }
+
+    fn logic_and(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+        let expr = parse_binary_with_error_produce!(self, TT::Keyword(KT::And), tokens, equality);
+
+        Ok(expr)
+    }
+
+    // != ==
+    fn equality<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+        let expr = parse_binary_with_error_produce!(self, TT::Punctuation(PT::BangEqual | PT::EqualEqual), tokens, comparison);
+
+        Ok(expr)
+    }
+
+    // > >= < <=
+    fn comparison<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+        let expr = parse_binary_with_error_produce!(self,
+            TT::Punctuation(PT::Greater | PT::GreaterEqual | PT::Less | PT::LessEqual), tokens, term);
+
+        Ok(expr)
+    }
+
+    // + -
+    fn term<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+        // Only a plus should produce an error, because a minus could still be a unary operator
+        let expr = parse_binary_with_error_produce!(self,
+            TT::Punctuation(PT::Plus | PT::Minus), TT::Punctuation(PT::Plus), tokens, factor);
+
+        Ok(expr)
+    }
+
+    // * /
+    fn factor<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+        let expr = parse_binary_with_error_produce!(self, TT::Punctuation(PT::Star | PT::Slash), tokens, unary);
+
+        Ok(expr)
+    }
+
+    // ! - (as unary operator)
+    fn unary<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+        let token = Self::peek(tokens)?;
+        if let TT::Punctuation(PT::Bang | PT::Minus) = &token.token_type {
+            let token = token.clone();
+            tokens.advance();
+            let right = self.unary(tokens)?;
+
+            return Ok(Expression::new_unary(&token, right));
+        }
+
+        self.primary(tokens)
+    }
+
+    // Literals, groupings
+    fn primary<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+        let token = Self::peek(tokens)?.clone();
+
+        let result = match token.token_type {
+            TT::Literal(_) => { Some(Expression::new_literal(&token)) },
+            TT::Constant(CT::Boolean(constant)) => {
+                match constant {
+                    BCT::True => Some(Expression::new_literal_custom_type(&token, LT::Boolean(true))),
+                    BCT::False => Some(Expression::new_literal_custom_type(&token, LT::Boolean(false))),
+                }
+            },
+            TT::Punctuation(PT::LeftParen) => {
+                tokens.advance();
+                let expr = self.expression(tokens)?;
+                let next_token = tokens.peek();
+                if next_token.is_none() {
+                    return Err(self.get_error_marked_line(
+                        ParserErrorType::UnclosedParenthesis, token
+                    ));
+                }
+                else {
+                    let next_token = next_token.unwrap();
+                    match next_token.token_type {
+                        TT::Punctuation(PT::RightParen) => {},
+
+                        _ => {
+                            return Err(self.get_error_marked_line(
+                                ParserErrorType::UnclosedParenthesis, (*next_token).clone()
+                            ));
+                        }
+                    }
+                }
+
+                Some(Expression::new_grouping(expr))
+            },
+            _ => { None }
+        };
+
+        if result.is_some() { tokens.advance(); }
+        result.ok_or_else(|| self.get_error_marked_line(ParserErrorType::IncorrectToken, token.clone()))
     }
 
     // ------------------------------- HELPER FUNCTIONS ------------------------------- //
@@ -354,18 +587,6 @@ impl ParserError {
 impl Error for ParserError {}
 impl Display for ParserError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let error_header = match &self.error_type {
-            ParserErrorType::ScannerError(_) => "",
-            _ => {
-                if let Some(token) = &self.token {
-                    &format!("[line {}] Parser Error", token.line)
-                }
-                else {
-                    "Parser Error"
-                }
-            }
-        };
-
         let output = match &self.error_type {
             ParserErrorType::ScannerError(scanner_error) =>
                 &format!("{scanner_error}"),
@@ -375,7 +596,7 @@ impl Display for ParserError {
             ParserErrorType::UnfinishedTernary => "Incorrect ternary operator",
             ParserErrorType::BinaryOperatorNoLeftPart => "Binary operator without a left part",
             ParserErrorType::MissingToken(message) =>
-                &format!("{}{}", "Missing token. ".red(), message.red()),
+                &format!("Missing token. {message}"),
             ParserErrorType::InvalidAssignmentTarget => "Invalid assignment target",
             ParserErrorType::InvalidDefDeclaration(def_error) =>
                 &format!("{def_error}"),
@@ -384,9 +605,13 @@ impl Display for ParserError {
             ParserErrorType::UnclosedDefBlock => "Def block was unclosed (missing '}')"
         };
 
-        write!(f, "{error_header}: {output}")?;
+        write!(f, "{}", output.red())?;
         if let Some(location) = &self.location {
-            write!(f, "\n\n{}\n{location}", "Happened here:".green())?;
+            // Add tabs to each line of the location so it shifts to the right
+            let location: String = location.split('\n')
+                .map(|line| format!("\t{line}\n"))
+                .collect();
+            write!(f, "\n\t{}\n{}\n", "Happened here:".green(), location.trim_end())?;
         }
 
         if self.token.is_none() {
