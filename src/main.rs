@@ -24,7 +24,7 @@ fn main() {
                         println!("{statement:?}");
                     }
                 },
-                Err(errors) => report_errors(errors)
+                Err(errors) => report_errors(errors.as_slice())
             }
         },
         Err(err) => {
@@ -35,7 +35,7 @@ fn main() {
     }
 }
 
-fn report_errors(errors: Vec<ParserError>) {
+fn report_errors(errors: &[ParserError]) {
     eprintln!("{}", "Wasn't able to parse the file".red());
     let error_errors = if errors.len() == 1 { "error" } else { "errors" };
     eprintln!("{} {error_errors} found.", errors.len());

@@ -1,13 +1,13 @@
-﻿use crate::parser::scanner::{Scanner, ScannerError};
-use crate::parser::statement::Statement;
+﻿use crate::parser::expression::Expression;
+use crate::parser::scanner::{Scanner, ScannerError};
+use crate::parser::statement::{DefDeclarationError, SingleDefDeclaration, Statement};
 use crate::parser::token::Token;
+use crate::parser::token_type::{KeywordType as KT, LiteralType as LT, PunctuationType as PT, TokenType as TT};
+use crate::parser::utils::TokenIterator;
+use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::iter::Peekable;
-use std::slice::Iter;
-use colored::Colorize;
-use crate::parser::token_type::{TokenType as TT, KeywordType as KT, 
-                                PunctuationType as PT, LiteralType as LT};
+use std::rc::Rc;
 
 mod scanner;
 mod statement;
@@ -15,6 +15,7 @@ mod token;
 mod token_type;
 mod utils;
 mod position_info;
+mod expression;
 
 /// Main struct for the front-end of helium. This class receives a source file,
 /// starts up a scanner, gets tokens and then parses them into a list of statements.
@@ -24,52 +25,25 @@ mod position_info;
 /// Grammar is defined in `grammar.txt` file in the root of the repo
 pub struct Parser<'a> {
     /// Reference to an original string to point out errors with a location
-    pub source: &'a str,
-    /// Current index in tokens peekable iterator
-    index: usize
+    pub source: &'a str
 }
 
 /// Performs a check on the peeked token. If it matched the `enum_types` pattern then it's consumed.
-/// Otherwise, an error is thrown that the token was missing with the `error_message` error message
+/// Otherwise, an error is returned that the token was missing with the `error_message` error message
+/// 
+/// Returns the consumed token for convenience
 macro_rules! check_and_consume {
     ($self:ident, $tokens:ident, $enum_types:pat_param, $error_message:literal) => {
-        let current_token = &Self::peek($tokens)?;
-        if let $enum_types = current_token.token_type {
-            advance!($self, $tokens);
-        }
-        else {
-            let previous_token = $self.tokens.iter().nth($self.index - 1).expect("No previous token available while parsing");
-            return Err(Self::get_error_marked_line(
-                ParserErrorType::MissingToken(String::from($error_message)), (*previous_token).clone(), &$self.source
-            ));
-        }
-    };
-}
-
-/// A version of the `check_and_consume` but this one actually clones and returns the parsed
-/// token. Unless you need the token use the `check_and_consume` instead
-macro_rules! check_and_consume_return {
-    ($self:ident, $tokens:ident, $enum_types:pat_param, $error_message:literal) => {
-        {
-            let current_token = &self.peek($tokens)?.to_owned();
-            if let $enum_types = current_token.token_type {
-                advance!($self, $tokens);
-            }
-            else {
-                let previous_token = $self.tokens.iter().nth($self.index - 1).expect("No previous token available while parsing");
-                return Err(Self::get_error_marked_line(
-                    ParserErrorType::MissingToken(String::from($error_message)), (*previous_token).clone(), &$self.source
-                ));
-            }
-
-            current_token
+        match Self::peek($tokens)?.token_type {
+            $enum_types => $tokens.advance().unwrap(),
+            _ => return Err($self.missing_token_error($error_message, $tokens))
         }
     };
 }
 
 impl Parser<'_> {
     pub fn new(source: &str) -> Parser {
-        Parser { source, index: 0 }
+        Parser { source }
     }
 
     /// Main function - parses the source file and gets out a list of statements (or a list of errors).
@@ -82,57 +56,56 @@ impl Parser<'_> {
         let mut errors: Vec<ParserError> = Vec::new();
 
         let tokens = self.scan()?;
-        let mut token_peekable = tokens.iter().peekable();
+        let mut tokens = TokenIterator::new(tokens.as_slice());
 
-        while let Some(Token { token_type, ..}) = &token_peekable.peek() {
-            match token_type {
-                // EOF means statements are over and the parsing is done
-                TT::Eof => { break; },
-                _ => {}
+        while let Some(Token { token_type, ..}) = tokens.peek() {
+            // EOF means statements are over and the parsing is done
+            if let TT::Eof = token_type {
+                break;
             };
 
             // Program is a list of declarations (see grammar.txt)
-            let result = self.declaration(&mut token_peekable);
+            let result = self.declaration(&mut tokens);
             if let Ok(statement) = result {
                 statements.push(statement);
             }
             else {
-                errors.push(result.err().unwrap())
+                errors.push(result.err().unwrap());
             }
         }
-
-        if !errors.is_empty() {
-            Err(errors)
+        
+        if errors.is_empty() {
+            Ok(statements)
         }
         else {
-            Ok(statements)
+            Err(errors)
         }
     }
 
-    fn declaration(&mut self, tokens: &mut Peekable<Iter<Token>>) -> Result<Statement, ParserError> {
-        let token = &Self::peek(tokens)?;
+    // -------------------- THIS PART IS DECLARATIONS AND STATEMENTS -------------------- //
+    fn declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
+        let token = Self::peek(tokens)?;
         let result = match token.token_type {
-            TT::Keyword(KT::Var) => { self.advance(tokens); self.var_declaration(tokens) },
-            TT::Keyword(KT::Def) => { self.advance(tokens); self.def_declaration(tokens) },
+            TT::Keyword(KT::Var) => { tokens.advance(); self.var_declaration(tokens) },
+            TT::Keyword(KT::Def) => { tokens.advance(); self.def_declaration(tokens) },
             _ => self.statement(tokens)
         };
 
         // If we got an error, we align our tokens with the next valid entry point.
-        // See `self.synchronize` comments for more info
+        // See `Self::synchronize` comments for more info
         if result.is_err() {
-            self.synchronize(tokens);
+            Self::synchronize(tokens);
         }
 
         result
     }
 
-    fn var_declaration(&mut self, tokens: &mut Peekable<Iter<Token>>) -> Result<Statement, ParserError> {
-        let name = check_and_consume_return!(self, tokens,TT::Literal(LT::Identifier(_)), 
-            "Expected a variable name");
+    fn var_declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
+        let name = check_and_consume!(self, tokens, TT::Literal(LT::Identifier(_)), "Expected a variable name").clone();
 
         let mut initializer: Option<Expression> = None;
-        if let TT::Punctuation(PT::Equal) = &Self::peek(tokens)?.token_type {
-            advance!(self, tokens);
+        if let TT::Punctuation(PT::Equal) = Self::peek(tokens)?.token_type {
+            tokens.advance();
             initializer = Some(self.expression(tokens)?);
         }
 
@@ -140,30 +113,113 @@ impl Parser<'_> {
         Ok(Statement::VariableDeclaration { identifier: name, initializer })
     }
 
-    fn def_declaration(&mut self, tokens: &mut Peekable<Iter<Token>>) -> Result<Statement, ParserError> {
-
-    }
-
-    fn statement(&mut self, tokens: &mut Peekable<Iter<Token>>) -> Result<Statement, ParserError> {
-
-    }
-
-    fn advance<'a>(&mut self, peekable: &'a mut Peekable<Iter<Token>>) -> Option<&'a Token> {
-        let next = peekable.next();
-        if next.is_some() {
-            self.index += 1;
+    fn def_declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
+        // There are two types of def declaration. One is a one-liner, like this:
+        // def Led = PortB.2;
+        // Other one is multiline:
+        // def {
+        //     Led    = PortB.2;
+        //     Button = PortC.2;
+        // }
+        
+        match Self::peek(tokens)? {
+            // Identifier = it's a one-liner
+            Token { token_type: TT::Literal(LT::Identifier(_)), .. } => {
+                let def_declaration = self.single_def_declaration(tokens)?;
+                Ok(Statement::DefDeclaration(Rc::new([def_declaration])))
+            },
+            // Left brace = it's a multiline version
+            Token { token_type: TT::Punctuation(PT::LeftBrace), .. } => {
+                let mut def_declarations: Vec<SingleDefDeclaration> = Vec::new();
+                loop {
+                    let next_token = Self::peek(tokens)?;
+                    if let TT::Punctuation(PT::RightBrace) = next_token.token_type { break; }
+                    
+                    def_declarations.push(self.single_def_declaration(tokens)?);
+                }
+                
+                Ok(Statement::DefDeclaration(def_declarations.into()))
+            },
+            // Error
+            token => {
+                Err(self.get_error_marked_line(
+                    ParserErrorType::MissingToken(String::from("Expected '{' or an identifier after 'def'")),
+                    token.clone()
+                ))
+            }
         }
+    }
+    
+    fn single_def_declaration(&mut self, tokens: &mut TokenIterator) -> Result<SingleDefDeclaration, ParserError> {
+        let identifier = check_and_consume!(self, tokens, TT::Literal(LT::Identifier(_)), "Expected identifier after this token").clone();
+        check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' after an identifier in a def statement");
+        let port = check_and_consume!(self, tokens, TT::Port(_), "Expected a port name after an '='").clone();
+        check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected ';' after a port in a def statement");
 
-        next
+        SingleDefDeclaration::new(identifier, port).map_err(|err| self.convert_def_error(err))
     }
 
-    fn peek<'a>(tokens: &mut Peekable<Iter<'a, Token>>) -> Result<&'a Token, ParserError> {
+    fn statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
+        let token = Self::peek(tokens)?;
+        match token.token_type {
+            TT::Keyword(KT::For) => { Self::advance(tokens)?; self.for_statement(tokens) }
+            TT::Keyword(KT::If) => { Self::advance(tokens)?; self.if_statement(tokens) }
+            TT::Keyword(KT::While) => { Self::advance(tokens)?; self.while_loop(tokens) }
+            TT::Punctuation(PT::LeftBrace) => { Self::advance(tokens)?; self.block_statement(tokens) }
+            _ => self.expression_statement(tokens)
+        }
+    }
+    
+    fn for_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
+        todo!("for_statement")
+    }
+
+    fn if_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
+        todo!("if_statement")
+    }
+
+    fn while_loop(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
+        todo!("while_loop")
+    }
+
+    fn block_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
+        todo!("block_statement")
+    }
+
+    fn expression_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
+        let value = self.expression(tokens)?;
+        check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected ';' after expression.");
+        Ok(Statement::Expression(value))
+    }
+
+    // --------------------------- THIS PART IS EXPRESSIONS --------------------------- //
+    fn expression(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+        todo!("expression")
+    }
+
+    // ------------------------------- HELPER FUNCTIONS ------------------------------- //
+    
+    /// A helper wrapper around `tokens.peek()` function. 
+    /// Returns an error if peeking yielded no results
+    fn peek<'a>(tokens: &'a mut TokenIterator) -> Result<&'a Token, ParserError> {
         let token = tokens.peek();
-        if token.is_none() {
-            Err(ParserError::new_without_token(ParserErrorType::RanOutOfTokens))
+        if let Some(token) = token {
+            Ok(token)
         }
         else {
-            Ok(token.unwrap())
+            Err(ParserError::new_without_token(ParserErrorType::RanOutOfTokens))
+        }
+    }
+
+    /// A helper wrapper around `tokens.advance()` function. 
+    /// Returns an error if advancing yielded no results
+    fn advance<'a>(tokens: &'a mut TokenIterator) -> Result<&'a Token, ParserError> {
+        let token = tokens.advance();
+        if let Some(token) = token {
+            Ok(token)
+        }
+        else {
+            Err(ParserError::new_without_token(ParserErrorType::RanOutOfTokens))
         }
     }
 
@@ -176,31 +232,67 @@ impl Parser<'_> {
     ///
     /// This method attempts to minimize those by aligning with the next statement.
     /// It's not 100% correct, but it's good enough
-    fn synchronize(&mut self, tokens: &mut Peekable<Iter<Token>>) {
+    fn synchronize(tokens: &mut TokenIterator) {
         let current_token = tokens.peek();
         // If we ran out of tokens - we're done already
         if current_token.is_none() {
             return;
         }
+        
+        tokens.advance();
 
-        let mut old_token_type = current_token.unwrap().token_type.to_owned();
-        while let Some(token) = self.advance(tokens) {
-            match old_token_type {
-                // A semicolon is a very clear statement boundary
-                TT::Punctuation(PT::Semicolon) => { return; },
-                // Continue otherwise
-                _ => {}
+        while let Some(token) = tokens.peek() {
+            // A semicolon is a very clear statement boundary
+            if let TT::Punctuation(PT::Semicolon) = token.token_type {
+                // Consume the semicolon
+                tokens.advance();
+                return;
             }
 
-            match token.token_type {
-                // Keyword is a nice way to know we are aligned
-                TT::Keyword(_) => { return; }
-                // Just keep on marching otherwise
-                _ => {}
+            // Keyword is a nice way to know we are aligned
+            if let TT::Keyword(_) = token.token_type {
+                return;
             }
-
-            old_token_type = token.token_type.to_owned();
         }
+    }
+    
+    fn convert_def_error(&self, error: DefDeclarationError) -> ParserError {
+        let token = error.token.clone();
+        self.get_error_marked_line(ParserErrorType::InvalidDefDeclaration(error), token)
+    }
+
+    /// Gets a helper string for error displaying with a marker on the second line.
+    /// ### Example
+    /// This function is used to create a string that looks something like this:
+    /// ```
+    /// 14. var stuff = (1 + class) * 3
+    ///                      ^^^^^
+    /// ```
+    /// Resulting string consists of two lines and has a marker denoted by a sequence of
+    /// `^` on the second line. The line is parsed from `token` by the `token.line_offset` and
+    /// the `token.lexeme_size` string. Line is fetched from `source` string.
+    fn get_error_marked_line(&self, error_type: ParserErrorType, token: Token) -> ParserError {
+        let line = self.source.split('\n').nth(token.line - 1);
+        if line.is_none() {
+            unreachable!("Incorrect line provided to get_error_marked_line");
+        }
+
+        let line = line.unwrap();
+        let line_number_string = format!("{}. ", token.line);
+        let spaces = " ".repeat(line_number_string.len() + token.line_offset - 1);
+        let marker = "^".repeat(token.lexeme_size).red();
+
+        let location = format!("{line_number_string}{line}\n{spaces}{marker}");
+        ParserError { location: Some(location), error_type, token: Some(token) }
+    }
+    
+    /// Creates a Missing Token error while pointing to the previous token in the iterator
+    fn missing_token_error(&self, error_message: &'static str, tokens: &TokenIterator) -> ParserError {
+        let previous_token = tokens.previous().expect("No previous token available while parsing");
+        
+        self.get_error_marked_line(
+            ParserErrorType::MissingToken(String::from(error_message)), (*previous_token).clone()
+        )
     }
 
     fn scan(&self) -> Result<Vec<Token>, Vec<ParserError>> {
@@ -223,7 +315,7 @@ pub struct ParserError {
 }
 
 impl ParserError {
-    pub fn new_without_token<'a>(error_type: ParserErrorType) -> ParserError {
+    pub fn new_without_token(error_type: ParserErrorType) -> ParserError {
         ParserError {
             error_type,
             token: None,
@@ -256,11 +348,13 @@ impl Display for ParserError {
             ParserErrorType::UnfinishedTernary => "Incorrect ternary operator",
             ParserErrorType::BinaryOperatorNoLeftPart => "Binary operator without a left part",
             ParserErrorType::MissingToken(message) =>
-                &format!("Missing token. {}", message),
+                &format!("Missing token. {message}"),
             ParserErrorType::InvalidAssignmentTarget => "Invalid assignment target",
+            ParserErrorType::InvalidDefDeclaration(def_error) =>
+                &format!("{def_error}")
         };
 
-        write!(f, "{error_header}: {}", output)?;
+        write!(f, "{error_header}: {output}")?;
         if let Some(location) = &self.location {
             write!(f, "\n\n{}\n{location}", "Happened here:".green())?;
         }
@@ -282,7 +376,8 @@ pub enum ParserErrorType {
     UnfinishedTernary,
     BinaryOperatorNoLeftPart,
     MissingToken(String),
-    InvalidAssignmentTarget
+    InvalidAssignmentTarget,
+    InvalidDefDeclaration(DefDeclarationError)
 }
 
 impl From<ScannerError> for ParserError {

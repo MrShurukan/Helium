@@ -59,11 +59,11 @@ impl Scanner<'_> {
                 lexeme_size: 1, line_offset: self.position_info.current_from_line_start + 1 }
         );
 
-        if !errors.is_empty() {
-            Err(errors)
+        if errors.is_empty() {
+            Ok(tokens)
         }
         else {
-            Ok(tokens)
+            Err(errors)
         }
     }
 
@@ -296,18 +296,16 @@ impl Scanner<'_> {
             Ok(Self::produce_token(TokenType::Type(static_type), position_info))
         }
         // Otherwise it's just a user defined lexeme / port ref
+        else if lexeme.starts_with("Port") {
+            let port_name = lexeme.split("Port").nth(1);
+            if port_name.is_none() || port_name.unwrap().is_empty() {
+                return Err(SE::new_with_location(SET::MissingPortName, position_info, source));
+            }
+            
+            Ok(Self::produce_token(TokenType::Port(port_name.unwrap().to_owned()), position_info))
+        }
         else {
-            if lexeme.starts_with("Port") {
-                let port_name = lexeme.split("Port").nth(1);
-                if port_name.is_none() || port_name.unwrap().is_empty() {
-                    return Err(SE::new_with_location(SET::MissingPortName, position_info, source));
-                }
-                
-                Ok(Self::produce_token(TokenType::Port(port_name.unwrap().to_owned()), position_info))
-            }
-            else {
-                Ok(Self::produce_token(TokenType::Literal(LiteralType::Identifier(lexeme)), position_info))
-            }
+            Ok(Self::produce_token(TokenType::Literal(LiteralType::Identifier(lexeme)), position_info))
         }
     }
 
