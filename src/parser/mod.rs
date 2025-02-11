@@ -183,6 +183,7 @@ impl Parser<'_> {
         result
     }
 
+    // TODO: Read the type after the identifier (: Type)
     fn var_declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
         let name = check_and_consume!(self, tokens, TT::Literal(LT::Identifier(_)), "Expected a variable name").clone();
 
@@ -236,7 +237,12 @@ impl Parser<'_> {
                     def_declarations.push(self.single_def_declaration(tokens)?);
                 }
 
-                Ok(Statement::DefDeclaration(def_declarations.into()))
+                if def_declarations.is_empty() {
+                    Err(self.get_error_marked_line(ParserErrorType::EmptyDefBlock, token))
+                }
+                else { 
+                    Ok(Statement::DefDeclaration(def_declarations.into())) 
+                }
             },
             // Error
             token => {
@@ -602,7 +608,8 @@ impl Display for ParserError {
                 &format!("{def_error}"),
             ParserErrorType::InvalidPinRef(pin_ref_error) =>
                 &format!("{pin_ref_error}"),
-            ParserErrorType::UnclosedDefBlock => "Def block was unclosed (missing '}')"
+            ParserErrorType::UnclosedDefBlock => "Def block was unclosed (missing '}')",
+            ParserErrorType::EmptyDefBlock => "Def block can't be empty"
         };
 
         write!(f, "{}", output.red())?;
@@ -622,6 +629,7 @@ impl Display for ParserError {
     }
 }
 
+// TODO: Test every parser error type
 #[derive(Debug)]
 pub enum ParserErrorType {
     ScannerError(ScannerError),
@@ -634,7 +642,8 @@ pub enum ParserErrorType {
     InvalidAssignmentTarget,
     InvalidDefDeclaration(DefDeclarationError),
     InvalidPinRef(PinRefError),
-    UnclosedDefBlock
+    UnclosedDefBlock,
+    EmptyDefBlock
 }
 
 impl From<ScannerError> for ParserError {
