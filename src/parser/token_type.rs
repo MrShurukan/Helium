@@ -42,12 +42,14 @@ lazy_static! {
     pub static ref CONSTANTS: HashMap<&'static str, ConstantType> = {
         let mut m = HashMap::new();
 
-        m.insert("false",   ConstantType::False);
-        m.insert("true",    ConstantType::True);
-        m.insert("LOW",     ConstantType::Low);
-        m.insert("HIGH",    ConstantType::High);
-        m.insert("INPUT",     ConstantType::Input);
-        m.insert("OUTPUT",    ConstantType::Output);
+        m.insert("false",           ConstantType::Boolean(BooleanConstantType::False));
+        m.insert("true",            ConstantType::Boolean(BooleanConstantType::True));
+        m.insert("LOW",             ConstantType::PinState(PinStateConstantType::Low));
+        m.insert("HIGH",            ConstantType::PinState(PinStateConstantType::High));
+        m.insert("INPUT",           ConstantType::PinMode(PinModeConstantType::Input));
+        m.insert("INPUT_PULLUP",    ConstantType::PinMode(PinModeConstantType::InputPullUp));
+        m.insert("INPUT_PULLDOWN",  ConstantType::PinMode(PinModeConstantType::InputPullDown));
+        m.insert("OUTPUT",          ConstantType::PinMode(PinModeConstantType::Output));
 
         m
     };
@@ -96,10 +98,25 @@ pub enum KeywordType {
 
 #[derive(Debug, Clone)]
 pub enum ConstantType {
-    True, False,
+    Boolean(BooleanConstantType),
+    PinState(PinStateConstantType),
+    PinMode(PinModeConstantType)
+}
 
+#[derive(Debug, Clone)]
+pub enum BooleanConstantType {
+    True, False,
+}
+
+#[derive(Debug, Clone)]
+pub enum PinStateConstantType {
     Low, High,
-    Input, Output
+}
+
+#[derive(Debug, Clone)]
+pub enum PinModeConstantType {
+    Input, InputPullDown, InputPullUp,
+    Output
 }
 
 #[derive(Debug, Clone)]

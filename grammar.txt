@@ -5,7 +5,9 @@ declaration     -> varDecl
 
 varDecl         -> "var" IDENTIFIER ( ":" TYPE )? ( "=" expression )? ";" ;
 defDecl         -> "def" ( alias | "{" alias+ "}" ) ;
-alias           -> IDENTIFIER "=" pin PINMODE ";" ;
+alias           -> IDENTIFIER "=" pin_ref PINMODE ";" ;
+
+pin_ref         -> PORT "." INTEGER ; 
 
 statement       -> exprStmt
                    | forStmt

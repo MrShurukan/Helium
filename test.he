@@ -1,5 +1,11 @@
-﻿if Button == LOW {
+﻿/*var a;
+var b;
 
-} else {
-    
+def Test = PortB.2 INPUT;*/
+
+def {
+    Test1 = PortB.1 INPUT;
+    Test2 = PortC.2 INPUT_PULLUP;
+    Test3 = PortD.3 INPUT_PULLDOWN;
+    Test4 = PortE.4 OUTPUT;
 }

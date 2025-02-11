@@ -1,8 +1,9 @@
-﻿use crate::parser::expression::Expression;
+﻿use crate::parser::expression::{Expression, PinRef, PinRefError};
 use crate::parser::scanner::{Scanner, ScannerError};
 use crate::parser::statement::{DefDeclarationError, SingleDefDeclaration, Statement};
 use crate::parser::token::Token;
-use crate::parser::token_type::{KeywordType as KT, LiteralType as LT, PunctuationType as PT, TokenType as TT};
+use crate::parser::token_type::{KeywordType as KT, LiteralType as LT, PunctuationType as PT,
+                                TokenType as TT, ConstantType as CT};
 use crate::parser::utils::TokenIterator;
 use colored::Colorize;
 use std::error::Error;
@@ -56,6 +57,11 @@ impl Parser<'_> {
         let mut errors: Vec<ParserError> = Vec::new();
 
         let tokens = self.scan()?;
+        println!("Tokens:");
+        for (i, token) in tokens.iter().enumerate() {
+            println!("{i}. {token}");
+        }
+        
         let mut tokens = TokenIterator::new(tokens.as_slice());
 
         while let Some(Token { token_type, ..}) = tokens.peek() {
@@ -121,8 +127,9 @@ impl Parser<'_> {
         //     Led    = PortB.2;
         //     Button = PortC.2;
         // }
-        
-        match Self::peek(tokens)? {
+
+        let token = Self::peek(tokens)?.clone();
+        match token {
             // Identifier = it's a one-liner
             Token { token_type: TT::Literal(LT::Identifier(_)), .. } => {
                 let def_declaration = self.single_def_declaration(tokens)?;
@@ -132,12 +139,23 @@ impl Parser<'_> {
             Token { token_type: TT::Punctuation(PT::LeftBrace), .. } => {
                 let mut def_declarations: Vec<SingleDefDeclaration> = Vec::new();
                 loop {
-                    let next_token = Self::peek(tokens)?;
-                    if let TT::Punctuation(PT::RightBrace) = next_token.token_type { break; }
-                    
+                    let next_token = tokens.peek();
+                    if next_token.is_none() {
+                        return Err(self.get_error_marked_line(
+                            ParserErrorType::UnclosedDefBlock,
+                            token
+                        ));
+                    }
+
+                    if let TT::Punctuation(PT::RightBrace) = next_token.unwrap().token_type {
+                        // Consume the brace
+                        tokens.advance();
+                        break;
+                    }
+
                     def_declarations.push(self.single_def_declaration(tokens)?);
                 }
-                
+
                 Ok(Statement::DefDeclaration(def_declarations.into()))
             },
             // Error
@@ -149,14 +167,24 @@ impl Parser<'_> {
             }
         }
     }
-    
+
     fn single_def_declaration(&mut self, tokens: &mut TokenIterator) -> Result<SingleDefDeclaration, ParserError> {
         let identifier = check_and_consume!(self, tokens, TT::Literal(LT::Identifier(_)), "Expected identifier after this token").clone();
         check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' after an identifier in a def statement");
-        let port = check_and_consume!(self, tokens, TT::Port(_), "Expected a port name after an '='").clone();
-        check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected ';' after a port in a def statement");
+        let pin_ref = self.pin_ref(tokens)?;
+        let pin_mode = check_and_consume!(self, tokens, TT::Constant(CT::PinMode(_)),
+            "Expected a pin mode (for example 'INPUT') after a port reference").clone();
+        check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected ';' after a def statement");
 
-        SingleDefDeclaration::new(identifier, port).map_err(|err| self.convert_def_error(err))
+        SingleDefDeclaration::new(identifier, pin_ref, pin_mode).map_err(|err| self.convert_def_error(err))
+    }
+
+    fn pin_ref(&mut self, tokens: &mut TokenIterator) -> Result<PinRef, ParserError> {
+        let port = check_and_consume!(self, tokens, TT::Port(_), "Expected a port name here").clone();
+        check_and_consume!(self, tokens, TT::Punctuation(PT::Dot), "Expected a '.' after a port name");
+        let pin_number = check_and_consume!(self, tokens, TT::Literal(LT::Integer(_)), "Expected an integer here").clone();
+
+        PinRef::new(port, pin_number).map_err(|err| self.convert_pin_ref_error(err))
     }
 
     fn statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
@@ -169,7 +197,7 @@ impl Parser<'_> {
             _ => self.expression_statement(tokens)
         }
     }
-    
+
     fn for_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
         todo!("for_statement")
     }
@@ -198,8 +226,8 @@ impl Parser<'_> {
     }
 
     // ------------------------------- HELPER FUNCTIONS ------------------------------- //
-    
-    /// A helper wrapper around `tokens.peek()` function. 
+
+    /// A helper wrapper around `tokens.peek()` function.
     /// Returns an error if peeking yielded no results
     fn peek<'a>(tokens: &'a mut TokenIterator) -> Result<&'a Token, ParserError> {
         let token = tokens.peek();
@@ -211,7 +239,7 @@ impl Parser<'_> {
         }
     }
 
-    /// A helper wrapper around `tokens.advance()` function. 
+    /// A helper wrapper around `tokens.advance()` function.
     /// Returns an error if advancing yielded no results
     fn advance<'a>(tokens: &'a mut TokenIterator) -> Result<&'a Token, ParserError> {
         let token = tokens.advance();
@@ -233,14 +261,6 @@ impl Parser<'_> {
     /// This method attempts to minimize those by aligning with the next statement.
     /// It's not 100% correct, but it's good enough
     fn synchronize(tokens: &mut TokenIterator) {
-        let current_token = tokens.peek();
-        // If we ran out of tokens - we're done already
-        if current_token.is_none() {
-            return;
-        }
-        
-        tokens.advance();
-
         while let Some(token) = tokens.peek() {
             // A semicolon is a very clear statement boundary
             if let TT::Punctuation(PT::Semicolon) = token.token_type {
@@ -253,12 +273,19 @@ impl Parser<'_> {
             if let TT::Keyword(_) = token.token_type {
                 return;
             }
+
+            tokens.advance();
         }
     }
-    
+
     fn convert_def_error(&self, error: DefDeclarationError) -> ParserError {
         let token = error.token.clone();
         self.get_error_marked_line(ParserErrorType::InvalidDefDeclaration(error), token)
+    }
+
+    fn convert_pin_ref_error(&self, error: PinRefError) -> ParserError {
+        let token = error.token.clone();
+        self.get_error_marked_line(ParserErrorType::InvalidPinRef(error), token)
     }
 
     /// Gets a helper string for error displaying with a marker on the second line.
@@ -348,10 +375,13 @@ impl Display for ParserError {
             ParserErrorType::UnfinishedTernary => "Incorrect ternary operator",
             ParserErrorType::BinaryOperatorNoLeftPart => "Binary operator without a left part",
             ParserErrorType::MissingToken(message) =>
-                &format!("Missing token. {message}"),
+                &format!("{}{}", "Missing token. ".red(), message.red()),
             ParserErrorType::InvalidAssignmentTarget => "Invalid assignment target",
             ParserErrorType::InvalidDefDeclaration(def_error) =>
-                &format!("{def_error}")
+                &format!("{def_error}"),
+            ParserErrorType::InvalidPinRef(pin_ref_error) =>
+                &format!("{pin_ref_error}"),
+            ParserErrorType::UnclosedDefBlock => "Def block was unclosed (missing '}')"
         };
 
         write!(f, "{error_header}: {output}")?;
@@ -377,7 +407,9 @@ pub enum ParserErrorType {
     BinaryOperatorNoLeftPart,
     MissingToken(String),
     InvalidAssignmentTarget,
-    InvalidDefDeclaration(DefDeclarationError)
+    InvalidDefDeclaration(DefDeclarationError),
+    InvalidPinRef(PinRefError),
+    UnclosedDefBlock
 }
 
 impl From<ScannerError> for ParserError {

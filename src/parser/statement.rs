@@ -1,6 +1,6 @@
-﻿use crate::parser::expression::Expression;
+﻿use crate::parser::expression::{Expression, PinRef};
 use crate::parser::token::Token;
-use crate::parser::token_type::{LiteralType, TokenType};
+use crate::parser::token_type::{ConstantType, LiteralType, TokenType};
 use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -20,23 +20,26 @@ pub enum Statement {
 
 #[derive(Debug)]
 pub struct SingleDefDeclaration {
+    /// TokenType::Literal(LiteralType::Identifier)
     identifier: Token,
-    port: Token,
+    port: PinRef,
+    /// TokenType::Constant(ConstantType::PinMode)
+    pin_mode: Token
 }
 
 impl SingleDefDeclaration {
-    pub fn new(identifier: Token, port: Token) -> Result<SingleDefDeclaration, DefDeclarationError> {
+    pub fn new(identifier: Token, port: PinRef, pin_mode: Token) -> Result<SingleDefDeclaration, DefDeclarationError> {
         if let TokenType::Literal(LiteralType::Identifier(_)) = identifier.token_type {}
         else {
             return Err(DefDeclarationError { token: identifier, message: "Expected identifier in this place" })
         }
-        
-        if let TokenType::Port(_) = port.token_type {}
+
+        if let TokenType::Constant(ConstantType::PinMode(_)) = pin_mode.token_type {}
         else {
-            return Err(DefDeclarationError { token: port, message: "Expected port in this place" })
+            return Err(DefDeclarationError { token: pin_mode, message: "Expected pin mode (for example 'INPUT) in this place" })
         }
         
-        Ok(SingleDefDeclaration { identifier, port })
+        Ok(SingleDefDeclaration { identifier, port, pin_mode })
     }
 }
 
