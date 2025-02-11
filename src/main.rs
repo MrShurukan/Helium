@@ -17,14 +17,14 @@ fn main() {
     match fs::read_to_string(file_path) {
         Ok(contents) => {
             // Right now the program will only output a list of scanned tokens and then exit
-            let parser = Parser::new();
-            match parser.scan(&contents) {
-                Ok(tokens) => { 
-                    for token in tokens {
-                        println!("{token}");
+            let mut parser = Parser::new(&contents);
+            match parser.parse() {
+                Ok(statements) => { 
+                    for statement in statements {
+                        println!("{statement:?}");
                     }
                 },
-                Err(errors) => report_errors(errors)
+                Err(errors) => report_errors(errors.as_slice())
             }
         },
         Err(err) => {
@@ -35,13 +35,13 @@ fn main() {
     }
 }
 
-fn report_errors(errors: Vec<ParserError>) {
-    eprintln!("{}", "Wasn't able to parse the file".red());
+fn report_errors(errors: &[ParserError]) {
+    eprintln!("{}", "Wasn't able to parse the file!".yellow());
     let error_errors = if errors.len() == 1 { "error" } else { "errors" };
-    eprintln!("{} {error_errors} found.", errors.len());
+    eprintln!("{} {error_errors} found.\n", errors.len());
 
     for (i, error) in errors.iter().enumerate() {
-        eprintln!("{}. {error}", i+1);
+        eprintln!("{} {error}", format!("{})", i+1).red());
     }
     exit(3);
 }

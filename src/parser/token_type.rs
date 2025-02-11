@@ -28,6 +28,7 @@ lazy_static! {
         m.insert("or",      KeywordType::Or);
         m.insert("return",  KeywordType::Return);
         m.insert("var",     KeywordType::Var);
+        m.insert("def",     KeywordType::Def);
         m.insert("while",   KeywordType::While);
         m.insert("alias",   KeywordType::Alias);
         m.insert("setup",   KeywordType::Setup);
@@ -41,12 +42,14 @@ lazy_static! {
     pub static ref CONSTANTS: HashMap<&'static str, ConstantType> = {
         let mut m = HashMap::new();
 
-        m.insert("false",   ConstantType::False);
-        m.insert("true",    ConstantType::True);
-        m.insert("LOW",     ConstantType::Low);
-        m.insert("HIGH",    ConstantType::High);
-        m.insert("INPUT",     ConstantType::Input);
-        m.insert("OUTPUT",    ConstantType::Output);
+        m.insert("false",           ConstantType::Boolean(BooleanConstantType::False));
+        m.insert("true",            ConstantType::Boolean(BooleanConstantType::True));
+        m.insert("LOW",             ConstantType::PinState(PinStateConstantType::Low));
+        m.insert("HIGH",            ConstantType::PinState(PinStateConstantType::High));
+        m.insert("INPUT",           ConstantType::PinMode(PinModeConstantType::Input));
+        m.insert("INPUT_PULLUP",    ConstantType::PinMode(PinModeConstantType::InputPullUp));
+        m.insert("INPUT_PULLDOWN",  ConstantType::PinMode(PinModeConstantType::InputPullDown));
+        m.insert("OUTPUT",          ConstantType::PinMode(PinModeConstantType::Output));
 
         m
     };
@@ -89,16 +92,31 @@ pub enum LiteralType {
 #[derive(Debug)]
 pub enum KeywordType {
     And, Else, Fun, For, If, Or,
-    Return, Var, While, Alias, Setup,
-    Loop, Not, To
+    Return, Var, Def, While, Alias, 
+    Setup, Loop, Not, To
 }
 
 #[derive(Debug, Clone)]
 pub enum ConstantType {
-    True, False,
+    Boolean(BooleanConstantType),
+    PinState(PinStateConstantType),
+    PinMode(PinModeConstantType)
+}
 
+#[derive(Debug, Clone)]
+pub enum BooleanConstantType {
+    True, False,
+}
+
+#[derive(Debug, Clone)]
+pub enum PinStateConstantType {
     Low, High,
-    Input, Output
+}
+
+#[derive(Debug, Clone)]
+pub enum PinModeConstantType {
+    Input, InputPullDown, InputPullUp,
+    Output
 }
 
 #[derive(Debug, Clone)]
