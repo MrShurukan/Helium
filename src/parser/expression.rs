@@ -128,14 +128,33 @@ impl Expression {
     }
 }
 
+impl Display for Expression {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match &self.expression_type {
+            ExpressionType::Binary { left, operator, right } =>
+                write!(f, "{left} {operator:?} {right}"),
+            ExpressionType::Ternary { first, second, third } =>
+                write!(f, "{first} ? {second} : {third}"),
+            ExpressionType::Grouping { expression } => 
+                write!(f, "({expression})"),
+            ExpressionType::Literal { value } =>
+                write!(f, "{value:?}"),
+            ExpressionType::Unary { operator, right } =>
+                write!(f, "({operator:?} {right})"),
+            ExpressionType::Assignment { identifier, expression } =>
+                write!(f, "{identifier} = {expression}")
+        }
+    }
+}
+
 /// A reference to a pin
 /// Like `PortB.2`
 #[derive(Debug, Clone)]
 pub struct PinRef {
     /// TokenType::Port
-    port: Token,
+    pub port: Token,
     /// TokenType::Literal(LiteralType::Integer)
-    pin_number: Token
+    pub pin_number: Token
 }
 
 impl PinRef {

@@ -20,8 +20,9 @@ fn main() {
             let mut parser = Parser::new(&contents);
             match parser.parse() {
                 Ok(statements) => { 
-                    for statement in statements {
-                        println!("{statement:?}");
+                    println!("Statements:");
+                    for (i, statement) in statements.iter().enumerate() {
+                        println!("{i}) {statement}");
                     }
                 },
                 Err(errors) => report_errors(errors.as_slice())
