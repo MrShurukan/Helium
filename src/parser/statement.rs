@@ -15,7 +15,8 @@ pub enum Statement {
     DefDeclaration(Rc<[SingleDefDeclaration]>),
     Block(Rc<[Statement]>),
     If { condition: Expression, then_body: Box<Statement>, else_body: Option<Box<Statement>> },
-    While { condition: Expression, body: Box<Statement> }
+    While { condition: Expression, body: Box<Statement> },
+    For { identifier: Token, from: Expression, to: Expression, body: Box<Statement> }
 }
 
 #[derive(Debug)]

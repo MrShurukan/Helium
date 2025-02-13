@@ -427,9 +427,6 @@ pub enum ScannerErrorType {
 impl Error for ScannerError {}
 impl Display for ScannerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let error_header =
-            format!("[line {}] Scanner Error", self.line);
-
         let output = match &self.error_type {
             ScannerErrorType::UnknownToken(lexeme) => &format!("Unknown token ('{lexeme}')"),
             ScannerErrorType::UnterminatedString => "Unterminated string",
@@ -442,9 +439,14 @@ impl Display for ScannerError {
             ScannerErrorType::MissingPortName => "Port name was not specified"
         };
 
-        write!(f, "{error_header}: {}", output.red())?;
+        write!(f, "Scanner Error: {}", output.red())?;
+        // TODO: Move common error logic somewhere
         if let Some(location) = &self.location {
-            write!(f, "\n\n{}\n{location}", "Happened here:".green())?;
+            // Add tabs to each line of the location so it shifts to the right
+            let location: String = location.split('\n')
+                .map(|line| format!("\t{line}\n"))
+                .collect();
+            write!(f, "\n\t{}\n{}\n", "Happened here:".green(), location.trim_end())?;
         }
 
         Ok(())

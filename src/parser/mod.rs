@@ -41,6 +41,14 @@ macro_rules! check_and_consume {
             _ => return Err($self.missing_token_error($error_message, $tokens))
         }
     };
+    
+    // Returns error pointing to a previous token
+    ($self:ident, $tokens:ident, $enum_types:pat_param, $error_message:literal, prev_token) => {
+        match Self::peek($tokens)?.token_type {
+            $enum_types => $tokens.advance().unwrap(),
+            _ => return Err($self.missing_token_error_previous($error_message, $tokens))
+        }
+    };
 }
 
 /// This macro is used to automate binary operator parsing.
@@ -129,6 +137,7 @@ impl Parser<'_> {
     /// passing it to back-end (which will convert it to assembly language).
     ///
     /// This is parsed according to rules in `grammar.txt` (root of the repo)
+    // TODO: A lot of things like blocks if unclosed will return an error to EOF with 'Incorrect token in this place'
     pub fn parse(&mut self) -> Result<Vec<Statement>, Vec<ParserError>> {
         let mut statements: Vec<Statement> = Vec::new();
         let mut errors: Vec<ParserError> = Vec::new();
@@ -169,8 +178,8 @@ impl Parser<'_> {
     fn declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
         let token = Self::peek(tokens)?;
         let result = match token.token_type {
-            TT::Keyword(KT::Var) => { tokens.advance(); self.var_declaration(tokens) },
-            TT::Keyword(KT::Def) => { tokens.advance(); self.def_declaration(tokens) },
+            TT::Keyword(KT::Var) => { Self::advance(tokens)?; self.var_declaration(tokens) },
+            TT::Keyword(KT::Def) => { Self::advance(tokens)?; self.def_declaration(tokens) },
             _ => self.statement(tokens)
         };
 
@@ -193,7 +202,7 @@ impl Parser<'_> {
             initializer = Some(self.expression(tokens)?);
         }
 
-        check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected a ';' after variable declaration");
+        check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected a ';' after variable declaration", prev_token);
         Ok(Statement::VariableDeclaration { identifier: name, initializer })
     }
 
@@ -255,7 +264,7 @@ impl Parser<'_> {
     }
 
     fn single_def_declaration(&mut self, tokens: &mut TokenIterator) -> Result<SingleDefDeclaration, ParserError> {
-        let identifier = check_and_consume!(self, tokens, TT::Literal(LT::Identifier(_)), "Expected identifier after this token").clone();
+        let identifier = check_and_consume!(self, tokens, TT::Literal(LT::Identifier(_)), "Expected identifier after this token", prev_token).clone();
         check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' after an identifier in a def statement");
         let pin_ref = self.pin_ref(tokens)?;
         let pin_mode = check_and_consume!(self, tokens, TT::Constant(CT::PinMode(_)),
@@ -285,19 +294,48 @@ impl Parser<'_> {
     }
 
     fn for_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
-        todo!("for_statement")
+        let identifier = check_and_consume!(self, tokens, TT::Literal(LT::Identifier(_)), "Expected identifier after 'for'").clone();
+        check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' after identifier in for loop");
+        let from = self.expression(tokens)?;
+        check_and_consume!(self, tokens, TT::Keyword(KT::To), "Expected 'to' after from-expression in a for loop");
+        let to = self.expression(tokens)?;
+        check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "For only supports a block body '{'");
+        let body = self.block_statement(tokens)?; 
+        
+        Ok(Statement::For { identifier, from, to, body: Box::new(body) })
     }
 
     fn if_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
-        todo!("if_statement")
+        let condition = self.expression(tokens)?;
+        check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "Expected '{' after if condition");
+        let body = self.block_statement(tokens)?;
+        let mut else_body: Option<Box<Statement>> = None;
+        if let TT::Keyword(KT::Else) = Self::peek(tokens)?.token_type {
+            else_body = Some(Box::new(self.block_statement(tokens)?));
+        }
+
+        Ok(Statement::If { condition, then_body: Box::new(body), else_body })
     }
 
     fn while_loop(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
-        todo!("while_loop")
+        let condition = self.expression(tokens)?;
+        check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "Expected '{' after while condition");
+        let body = self.block_statement(tokens)?;
+
+        Ok(Statement::While { body: Box::new(body), condition })
     }
 
     fn block_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
-        todo!("block_statement")
+        let mut statements: Vec<Statement> = Vec::new();
+
+        loop {
+            if let TT::Punctuation(PT::RightBrace) = Self::peek(tokens)?.token_type { break; }
+
+            statements.push(self.declaration(tokens)?);
+        }
+
+        check_and_consume!(self, tokens, TT::Punctuation(PT::RightBrace), "Expected '}' after a block", prev_token);
+        Ok(Statement::Block(statements.into()))
     }
 
     fn expression_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
@@ -551,10 +589,21 @@ impl Parser<'_> {
         let location = format!("{line_number_string}{line}\n{spaces}{marker}");
         ParserError { location: Some(location), error_type, token: Some(token) }
     }
+
+    /// Creates a Missing Token error while pointing to the current token in the iterator
+    fn missing_token_error(&self, error_message: &'static str, tokens: &mut TokenIterator) -> ParserError {
+        let current_token = tokens.peek()
+            .expect("No previous token available while reporting error");
+        
+        self.get_error_marked_line(
+            ParserErrorType::MissingToken(String::from(error_message)), (*current_token).clone()
+        )
+    }
     
     /// Creates a Missing Token error while pointing to the previous token in the iterator
-    fn missing_token_error(&self, error_message: &'static str, tokens: &TokenIterator) -> ParserError {
-        let previous_token = tokens.previous().expect("No previous token available while parsing");
+    fn missing_token_error_previous(&self, error_message: &'static str, tokens: &TokenIterator) -> ParserError {
+        let previous_token = tokens.previous()
+            .expect("No previous token available while reporting error");
         
         self.get_error_marked_line(
             ParserErrorType::MissingToken(String::from(error_message)), (*previous_token).clone()
@@ -593,9 +642,10 @@ impl ParserError {
 impl Error for ParserError {}
 impl Display for ParserError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut is_scanner_error = false;
         let output = match &self.error_type {
             ParserErrorType::ScannerError(scanner_error) =>
-                &format!("{scanner_error}"),
+                { is_scanner_error = true; &format!("{scanner_error}") },
             ParserErrorType::UnclosedParenthesis => "Unclosed parenthesis",
             ParserErrorType::RanOutOfTokens => "No more tokens to parse",
             ParserErrorType::IncorrectToken => "Incorrect token in this place",
@@ -612,7 +662,14 @@ impl Display for ParserError {
             ParserErrorType::EmptyDefBlock => "Def block can't be empty"
         };
 
-        write!(f, "{}", output.red())?;
+        if is_scanner_error {
+            write!(f, "{}", output)?;
+        }
+        else {
+            write!(f, "{}", output.red())?;
+        }
+        
+        // TODO: Move common error logic somewhere
         if let Some(location) = &self.location {
             // Add tabs to each line of the location so it shifts to the right
             let location: String = location.split('\n')
@@ -621,7 +678,7 @@ impl Display for ParserError {
             write!(f, "\n\t{}\n{}\n", "Happened here:".green(), location.trim_end())?;
         }
 
-        if self.token.is_none() {
+        if self.token.is_none() && !is_scanner_error {
             write!(f, "{}", "(internal parser error, something went wrong)".yellow())?;
         }
 
