@@ -87,6 +87,8 @@ pub enum LiteralType {
     Integer(i64),
     Float(f64),
     Boolean(bool),
+    PinMode(PinModeConstantType),
+    PinState(PinStateConstantType)
 }
 
 #[derive(Debug)]
@@ -108,7 +110,7 @@ pub enum BooleanConstantType {
     True, False,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum PinStateConstantType {
     Low, High,
 }

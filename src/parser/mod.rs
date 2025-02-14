@@ -161,7 +161,9 @@ impl Parser<'_> {
                 statements.push(statement);
             }
             else {
-                errors.push(result.err().unwrap());
+                let err = result.err().unwrap();
+                println!("{}: {}", "Err:".red(), err);
+                errors.push(err);
             }
         }
         
@@ -179,6 +181,8 @@ impl Parser<'_> {
         let result = match token.token_type {
             TT::Keyword(KT::Var) => { Self::advance(tokens)?; self.var_declaration(tokens) },
             TT::Keyword(KT::Def) => { Self::advance(tokens)?; self.def_declaration(tokens) },
+            TT::Keyword(KT::Setup) => { Self::advance(tokens)?; self.setup_declaration(tokens) },
+            TT::Keyword(KT::Loop) => { Self::advance(tokens)?; self.loop_declaration(tokens) },
             _ => self.statement(tokens)
         };
 
@@ -284,6 +288,18 @@ impl Parser<'_> {
         PinRef::new(port, pin_number).map_err(|err| self.convert_pin_ref_error(err))
     }
 
+    fn setup_declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
+        check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "Expected '{' after setup", use_prev_token);
+        let block = self.block_statement(tokens)?;
+        Ok(Statement::SetupDeclaration(Box::new(block)))
+    }
+
+    fn loop_declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
+        check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "Expected '{' after loop", use_prev_token);
+        let block = self.block_statement(tokens)?;
+        Ok(Statement::LoopDeclaration(Box::new(block)))
+    }
+
     fn statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
         let token = Self::peek(tokens)?;
         match token.token_type {
@@ -316,7 +332,20 @@ impl Parser<'_> {
         let body = self.block_statement(tokens)?;
         let mut else_body: Option<Box<Statement>> = None;
         if let TT::Keyword(KT::Else) = Self::peek(tokens)?.token_type {
-            else_body = Some(Box::new(self.block_statement(tokens)?));
+            Self::advance(tokens)?;
+            match Self::peek(tokens)?.token_type {
+                TT::Punctuation(PT::LeftBrace) => {
+                    Self::advance(tokens)?;
+                    else_body = Some(Box::new(self.block_statement(tokens)?));
+                },
+                TT::Keyword(KT::If) => {
+                    Self::advance(tokens)?;
+                    else_body = Some(Box::new(self.if_statement(tokens)?));
+                },
+                _ => {
+                    return Err(self.missing_token_error("Expected a block or another 'if' after else", tokens))
+                }
+            }
         }
 
         Ok(Statement::If { condition, then_body: Box::new(body), else_body })
@@ -475,6 +504,12 @@ impl Parser<'_> {
                     BCT::True => Some(Expression::new_literal_custom_type(&token, LT::Boolean(true))),
                     BCT::False => Some(Expression::new_literal_custom_type(&token, LT::Boolean(false))),
                 }
+            },
+            TT::Constant(CT::PinMode(constant)) => {
+                Some(Expression::new_literal_custom_type(&token, LT::PinMode(*constant)))
+            },
+            TT::Constant(CT::PinState(constant)) => {
+                Some(Expression::new_literal_custom_type(&token, LT::PinState(*constant)))
             },
             TT::Punctuation(PT::LeftParen) => {
                 tokens.advance();

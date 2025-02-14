@@ -1,13 +1,16 @@
 ﻿program         -> declaration* EOF ;
 declaration     -> varDecl
                    | defDecl
+                   | setupDecl
+                   | loopDecl
                    | statement ;
 
 varDecl         -> "var" IDENTIFIER ( ":" TYPE )? ( "=" expression )? ";" ;
 defDecl         -> "def" ( alias | "{" alias+ "}" ) ;
 alias           -> IDENTIFIER "=" pin_ref PINMODE ";" ;
-
-pin_ref         -> PORT "." INTEGER ; 
+pin_ref         -> PORT "." INTEGER ;
+setupDecl       -> "setup" block ;
+loopDecl        -> "loop" block ;
 
 statement       -> exprStmt
                    | forStmt
@@ -17,7 +20,7 @@ statement       -> exprStmt
 
 exprStmt        -> expression ";" ;
 forStmt         -> "for" IDENTIFIER "=" expression "to" expression block ;
-ifStmt          -> "if" expression block ( "else" block )? ;
+ifStmt          -> "if" expression block ( "else" ( ifStmt | block ) )? ;
 whileStmt       -> "while" expression block ;
 block           -> "{" statement* "}" ;
 

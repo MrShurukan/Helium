@@ -1,6 +1,5 @@
 ﻿use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::pin::Pin;
 use colored::Colorize;
 use crate::parser::token::Token;
 use crate::parser::token_type::{LiteralType, PunctuationType, TokenType};

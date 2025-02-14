@@ -3,10 +3,8 @@ use crate::parser::token::Token;
 use crate::parser::token_type::{ConstantType, LiteralType, PinModeConstantType, TokenType};
 use colored::Colorize;
 use std::error::Error;
-use std::fmt::{write, Display, Formatter};
-use std::process::id;
+use std::fmt::{Display, Formatter};
 use std::rc::Rc;
-use if_chain::if_chain;
 
 /// Statements are the backbone of the entire language.
 /// Source file represents a list of statements when parsed
@@ -15,6 +13,8 @@ pub enum Statement {
     Expression(Expression),
     VariableDeclaration { identifier: String, initializer: Option<Expression> },
     DefDeclaration(Rc<[SingleDefDeclaration]>),
+    SetupDeclaration(Box<Statement>),
+    LoopDeclaration(Box<Statement>),
     Block(Rc<[Statement]>),
     If { condition: Expression, then_body: Box<Statement>, else_body: Option<Box<Statement>> },
     While { condition: Expression, body: Box<Statement> },
@@ -60,6 +60,10 @@ impl Display for Statement {
                 write!(f, "while {condition} {body}"),
             Statement::For { identifier, from, to, body } =>
                 write!(f, "for {identifier} = {from} to {to} {body}"),
+            Statement::SetupDeclaration(block) =>
+                write!(f, "setup {block}"),
+            Statement::LoopDeclaration(block) =>
+                write!(f, "loop {block}"),             
         }
     }
 }
