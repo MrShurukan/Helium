@@ -1,6 +1,7 @@
 ﻿use crate::parser::token::Token;
 use std::iter::Peekable;
 use std::slice::Iter;
+use colored::Colorize;
 use unicode_segmentation::{Graphemes, UnicodeSegmentation};
 
 /// Helper struct for holding string slice and working with graphemes
@@ -29,25 +30,60 @@ impl ReadOnlyGraphemeSlice<'_> {
 pub struct TokenIterator<'a> {
     tokens: &'a [Token],
     iter: Peekable<Iter<'a, Token>>,
-    index: usize
+    index: usize,
+    repeated_peek_count: usize,
+    last_peeked_index: Option<usize>
 }
 
 impl TokenIterator<'_> {
     pub fn new(tokens: &[Token]) -> TokenIterator {
-        TokenIterator { tokens, iter: tokens.iter().peekable(), index: 0 }
+        TokenIterator { tokens, iter: tokens.iter().peekable(), index: 0, 
+            last_peeked_index: None, repeated_peek_count: 0 }
     }
     
     pub fn advance(&mut self) -> Option<&Token> {
         let next = self.iter.next();
         if next.is_some() {
             self.index += 1;
+            if self.repeated_peek_count != 0 {
+                println!();
+                self.repeated_peek_count = 0;
+            }
+            println!("[TokenIterator] Advancing to {} (read: {:?})", self.index.to_string().yellow(), next)
         }
         
         next
     }
     
     pub fn peek(&mut self) -> Option<&&Token> {
-        self.iter.peek()
+        let peeked = self.iter.peek();
+        
+        if let Some(last_peeked) = self.last_peeked_index {
+            if last_peeked != self.index {
+                if self.repeated_peek_count != 0 {
+                    println!();
+                    self.repeated_peek_count = 0;
+                }
+                println!("[TokenIterator] Peeking at {} (read: {:?})", self.index.to_string().green(), peeked);
+            }
+            else {
+                if self.repeated_peek_count == 0 {
+                    print!("{} {} (1 time)", "[TokenIterator] Repeated peek at".yellow(),
+                           self.index.to_string().green());
+                }
+                else {
+                    print!("\r{} {} ({} times)", "[TokenIterator] Repeated peek at".yellow(),
+                           self.index.to_string().green(), self.repeated_peek_count+1);
+                }
+                self.repeated_peek_count += 1
+            }
+        }
+        else {
+            println!("[TokenIterator] Peeking at {} (read: {:?})", self.index.to_string().green(), peeked);
+        }
+
+        self.last_peeked_index = Some(self.index);
+        peeked
     }
     
     pub fn previous(&self) -> Option<&Token> {
