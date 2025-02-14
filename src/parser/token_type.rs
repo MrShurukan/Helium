@@ -113,7 +113,7 @@ pub enum PinStateConstantType {
     Low, High,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum PinModeConstantType {
     Input, InputPullDown, InputPullUp,
     Output

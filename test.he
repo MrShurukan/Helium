@@ -1,1 +1,2 @@
-﻿(1 + 1);
+﻿def a = PortB.2 INPUT;
+var a = -123;

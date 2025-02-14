@@ -151,28 +151,26 @@ impl Display for Expression {
 /// Like `PortB.2`
 #[derive(Debug, Clone)]
 pub struct PinRef {
-    /// TokenType::Port
-    pub port: Token,
-    /// TokenType::Literal(LiteralType::Integer)
-    pub pin_number: Token
+    pub port: String,
+    pub pin_number: usize
 }
 
 impl PinRef {
     pub fn new(port: Token, pin_number: Token) -> Result<PinRef, PinRefError> {
-        if let TokenType::Port(_) = port.token_type {}
+        if let TokenType::Port(port_name) = port.token_type {
+            if let TokenType::Literal(LiteralType::Integer(pin_int)) = pin_number.token_type {
+                Ok(PinRef { port: port_name, pin_number: pin_int as usize })
+            }
+            else {
+                Err(PinRefError { token: pin_number, message: "Expected integer as pin number" })
+            }
+        }
         else {
-            return Err(PinRefError {
+            Err(PinRefError {
                 token: port,
                 message: "Incorrect port token"
-            });
+            })
         }
-        
-        if let TokenType::Literal(LiteralType::Integer(_)) = pin_number.token_type {}
-        else {
-            return Err(PinRefError { token: pin_number, message: "Expected integer as pin number" });
-        }
-        
-        Ok(PinRef { port, pin_number })
     }
 }
 

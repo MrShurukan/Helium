@@ -9,7 +9,6 @@ use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
-use std::thread::current;
 
 mod scanner;
 mod statement;
@@ -43,7 +42,7 @@ macro_rules! check_and_consume {
     };
     
     // Returns error pointing to a previous token
-    ($self:ident, $tokens:ident, $enum_types:pat_param, $error_message:literal, prev_token) => {
+    ($self:ident, $tokens:ident, $enum_types:pat_param, $error_message:literal, use_prev_token) => {
         match Self::peek($tokens)?.token_type {
             $enum_types => $tokens.advance().unwrap(),
             _ => return Err($self.missing_token_error_previous($error_message, $tokens))
@@ -194,7 +193,10 @@ impl Parser<'_> {
 
     // TODO: Read the type after the identifier (: Type)
     fn var_declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
-        let name = check_and_consume!(self, tokens, TT::Literal(LT::Identifier(_)), "Expected a variable name").clone();
+        let name = match &Self::advance(tokens)?.token_type {
+            TT::Literal(LT::Identifier(var_name)) => var_name.clone(),
+            _ => return Err(self.missing_token_error("Expected a variable name", tokens))
+        };
 
         let mut initializer: Option<Expression> = None;
         if let TT::Punctuation(PT::Equal) = Self::peek(tokens)?.token_type {
@@ -202,7 +204,7 @@ impl Parser<'_> {
             initializer = Some(self.expression(tokens)?);
         }
 
-        check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected a ';' after variable declaration", prev_token);
+        check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected a ';' after variable declaration", use_prev_token);
         Ok(Statement::VariableDeclaration { identifier: name, initializer })
     }
 
@@ -264,7 +266,7 @@ impl Parser<'_> {
     }
 
     fn single_def_declaration(&mut self, tokens: &mut TokenIterator) -> Result<SingleDefDeclaration, ParserError> {
-        let identifier = check_and_consume!(self, tokens, TT::Literal(LT::Identifier(_)), "Expected identifier after this token", prev_token).clone();
+        let identifier = check_and_consume!(self, tokens, TT::Literal(LT::Identifier(_)), "Expected identifier after this token", use_prev_token).clone();
         check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' after an identifier in a def statement");
         let pin_ref = self.pin_ref(tokens)?;
         let pin_mode = check_and_consume!(self, tokens, TT::Constant(CT::PinMode(_)),
@@ -294,7 +296,10 @@ impl Parser<'_> {
     }
 
     fn for_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
-        let identifier = check_and_consume!(self, tokens, TT::Literal(LT::Identifier(_)), "Expected identifier after 'for'").clone();
+        let identifier = match &Self::peek(tokens)?.token_type {
+            TT::Literal(LT::Identifier(name)) => name.clone(),
+            _ => return Err(self.missing_token_error("Expected identifier after 'for'", tokens))
+        };
         check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' after identifier in for loop");
         let from = self.expression(tokens)?;
         check_and_consume!(self, tokens, TT::Keyword(KT::To), "Expected 'to' after from-expression in a for loop");
@@ -334,13 +339,13 @@ impl Parser<'_> {
             statements.push(self.declaration(tokens)?);
         }
 
-        check_and_consume!(self, tokens, TT::Punctuation(PT::RightBrace), "Expected '}' after a block", prev_token);
+        check_and_consume!(self, tokens, TT::Punctuation(PT::RightBrace), "Expected '}' after a block", use_prev_token);
         Ok(Statement::Block(statements.into()))
     }
 
     fn expression_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
         let value = self.expression(tokens)?;
-        check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected ';' after expression.");
+        check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected ';' after expression.", use_prev_token);
         Ok(Statement::Expression(value))
     }
 

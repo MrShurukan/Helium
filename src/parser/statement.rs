@@ -1,22 +1,24 @@
 ﻿use crate::parser::expression::{Expression, PinRef};
 use crate::parser::token::Token;
-use crate::parser::token_type::{ConstantType, LiteralType, TokenType};
+use crate::parser::token_type::{ConstantType, LiteralType, PinModeConstantType, TokenType};
 use colored::Colorize;
 use std::error::Error;
 use std::fmt::{write, Display, Formatter};
+use std::process::id;
 use std::rc::Rc;
+use if_chain::if_chain;
 
 /// Statements are the backbone of the entire language.
 /// Source file represents a list of statements when parsed
 #[derive(Debug)]
 pub enum Statement {
     Expression(Expression),
-    VariableDeclaration { identifier: Token, initializer: Option<Expression> },
+    VariableDeclaration { identifier: String, initializer: Option<Expression> },
     DefDeclaration(Rc<[SingleDefDeclaration]>),
     Block(Rc<[Statement]>),
     If { condition: Expression, then_body: Box<Statement>, else_body: Option<Box<Statement>> },
     While { condition: Expression, body: Box<Statement> },
-    For { identifier: Token, from: Expression, to: Expression, body: Box<Statement> }
+    For { identifier: String, from: Expression, to: Expression, body: Box<Statement> }
 }
 
 impl Display for Statement {
@@ -33,7 +35,7 @@ impl Display for Statement {
             Statement::DefDeclaration(declarations) => {
                 write!(f, "def {{\n")?;
                 for declaration in declarations.iter() {
-                    write!(f, "{} = {}.{} {};\n",
+                    write!(f, "{} = {}.{} {:?};\n",
                         declaration.identifier, declaration.port.port,
                         declaration.port.pin_number , declaration.pin_mode)?;
                 }
@@ -64,26 +66,23 @@ impl Display for Statement {
 
 #[derive(Debug)]
 pub struct SingleDefDeclaration {
-    /// TokenType::Literal(LiteralType::Identifier)
-    identifier: Token,
+    identifier: String,
     port: PinRef,
-    /// TokenType::Constant(ConstantType::PinMode)
-    pin_mode: Token
+    pin_mode: PinModeConstantType
 }
 
 impl SingleDefDeclaration {
+    // TODO: Figure out a cleaner way with these if lets...
     pub fn new(identifier: Token, port: PinRef, pin_mode: Token) -> Result<SingleDefDeclaration, DefDeclarationError> {
-        if let TokenType::Literal(LiteralType::Identifier(_)) = identifier.token_type {}
-        else {
-            return Err(DefDeclarationError { token: identifier, message: "Expected identifier in this place" })
+        if let TokenType::Literal(LiteralType::Identifier(ident)) = identifier.token_type {
+            if let TokenType::Constant(ConstantType::PinMode(pin)) = pin_mode.token_type {
+                Ok(SingleDefDeclaration { identifier: ident, port, pin_mode: *pin })
+            } else {
+                Err(DefDeclarationError { token: pin_mode, message: "Expected pin mode (for example 'INPUT) in this place" })             
+            }         
+        } else {             
+            Err(DefDeclarationError { token: identifier, message: "Expected identifier in this place" })         
         }
-
-        if let TokenType::Constant(ConstantType::PinMode(_)) = pin_mode.token_type {}
-        else {
-            return Err(DefDeclarationError { token: pin_mode, message: "Expected pin mode (for example 'INPUT) in this place" })
-        }
-        
-        Ok(SingleDefDeclaration { identifier, port, pin_mode })
     }
 }
 
