@@ -1,7 +1,11 @@
 use std::{env, fs};
+use std::error::Error;
 use std::process::exit;
 use colored::Colorize;
 use crate::frontend::{Parser, ParserError};
+use crate::frontend::statement::Statement;
+use crate::middle_end::{Analyzer, AnalyzerError};
+use crate::middle_end::utils::EnvironmentStack;
 
 mod frontend;
 mod middle_end;
@@ -14,31 +18,52 @@ fn main() {
         exit(1);
     }
 
-    let file_path = args.get(1).unwrap();
-    match fs::read_to_string(file_path) {
-        Ok(contents) => {
-            // Right now the program will only output a list of scanned tokens and then exit
-            let mut parser = Parser::new(&contents);
-            match parser.parse() {
-                Ok(statements) => { 
-                    println!("Statements:");
-                    for (i, statement) in statements.iter().enumerate() {
-                        println!("{i}) {statement}");
-                    }
-                },
-                Err(errors) => report_errors(errors.as_slice())
-            }
-        },
+    let file_path = &args[1];
+    let contents = match read_source_file(file_path) {
+        Ok(contents) => contents,
         Err(err) => {
             eprintln!("{}", "Encountered a problem while reading the source file".red());
             eprintln!("{err}");
             exit(2);
         }
+    };
+
+    let statements = match parse_source(&contents) {
+        Ok(statements) => statements,
+        Err(errors) => {
+            report_errors(&errors, "parser");
+        }
+    };
+
+    println!("Statements:");
+    for (i, statement) in statements.iter().enumerate() {
+        println!("{i}) {statement}");
+    }
+
+    analyze_statements(&contents, &statements);
+}
+
+fn read_source_file(file_path: &str) -> Result<String, std::io::Error> {
+    fs::read_to_string(file_path)
+}
+
+fn parse_source(contents: &str) -> Result<Vec<Statement>, Vec<ParserError>> {
+    let mut parser = Parser::new(contents);
+    parser.parse()
+}
+
+fn analyze_statements(contents: &str, statements: &[Statement]) {
+    let mut empty_environment = EnvironmentStack::new();
+    let mut analyzer = Analyzer::new_with_environment(contents, &mut empty_environment);
+
+    match analyzer.analyze(statements) {
+        Err(errors) => report_errors(errors.as_slice(), "analyzer"),
+        _ => {}
     }
 }
 
-fn report_errors(errors: &[ParserError]) {
-    eprintln!("{}", "Wasn't able to parse the file!".yellow());
+fn report_errors<E: Error>(errors: &[E], error_source: &'static str) -> ! {
+    eprintln!("{} (originated from {})", "Wasn't able to compile the file!".yellow(), error_source);
     let error_errors = if errors.len() == 1 { "error" } else { "errors" };
     eprintln!("{} {error_errors} found.\n", errors.len());
 

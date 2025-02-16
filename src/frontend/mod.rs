@@ -11,9 +11,9 @@ use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
 mod scanner;
-mod statement;
+pub mod statement;
 mod token;
-mod token_type;
+pub mod token_type;
 mod utils;
 mod position_info;
 mod expression;

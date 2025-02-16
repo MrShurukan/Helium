@@ -122,7 +122,7 @@ pub enum PinModeConstantType {
     Output
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum StaticType {
     Int8, Int16, Int32, Int64,
     Uns8, Uns16, Uns32, Uns64,
@@ -137,7 +137,9 @@ pub enum StaticType {
     Boolean,
     String,
 
-    Array(Box<StaticType>)
+    Array(&'static StaticType),
+    // TODO: Function would need argument types + return type
+    Function
 }
 
 #[derive(Debug, Clone)]
