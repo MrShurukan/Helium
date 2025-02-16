@@ -1,4 +1,4 @@
-﻿use crate::parser::token::Token;
+﻿use crate::frontend::token::Token;
 use std::iter::Peekable;
 use std::slice::Iter;
 use colored::Colorize;

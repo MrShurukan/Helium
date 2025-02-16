@@ -1,9 +1,9 @@
 use std::{env, fs};
 use std::process::exit;
 use colored::Colorize;
-use crate::parser::{Parser, ParserError};
+use crate::frontend::{Parser, ParserError};
 
-mod parser;
+mod frontend;
 
 // TODO: Read up on exit codes. Maybe use something that already makes sense
 fn main() {

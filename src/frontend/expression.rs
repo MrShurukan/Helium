@@ -1,8 +1,8 @@
 ﻿use std::error::Error;
 use std::fmt::{Display, Formatter};
 use colored::Colorize;
-use crate::parser::token::Token;
-use crate::parser::token_type::{LiteralType, PunctuationType, TokenType};
+use crate::frontend::token::Token;
+use crate::frontend::token_type::{LiteralType, PunctuationType, TokenType};
 
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_field_names)]

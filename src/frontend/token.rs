@@ -1,5 +1,5 @@
 ﻿use std::fmt;
-use crate::parser::token_type::TokenType;
+use crate::frontend::token_type::TokenType;
 
 /// After a character inside the source file, this is the smallest meaningful piece of
 /// information about a program. Could represent punctuation, a keyword, identifier, etc.

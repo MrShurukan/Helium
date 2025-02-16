@@ -3,10 +3,10 @@ use std::fmt::{Display, Formatter};
 use std::iter::Peekable;
 use colored::Colorize;
 use unicode_segmentation::Graphemes;
-use crate::parser::position_info::PositionInfo;
-use crate::parser::token::Token;
-use crate::parser::token_type::{LiteralType, TokenType, CONSTANTS, KEYWORDS, TYPES};
-use crate::parser::utils::ReadOnlyGraphemeSlice;
+use crate::frontend::position_info::PositionInfo;
+use crate::frontend::token::Token;
+use crate::frontend::token_type::{LiteralType, TokenType, CONSTANTS, KEYWORDS, TYPES};
+use crate::frontend::utils::ReadOnlyGraphemeSlice;
 
 use ScannerErrorType as SET;
 use ScannerError as SE;
@@ -72,7 +72,7 @@ impl Scanner<'_> {
                       source: &ReadOnlyGraphemeSlice) -> Result<Option<Token>, ScannerError> {
         
         use TokenType::Punctuation as P;
-        use crate::parser::token_type::PunctuationType as PT;
+        use crate::frontend::token_type::PunctuationType as PT;
         
         let grapheme = Self::advance(peekable, position_info).ok_or_else(|| {
             SE::new_with_location(SET::NoMoreTokens, position_info, source)

@@ -1,6 +1,6 @@
-﻿use crate::parser::expression::{Expression, PinRef};
-use crate::parser::token::Token;
-use crate::parser::token_type::{ConstantType, LiteralType, PinModeConstantType, TokenType};
+﻿use crate::frontend::expression::{Expression, PinRef};
+use crate::frontend::token::Token;
+use crate::frontend::token_type::{ConstantType, LiteralType, PinModeConstantType, TokenType};
 use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};

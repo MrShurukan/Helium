@@ -1,10 +1,10 @@
-﻿use crate::parser::expression::{Expression, ExpressionType, PinRef, PinRefError};
-use crate::parser::scanner::{Scanner, ScannerError};
-use crate::parser::statement::{DefDeclarationError, SingleDefDeclaration, Statement};
-use crate::parser::token::Token;
-use crate::parser::token_type::{KeywordType as KT, LiteralType as LT, PunctuationType as PT,
-                                TokenType as TT, ConstantType as CT, BooleanConstantType as BCT};
-use crate::parser::utils::TokenIterator;
+﻿use crate::frontend::expression::{Expression, ExpressionType, PinRef, PinRefError};
+use crate::frontend::scanner::{Scanner, ScannerError};
+use crate::frontend::statement::{DefDeclarationError, SingleDefDeclaration, Statement};
+use crate::frontend::token::Token;
+use crate::frontend::token_type::{KeywordType as KT, LiteralType as LT, PunctuationType as PT,
+                                  TokenType as TT, ConstantType as CT, BooleanConstantType as BCT};
+use crate::frontend::utils::TokenIterator;
 use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
