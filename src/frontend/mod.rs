@@ -197,10 +197,11 @@ impl Parser<'_> {
 
     // TODO: Read the type after the identifier (: Type)
     fn var_declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
-        let name = match &Self::advance(tokens)?.token_type {
-            TT::Literal(LT::Identifier(var_name)) => var_name.clone(),
-            _ => return Err(self.missing_token_error("Expected a variable name", tokens))
-        };
+        let ident_token = Self::advance(tokens)?;
+        if !matches!(ident_token.token_type, TT::Literal(LT::Identifier(_))) {
+            return Err(self.missing_token_error("Expected a variable name", tokens))
+        }
+        let ident_token = ident_token.clone();
 
         let mut initializer: Option<Expression> = None;
         if let TT::Punctuation(PT::Equal) = Self::peek(tokens)?.token_type {
@@ -209,7 +210,7 @@ impl Parser<'_> {
         }
 
         check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected a ';' after variable declaration", use_prev_token);
-        Ok(Statement::VariableDeclaration { identifier: name, initializer })
+        Ok(Statement::new_var_declaration(ident_token, initializer))
     }
 
     fn def_declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
@@ -226,7 +227,7 @@ impl Parser<'_> {
             // Identifier = it's a one-liner
             Token { token_type: TT::Literal(LT::Identifier(_)), .. } => {
                 let def_declaration = self.single_def_declaration(tokens)?;
-                Ok(Statement::DefDeclaration(Rc::new([def_declaration])))
+                Ok(Statement::new_def_declaration(Rc::new([def_declaration])))
             },
             // Left brace = it's a multiline version
             Token { token_type: TT::Punctuation(PT::LeftBrace), .. } => {
@@ -256,7 +257,7 @@ impl Parser<'_> {
                     Err(self.get_error_marked_line(ParserErrorType::EmptyDefBlock, token))
                 }
                 else { 
-                    Ok(Statement::DefDeclaration(def_declarations.into())) 
+                    Ok(Statement::new_def_declaration(def_declarations.into())) 
                 }
             },
             // Error
@@ -291,13 +292,13 @@ impl Parser<'_> {
     fn setup_declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
         check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "Expected '{' after setup", use_prev_token);
         let block = self.block_statement(tokens)?;
-        Ok(Statement::SetupDeclaration(Box::new(block)))
+        Ok(Statement::new_setup_declaration(Box::new(block)))
     }
 
     fn loop_declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
         check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "Expected '{' after loop", use_prev_token);
         let block = self.block_statement(tokens)?;
-        Ok(Statement::LoopDeclaration(Box::new(block)))
+        Ok(Statement::new_loop_declaration(Box::new(block)))
     }
 
     fn statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
@@ -312,10 +313,12 @@ impl Parser<'_> {
     }
 
     fn for_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
-        let identifier = match &Self::peek(tokens)?.token_type {
-            TT::Literal(LT::Identifier(name)) => name.clone(),
-            _ => return Err(self.missing_token_error("Expected identifier after 'for'", tokens))
-        };
+        let ident_token = Self::advance(tokens)?;
+        if !matches!(ident_token.token_type, TT::Literal(LT::Identifier(_))) {
+            return Err(self.missing_token_error("Expected identifier after 'for'", tokens))
+        }
+        let ident_token = ident_token.clone();
+        
         check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' after identifier in for loop");
         let from = self.expression(tokens)?;
         check_and_consume!(self, tokens, TT::Keyword(KT::To), "Expected 'to' after from-expression in a for loop");
@@ -323,7 +326,7 @@ impl Parser<'_> {
         check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "For only supports a block body '{'");
         let body = self.block_statement(tokens)?; 
         
-        Ok(Statement::For { identifier, from, to, body: Box::new(body) })
+        Ok(Statement::new_for(ident_token, from, to, Box::new(body)))
     }
 
     fn if_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
@@ -348,7 +351,7 @@ impl Parser<'_> {
             }
         }
 
-        Ok(Statement::If { condition, then_body: Box::new(body), else_body })
+        Ok(Statement::new_if(condition, Box::new(body), else_body))
     }
 
     fn while_loop(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
@@ -356,11 +359,14 @@ impl Parser<'_> {
         check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "Expected '{' after while condition");
         let body = self.block_statement(tokens)?;
 
-        Ok(Statement::While { body: Box::new(body), condition })
+        Ok(Statement::new_while(condition, Box::new(body)))
     }
 
     fn block_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
         let mut statements: Vec<Statement> = Vec::new();
+        let left_brace = tokens.previous()
+            .expect("Expected previous token ('{') in block_statement")
+            .clone();
 
         loop {
             if let TT::Punctuation(PT::RightBrace) = Self::peek(tokens)?.token_type { break; }
@@ -368,14 +374,14 @@ impl Parser<'_> {
             statements.push(self.declaration(tokens)?);
         }
 
-        check_and_consume!(self, tokens, TT::Punctuation(PT::RightBrace), "Expected '}' after a block", use_prev_token);
-        Ok(Statement::Block(statements.into()))
+        let right_brace = check_and_consume!(self, tokens, TT::Punctuation(PT::RightBrace), "Expected '}' after a block", use_prev_token);
+        Ok(Statement::new_block(&left_brace, right_brace, statements.into()))
     }
 
     fn expression_statement(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
         let value = self.expression(tokens)?;
         check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected ';' after expression.", use_prev_token);
-        Ok(Statement::Expression(value))
+        Ok(Statement::new_expression(value))
     }
 
     // --------------------------- THIS PART IS EXPRESSIONS --------------------------- //

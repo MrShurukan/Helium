@@ -75,7 +75,7 @@ impl Scanner<'_> {
         use crate::frontend::token_type::PunctuationType as PT;
         
         let grapheme = Self::advance(peekable, position_info).ok_or_else(|| {
-            SE::new_with_location(SET::NoMoreTokens, position_info, source)
+            SE::new(SET::NoMoreTokens, position_info, source)
         })?;
 
         let token = match grapheme {
@@ -145,7 +145,7 @@ impl Scanner<'_> {
             
             _ => {
                 let error_type = ScannerErrorType::UnknownToken(String::from(grapheme));
-                return Err(SE::new_with_location(error_type, position_info, source))
+                return Err(SE::new(error_type, position_info, source))
             }
         };
         
@@ -188,7 +188,7 @@ impl Scanner<'_> {
 
         // If we finished reading the source but never reached the end of a multiline - it's an error!
         if nesting_level != 0 {
-            Err(SE::new_with_location(SET::UnterminatedMultilineComment, &multiline_comment_start, source))
+            Err(SE::new(SET::UnterminatedMultilineComment, &multiline_comment_start, source))
         } else {
             unreachable!();
         }
@@ -201,7 +201,7 @@ impl Scanner<'_> {
         while let Some(current_char) = peekable.next() {
             position_info.advance();
             match current_char {
-                "\n" | "\r\n" => return Err(SE::new_with_location(SET::MultilineStringNotSupported, position_info, source)),
+                "\n" | "\r\n" => return Err(SE::new(SET::MultilineStringNotSupported, position_info, source)),
                 "\"" => break,
                 _ => {}
             }
@@ -209,7 +209,7 @@ impl Scanner<'_> {
 
         if peekable.peek().is_none() {
             return Err(
-                SE::new_with_location(SET::UnterminatedString, &start_string_position, source)
+                SE::new(SET::UnterminatedString, &start_string_position, source)
             );
         }
 
@@ -237,7 +237,7 @@ impl Scanner<'_> {
                 // Using peek_no_borrow here because it's an arbitrary peek ahead function
                 let grapheme_after_that = peekable.peek()
                     .ok_or_else(||
-                        SE::new_with_location(SET::TrailingNumber, position_info, source)
+                        SE::new(SET::TrailingNumber, position_info, source)
                     )?;
 
                 if grapheme_after_that.chars().all(|c| c.is_ascii_digit()) {
@@ -248,12 +248,12 @@ impl Scanner<'_> {
                 }
                 else {
                     let position_info_copy = PositionInfo { current: position_info.current + 1, ..*position_info };
-                    return Err(SE::new_with_location(SET::TrailingNumber, &position_info_copy, source));
+                    return Err(SE::new(SET::TrailingNumber, &position_info_copy, source));
                 }
 
                 // Get the number itself
                 let str: String = Self::get_current_lexeme(position_info, source);
-                let value: f64 = str.parse().map_err(|_| SE::new_with_location(
+                let value: f64 = str.parse().map_err(|_| SE::new(
                     SET::IncorrectNumberToken { reason: "Couldn't convert to a double".parse().unwrap() },
                     position_info, source))?;
                 Ok(Self::produce_token(TokenType::Literal(LiteralType::Float(value)), position_info))
@@ -268,7 +268,7 @@ impl Scanner<'_> {
     fn produce_integer_token(position_info: &mut PositionInfo, source: &ReadOnlyGraphemeSlice) -> Result<Token, ScannerError> {
         // Get the number itself
         let str: String = Self::get_current_lexeme(position_info, source);
-        let value: u64 = str.parse().map_err(|_| SE::new_with_location(
+        let value: u64 = str.parse().map_err(|_| SE::new(
             SET::IncorrectNumberToken { reason: "Couldn't convert to an integer".parse().unwrap() },
             position_info, source))?;
         
@@ -299,7 +299,7 @@ impl Scanner<'_> {
         else if lexeme.starts_with("Port") {
             let port_name = lexeme.split("Port").nth(1);
             if port_name.is_none() || port_name.unwrap().is_empty() {
-                return Err(SE::new_with_location(SET::MissingPortName, position_info, source));
+                return Err(SE::new(SET::MissingPortName, position_info, source));
             }
             
             Ok(Self::produce_token(TokenType::Port(port_name.unwrap().to_owned()), position_info))
@@ -372,11 +372,7 @@ pub struct ScannerError {
 }
 
 impl ScannerError {
-    fn new(error_type: ScannerErrorType, line: usize) -> Self {
-        ScannerError { error_type, line, location: None }
-    }
-
-    fn new_with_location(error_type: ScannerErrorType, position_info: &PositionInfo, source: &ReadOnlyGraphemeSlice) -> Self {
+    fn new(error_type: ScannerErrorType, position_info: &PositionInfo, source: &ReadOnlyGraphemeSlice) -> Self {
         let location = ScannerError::get_line_with_marker(
             source,
             position_info.line,
