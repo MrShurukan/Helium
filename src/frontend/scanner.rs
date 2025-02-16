@@ -6,7 +6,7 @@ use unicode_segmentation::Graphemes;
 use crate::frontend::position_info::PositionInfo;
 use crate::frontend::token::Token;
 use crate::frontend::token_type::{LiteralType, TokenType, CONSTANTS, KEYWORDS, TYPES};
-use crate::frontend::utils::ReadOnlyGraphemeSlice;
+use crate::frontend::utils::{ReadOnlyGraphemeSlice, SourceLocation};
 
 use ScannerErrorType as SET;
 use ScannerError as SE;
@@ -39,6 +39,7 @@ impl Scanner<'_> {
         loop {
             // We are at the beginning of the next lexeme.
             self.position_info.start = self.position_info.current;
+            self.position_info.start_from_line_start = self.position_info.current_from_line_start;
 
             match Self::scan_token(&mut self.position_info, &mut peekable, &self.source) {
                 Ok(Some(token)) => tokens.push(token),
@@ -55,8 +56,13 @@ impl Scanner<'_> {
         }
 
         tokens.push(
-            Token { token_type: TokenType::Eof, line: self.position_info.line,
-                lexeme_size: 1, line_offset: self.position_info.current_from_line_start + 1 }
+            Token { token_type: TokenType::Eof, 
+                source_location: SourceLocation { 
+                    line_start: self.position_info.line,
+                    line_end: self.position_info.line,
+                    start_offset: self.position_info.current_from_line_start,
+                    end_offset: self.position_info.current_from_line_start + 1}
+            }
         );
 
         if errors.is_empty() {
@@ -347,9 +353,15 @@ impl Scanner<'_> {
     }
     
     fn produce_token(token_type: TokenType, position_info: &PositionInfo) -> Token {
-        let lexeme_size = position_info.current - position_info.start;
-        Token { token_type, line: position_info.line,
-            line_offset: position_info.current_from_line_start - lexeme_size + 1, lexeme_size }
+        Token {
+            token_type,
+            source_location: SourceLocation {
+                line_start: position_info.line,
+                line_end: position_info.line,
+                start_offset: position_info.start_from_line_start,
+                end_offset: position_info.current_from_line_start
+            }
+        }
     }
 
     fn advance<'a>(peekable: &'a mut Peekable<Graphemes>, position_info: &mut PositionInfo) -> Option<&'a str> {

@@ -1,6 +1,8 @@
 ﻿use std::fmt;
 use crate::frontend::token_type::TokenType;
+use crate::frontend::utils::{LocatableInSource, SourceLocation};
 
+// TODO: Comment is inaccurate due to migration to source_location
 /// After a character inside the source file, this is the smallest meaningful piece of
 /// information about a program. Could represent punctuation, a keyword, identifier, etc.
 ///
@@ -12,16 +14,18 @@ use crate::frontend::token_type::TokenType;
 #[allow(clippy::struct_field_names)]
 pub struct Token {
     pub token_type: TokenType,
-    pub line: usize,
-    /// Offset in grapheme count from the start of the line
-    pub line_offset: usize,
-    /// Size of the token lexeme
-    pub lexeme_size: usize
+    pub source_location: SourceLocation
+}
+
+impl LocatableInSource for Token {
+    fn get_location(&self) -> &SourceLocation {
+        &self.source_location
+    }
 }
 
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Token {{ type: {:?}, line: {} }}",
-               self.token_type, self.line)
+               self.token_type, self.source_location.line_start)
     }
 }

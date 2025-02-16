@@ -91,7 +91,7 @@ impl TokenIterator<'_> {
     }
 }
 
-/// Anything that can be located in source via SourceLocation (i.e. Expressions or Statements)
+/// Anything that can be located in source via `SourceLocation` (i.e. `Expression`s or `Statement`s)
 /// may implement this. Just makes it a bit easier to handle error printing in later stages of
 /// the compiler
 pub trait LocatableInSource {
@@ -106,4 +106,15 @@ pub struct SourceLocation {
     pub start_offset: usize,
     /// Offset in grapheme count from the start of the last file
     pub end_offset: usize
+}
+
+impl SourceLocation {
+    pub fn new_from_start_end(start: SourceLocation, end: SourceLocation) -> SourceLocation {
+        SourceLocation {
+            line_start: start.line_start,
+            line_end: end.line_end,
+            start_offset: start.start_offset,
+            end_offset: end.end_offset,
+        }
+    }
 }

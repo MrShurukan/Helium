@@ -1,7 +1,6 @@
-﻿use std::collections::HashMap;
+﻿use lazy_static::lazy_static;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use lazy_static::lazy_static;
-use crate::frontend::statement::StatementType;
 
 #[derive(Debug, Clone)]
 pub enum TokenType {
@@ -123,7 +122,7 @@ pub enum PinModeConstantType {
     Output
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum StaticType {
     Int8, Int16, Int32, Int64,
     Uns8, Uns16, Uns32, Uns64,

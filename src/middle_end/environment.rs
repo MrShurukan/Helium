@@ -34,7 +34,7 @@ impl Error for EnvironmentError {}
 impl Display for EnvironmentError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.environment_error_type {
-            EnvironmentErrorType::UndefinedVariable(name) => { write!(f, "Undefined variable '{}'", name) },
+            EnvironmentErrorType::UndefinedVariable(name) => { write!(f, "Undefined variable '{name}'") },
             EnvironmentErrorType::LastEnvironmentRemoved => { write!(f, "Last environment was popped from the stack") }
         }
     }

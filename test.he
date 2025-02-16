@@ -1,20 +1,11 @@
-﻿// Simple LED + Button example
+﻿if false {
+    var abcdefg = 2;
+    // Should throw analyzer error here
+    if abcdefg {
 
-def {
-    Button = PortD.2 INPUT;
-    Led    = PortC.5 OUTPUT;
-}
-
-setup {
-    Led = LOW;
-}
-
-loop {
-    // Button is pressed when it's connected to GND
-    if BUTTON == LOW {
-        Led = HIGH;
     }
-    else {
-        Led = LOW;
+
+    if abcdef {
+
     }
 }

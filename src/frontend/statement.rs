@@ -46,36 +46,26 @@ impl Statement {
     pub fn new_var_declaration(identifier: Token, initializer: Expression) -> Self {
         let TokenType::Literal(LiteralType::Identifier(ident)) = identifier.token_type
         else { unreachable!("Non-identifier passed to var statement") };
-        
+
         Self {
-            source_location: SourceLocation {
-                line_start: identifier.line,
-                line_end: initializer.source_location.line_end,
-                start_offset: identifier.line_offset,
-                end_offset: initializer.source_location.end_offset,
-            },
-            statement_type: StatementType::VariableDeclaration { identifier: ident, initializer } 
+            source_location: SourceLocation::new_from_start_end(identifier.source_location, initializer.source_location),
+            statement_type: StatementType::VariableDeclaration { identifier: ident, initializer }
         }
     }
-    
+
     pub fn new_def_declaration(def_declarations: Rc<[SingleDefDeclaration]>) -> Self {
         if def_declarations.is_empty() {
             unreachable!("No SingleDefDeclaration was passed to new_def_declaration")
         }
         let first = def_declarations.first().unwrap();
         let last = def_declarations.last().unwrap();
-        
+
         Self {
-            source_location: SourceLocation {
-                line_start: first.source_location.line_start,
-                line_end: last.source_location.line_end,
-                start_offset: first.source_location.start_offset,
-                end_offset: last.source_location.end_offset,
-            },
+            source_location: SourceLocation::new_from_start_end(first.source_location, last.source_location),
             statement_type: StatementType::DefDeclaration(def_declarations),
         }
     }
-    
+
     pub fn new_setup_declaration(body: Box<Statement>) -> Self {
         Self {
             source_location: body.source_location,
@@ -93,16 +83,11 @@ impl Statement {
     /// `opening_brace` and `closing_brace` are used only to calculate the size of the block
     pub fn new_block(opening_brace: &Token, closing_brace: &Token, statements: Rc<[Statement]>) -> Self {
         Self {
-            source_location: SourceLocation {
-                line_start: opening_brace.line,
-                line_end: closing_brace.line,
-                start_offset: opening_brace.line_offset,
-                end_offset: closing_brace.line_offset,
-            },
+            source_location: SourceLocation::new_from_start_end(opening_brace.source_location, closing_brace.source_location),
             statement_type: StatementType::Block(statements),
         }
     }
-    
+
     pub fn new_if(condition: Expression, then_body: Box<Statement>, else_body: Option<Box<Statement>>) -> Self {
         let (line_end, end_offset) = if let Some(else_body) = &else_body {
             (else_body.source_location.line_end, else_body.source_location.end_offset)
@@ -110,7 +95,7 @@ impl Statement {
         else {
             (then_body.source_location.line_end, then_body.source_location.end_offset)
         };
-        
+
         Self {
             source_location: SourceLocation {
                 line_start: condition.source_location.line_start,
@@ -121,30 +106,20 @@ impl Statement {
             statement_type: StatementType::If { condition, then_body, else_body },
         }
     }
-    
+
     pub fn new_while(condition: Expression, body: Box<Statement>) -> Self {
         Self {
-            source_location: SourceLocation {
-                line_start: condition.source_location.line_start,
-                line_end: body.source_location.line_end,
-                start_offset: condition.source_location.start_offset,
-                end_offset: body.source_location.end_offset,
-            },
+            source_location: SourceLocation::new_from_start_end(condition.source_location, body.source_location),
             statement_type: StatementType::While { condition, body },
         }
     }
-    
+
     pub fn new_for(identifier: Token, from: Expression, to: Expression, body: Box<Statement>) -> Self {
         let TokenType::Literal(LiteralType::Identifier(ident)) = identifier.token_type
         else { unreachable!("Non-identifier passed to for statement") };
-        
+
         Self {
-            source_location: SourceLocation {
-                line_start: identifier.line,
-                line_end: body.source_location.line_end,
-                start_offset: identifier.line_offset,
-                end_offset: body.source_location.end_offset,
-            },
+            source_location: SourceLocation::new_from_start_end(identifier.source_location, body.source_location),
             statement_type: StatementType::For { identifier: ident, from, to, body },
         }
     }
@@ -159,9 +134,9 @@ impl Display for Statement {
 impl Display for StatementType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            StatementType::Expression(exp) => 
+            StatementType::Expression(exp) =>
                 write!(f, "{exp};"),
-            StatementType::VariableDeclaration { identifier, initializer } => 
+            StatementType::VariableDeclaration { identifier, initializer } =>
                 write!(f, "var {identifier} = {initializer};"),
             StatementType::DefDeclaration(declarations) => {
                 writeln!(f, "def {{")?;
@@ -213,14 +188,9 @@ impl SingleDefDeclaration {
         if let TokenType::Literal(LiteralType::Identifier(ident)) = identifier.token_type {
             if let TokenType::Constant(ConstantType::PinMode(pin)) = pin_mode.token_type {
                 Ok(SingleDefDeclaration {
-                    source_location: SourceLocation {
-                        line_start: identifier.line,
-                        line_end: pin_mode.line,
-                        start_offset: identifier.line_offset,
-                        end_offset: pin_mode.line_offset + pin_mode.lexeme_size,
-                    },
-                    identifier: ident, 
-                    port, 
+                    source_location: SourceLocation::new_from_start_end(identifier.source_location, pin_mode.source_location),
+                    identifier: ident,
+                    port,
                     pin_mode: *pin,
                 })
             } else {

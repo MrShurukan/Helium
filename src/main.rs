@@ -1,11 +1,11 @@
-use std::{env, fs};
+use crate::frontend::statement::Statement;
+use crate::frontend::{Parser, ParserError};
+use crate::middle_end::utils::EnvironmentStack;
+use crate::middle_end::Analyzer;
+use colored::Colorize;
 use std::error::Error;
 use std::process::exit;
-use colored::Colorize;
-use crate::frontend::{Parser, ParserError};
-use crate::frontend::statement::Statement;
-use crate::middle_end::{Analyzer, AnalyzerError};
-use crate::middle_end::utils::EnvironmentStack;
+use std::{env, fs};
 
 mod frontend;
 mod middle_end;
@@ -56,9 +56,8 @@ fn analyze_statements(contents: &str, statements: &[Statement]) {
     let mut empty_environment = EnvironmentStack::new();
     let mut analyzer = Analyzer::new_with_environment(contents, &mut empty_environment);
 
-    match analyzer.analyze(statements) {
-        Err(errors) => report_errors(errors.as_slice(), "analyzer"),
-        _ => {}
+    if let Err(errors) = analyzer.analyze(statements) {
+        report_errors(errors.as_slice(), "analyzer")
     }
 }
 

@@ -10,7 +10,10 @@ pub struct PositionInfo {
     pub line: usize,
     /// Similar to `current`, but from the start of the line.
     /// This variable is reset each time a newline encountered
-    pub current_from_line_start: usize
+    pub current_from_line_start: usize,
+    /// Similar to `start`, but from the start of the line.
+    /// This variable is reset each time a newline encountered
+    pub start_from_line_start: usize
 }
 
 impl PositionInfo {
@@ -20,6 +23,7 @@ impl PositionInfo {
             current: 0,
             line: 1,
             current_from_line_start: 0,
+            start_from_line_start: 0
         }
     }
     

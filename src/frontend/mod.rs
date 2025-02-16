@@ -618,15 +618,16 @@ impl Parser<'_> {
     /// `^` on the second line. The line is parsed from `token` by the `token.line_offset` and
     /// the `token.lexeme_size` string. Line is fetched from `source` string.
     fn get_error_marked_line(&self, error_type: ParserErrorType, token: Token) -> ParserError {
-        let line = self.source.split('\n').nth(token.line - 1);
+        let line = self.source.split('\n').nth(token.source_location.line_start - 1);
         if line.is_none() {
             unreachable!("Incorrect line provided to get_error_marked_line");
         }
 
         let line = line.unwrap();
-        let line_number_string = format!("{}. ", token.line);
-        let spaces = " ".repeat(line_number_string.len() + token.line_offset - 1);
-        let marker = "^".repeat(token.lexeme_size).red();
+        let line_number_string = format!("{}. ", token.source_location.line_start);
+        let spaces = " ".repeat(line_number_string.len() + token.source_location.start_offset - 1);
+        let lexeme_size = token.source_location.end_offset - token.source_location.start_offset;
+        let marker = "^".repeat(lexeme_size).red();
 
         let location = format!("{line_number_string}{line}\n{spaces}{marker}");
         ParserError { location: Some(location), error_type, token: Some(token) }

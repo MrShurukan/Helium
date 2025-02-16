@@ -34,24 +34,24 @@ impl EnvironmentStack {
         None
     }
 
-    pub fn assign(&mut self, name: String, static_type: StaticType) -> Result<(), EnvironmentError> {
-        for environment in self.environments.iter_mut().rev() {
-            // Try to set the value in the current environment
-            if environment.values.contains_key(&name) {
-                environment.values.insert(name, static_type);
-                return Ok(());
-            }
-            else {
-                // If not found, try moving up by one environment
-                continue;
-            }
-        }
-
-        Err(EnvironmentError::new(EnvironmentErrorType::UndefinedVariable(name)))
-    }
+    // pub fn assign(&mut self, name: String, static_type: StaticType) -> Result<(), EnvironmentError> {
+    //     for environment in self.environments.iter_mut().rev() {
+    //         // Try to set the value in the current environment
+    //         if environment.values.contains_key(&name) {
+    //             environment.values.insert(name, static_type);
+    //             return Ok(());
+    //         }
+    //         else {
+    //             // If not found, try moving up by one environment
+    //             continue;
+    //         }
+    //     }
+    // 
+    //     Err(EnvironmentError::new(EnvironmentErrorType::UndefinedVariable(name)))
+    // }
 
     pub fn push_new(&mut self) {
-        self.environments.push(Environment::new())
+        self.environments.push(Environment::new());
     }
 
     pub fn remove_last(&mut self) -> Result<(), EnvironmentError> {

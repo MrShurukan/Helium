@@ -35,12 +35,7 @@ impl Expression {
     pub fn new_assignment(identifier: &Expression, expression: Expression) -> Self {
         if let ExpressionType::Literal { value: LiteralType::Identifier(name) } = &identifier.expression_type {
             Self {
-                source_location: SourceLocation {
-                    line_start: identifier.source_location.line_start,
-                    line_end: expression.source_location.line_end,
-                    start_offset: identifier.source_location.start_offset,
-                    end_offset: expression.source_location.end_offset,
-                },
+                source_location: SourceLocation::new_from_start_end(identifier.source_location, expression.source_location),
                 expression_type: ExpressionType::Assignment {
                     identifier: name.to_owned(),
                     expression: Box::new(expression),
@@ -54,12 +49,7 @@ impl Expression {
 
     pub fn new_ternary(first: Expression, second: Expression, third: Expression) -> Self {
         Self {
-            source_location: SourceLocation {
-                line_start: first.source_location.line_start,
-                line_end: third.source_location.line_end,
-                start_offset: first.source_location.start_offset,
-                end_offset: third.source_location.end_offset,
-            },
+            source_location: SourceLocation::new_from_start_end(first.source_location, third.source_location),
             expression_type: ExpressionType::Ternary {
                 first: Box::new(first),
                 second: Box::new(second),
@@ -70,12 +60,7 @@ impl Expression {
 
     pub fn new_binary(left: Expression, operator: &Token, right: Expression) -> Self {
         Self {
-            source_location: SourceLocation {
-                line_start: left.source_location.line_start,
-                line_end: right.source_location.line_end,
-                start_offset: left.source_location.start_offset,
-                end_offset: right.source_location.end_offset,
-            },
+            source_location: SourceLocation::new_from_start_end(left.source_location, right.source_location),
             expression_type: ExpressionType::Binary {
                 left: Box::new(left),
                 operator: operator.token_type.clone(),
@@ -87,12 +72,7 @@ impl Expression {
     pub fn new_unary(operator: &Token, expression: Expression) -> Self {
         if let Token { token_type: TokenType::Punctuation(op), .. } = operator {
             Self {
-                source_location: SourceLocation {
-                    line_start: operator.line,
-                    line_end: expression.source_location.line_end,
-                    start_offset: operator.line_offset,
-                    end_offset: expression.source_location.end_offset,
-                },
+                source_location: SourceLocation::new_from_start_end(operator.source_location, expression.source_location),
                 expression_type: ExpressionType::Unary { operator: op.to_owned(), right: Box::new(expression) },
             }
         }
@@ -104,12 +84,7 @@ impl Expression {
     pub fn new_literal(token: &Token) -> Self {
         if let Token { token_type: TokenType::Literal(literal_type), .. } = token {
             Self {
-                source_location: SourceLocation {
-                    line_start: token.line,
-                    line_end: token.line,
-                    start_offset: token.line_offset,
-                    end_offset: token.line_offset + token.lexeme_size,
-                },
+                source_location: token.source_location,
                 expression_type: ExpressionType::Literal { value: literal_type.clone() },
             }
         }
@@ -120,12 +95,7 @@ impl Expression {
 
     pub fn new_literal_custom_type(token: &Token, literal_type: LiteralType) -> Self {
         Self {
-            source_location: SourceLocation {
-                line_start: token.line,
-                line_end: token.line,
-                start_offset: token.line_offset,
-                end_offset: token.line_offset + token.lexeme_size,
-            },
+            source_location: token.source_location,
             expression_type: ExpressionType::Literal { value: literal_type },
         }
     }

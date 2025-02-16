@@ -1,34 +1,17 @@
-// Comments
-/*
-    Multiline comments
-    /* Nested too */
-*/
+// Simple LED + Button example
 
-// Port declaration
-def Button = PortB.2 INPUT;
-
-// Large def declaration
 def {
-    Button = PortB.2 INPUT_PULLUP;
-    Led = PortC.3 OUTPUT;
+    Button = PortD.2 INPUT;
+    Led    = PortC.5 OUTPUT;
 }
 
-// Setup block (do once block)
 setup {
-    // Loop
-    for i = 1 to 10 {
-        Led = HIGH;
-        delay 100ms;
-        Led = LOW;
-        delay 100ms;
-    }
+    Led = LOW;
 }
 
-// Loop block (do infinitely)
 loop {
-    var test: i32 = 25;
-    // No parenthesis if
-    if Button == LOW {
+    // Button is pressed when it's connected to GND
+    if BUTTON == LOW {
         Led = HIGH;
     }
     else {
