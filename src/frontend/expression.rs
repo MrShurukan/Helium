@@ -3,17 +3,19 @@ use std::fmt::{Display, Formatter};
 use colored::Colorize;
 use crate::frontend::token::Token;
 use crate::frontend::token_type::{LiteralType, PunctuationType, TokenType};
+use crate::frontend::utils::{LocatableInSource, SourceLocation};
 
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_field_names)]
 pub struct Expression {
     pub expression_type: ExpressionType,
-    pub line_start: usize,
-    pub line_end: usize,
-    /// Offset in grapheme count from the start of the first line
-    pub start_offset: usize,
-    /// Offset in grapheme count from the start of the last file
-    pub end_offset: usize
+    pub source_location: SourceLocation,
+}
+
+impl LocatableInSource for Expression {
+    fn get_location(&self) -> &SourceLocation {
+        &self.source_location
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -33,10 +35,12 @@ impl Expression {
     pub fn new_assignment(identifier: &Expression, expression: Expression) -> Self {
         if let ExpressionType::Literal { value: LiteralType::Identifier(name) } = &identifier.expression_type {
             Self {
-                line_start: identifier.line_start,
-                line_end: expression.line_end,
-                start_offset: identifier.start_offset,
-                end_offset: expression.end_offset,
+                source_location: SourceLocation {
+                    line_start: identifier.source_location.line_start,
+                    line_end: expression.source_location.line_end,
+                    start_offset: identifier.source_location.start_offset,
+                    end_offset: expression.source_location.end_offset,
+                },
                 expression_type: ExpressionType::Assignment {
                     identifier: name.to_owned(),
                     expression: Box::new(expression),
@@ -50,10 +54,12 @@ impl Expression {
 
     pub fn new_ternary(first: Expression, second: Expression, third: Expression) -> Self {
         Self {
-            line_start: first.line_start,
-            line_end: third.line_end,
-            start_offset: first.start_offset,
-            end_offset: third.end_offset,
+            source_location: SourceLocation {
+                line_start: first.source_location.line_start,
+                line_end: third.source_location.line_end,
+                start_offset: first.source_location.start_offset,
+                end_offset: third.source_location.end_offset,
+            },
             expression_type: ExpressionType::Ternary {
                 first: Box::new(first),
                 second: Box::new(second),
@@ -64,10 +70,12 @@ impl Expression {
 
     pub fn new_binary(left: Expression, operator: &Token, right: Expression) -> Self {
         Self {
-            line_start: left.line_start,
-            line_end: right.line_end,
-            start_offset: left.start_offset,
-            end_offset: right.end_offset,
+            source_location: SourceLocation {
+                line_start: left.source_location.line_start,
+                line_end: right.source_location.line_end,
+                start_offset: left.source_location.start_offset,
+                end_offset: right.source_location.end_offset,
+            },
             expression_type: ExpressionType::Binary {
                 left: Box::new(left),
                 operator: operator.token_type.clone(),
@@ -79,10 +87,12 @@ impl Expression {
     pub fn new_unary(operator: &Token, expression: Expression) -> Self {
         if let Token { token_type: TokenType::Punctuation(op), .. } = operator {
             Self {
-                line_start: operator.line,
-                line_end: expression.line_end,
-                start_offset: operator.line_offset,
-                end_offset: expression.end_offset,
+                source_location: SourceLocation {
+                    line_start: operator.line,
+                    line_end: expression.source_location.line_end,
+                    start_offset: operator.line_offset,
+                    end_offset: expression.source_location.end_offset,
+                },
                 expression_type: ExpressionType::Unary { operator: op.to_owned(), right: Box::new(expression) },
             }
         }
@@ -94,11 +104,13 @@ impl Expression {
     pub fn new_literal(token: &Token) -> Self {
         if let Token { token_type: TokenType::Literal(literal_type), .. } = token {
             Self {
-                expression_type: ExpressionType::Literal { value: literal_type.to_owned() },
-                line_start: token.line,
-                line_end: token.line,
-                start_offset: token.line_offset,
-                end_offset: token.line_offset + token.lexeme_size,
+                source_location: SourceLocation {
+                    line_start: token.line,
+                    line_end: token.line,
+                    start_offset: token.line_offset,
+                    end_offset: token.line_offset + token.lexeme_size,
+                },
+                expression_type: ExpressionType::Literal { value: literal_type.clone() },
             }
         }
         else {
@@ -108,20 +120,24 @@ impl Expression {
 
     pub fn new_literal_custom_type(token: &Token, literal_type: LiteralType) -> Self {
         Self {
+            source_location: SourceLocation {
+                line_start: token.line,
+                line_end: token.line,
+                start_offset: token.line_offset,
+                end_offset: token.line_offset + token.lexeme_size,
+            },
             expression_type: ExpressionType::Literal { value: literal_type },
-            line_start: token.line,
-            line_end: token.line,
-            start_offset: token.line_offset,
-            end_offset: token.line_offset + token.lexeme_size,
         }
     }
 
     pub fn new_grouping(expression: Expression) -> Self {
         Self {
-            line_start: expression.line_start,
-            line_end: expression.line_end,
-            start_offset: expression.start_offset - 1,
-            end_offset: expression.end_offset + 1,
+            source_location: SourceLocation {
+                line_start: expression.source_location.line_start,
+                line_end: expression.source_location.line_end,
+                start_offset: expression.source_location.start_offset - 1,
+                end_offset: expression.source_location.end_offset + 1,
+            },
             expression_type: ExpressionType::Grouping { expression: Box::new(expression) },
         }
     }

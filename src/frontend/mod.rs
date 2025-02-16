@@ -14,9 +14,9 @@ mod scanner;
 pub mod statement;
 mod token;
 pub mod token_type;
-mod utils;
+pub mod utils;
 mod position_info;
-mod expression;
+pub mod expression;
 
 /// Main struct for the front-end of helium. This class receives a source file,
 /// starts up a scanner, gets tokens and then parses them into a list of statements.
@@ -203,11 +203,8 @@ impl Parser<'_> {
         }
         let ident_token = ident_token.clone();
 
-        let mut initializer: Option<Expression> = None;
-        if let TT::Punctuation(PT::Equal) = Self::peek(tokens)?.token_type {
-            tokens.advance();
-            initializer = Some(self.expression(tokens)?);
-        }
+        check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' (initializer) here");
+        let initializer = self.expression(tokens)?;
 
         check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected a ';' after variable declaration", use_prev_token);
         Ok(Statement::new_var_declaration(ident_token, initializer))
@@ -257,7 +254,7 @@ impl Parser<'_> {
                     Err(self.get_error_marked_line(ParserErrorType::EmptyDefBlock, token))
                 }
                 else { 
-                    Ok(Statement::new_def_declaration(def_declarations.into())) 
+                    Ok(Statement::new_def_declaration(def_declarations.into()))
                 }
             },
             // Error
@@ -318,7 +315,7 @@ impl Parser<'_> {
             return Err(self.missing_token_error("Expected identifier after 'for'", tokens))
         }
         let ident_token = ident_token.clone();
-        
+
         check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' after identifier in for loop");
         let from = self.expression(tokens)?;
         check_and_consume!(self, tokens, TT::Keyword(KT::To), "Expected 'to' after from-expression in a for loop");

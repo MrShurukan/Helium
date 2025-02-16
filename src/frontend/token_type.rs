@@ -1,6 +1,7 @@
 ﻿use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use lazy_static::lazy_static;
+use crate::frontend::statement::StatementType;
 
 #[derive(Debug, Clone)]
 pub enum TokenType {
@@ -140,6 +141,29 @@ pub enum StaticType {
     Array(&'static StaticType),
     // TODO: Function would need argument types + return type
     Function
+}
+
+impl Display for StaticType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StaticType::Int8 => write!(f, "i8"),
+            StaticType::Int16 => write!(f, "i16"),
+            StaticType::Int32 => write!(f, "i32"),
+            StaticType::Int64 => write!(f, "i64"),
+            StaticType::Uns8 => write!(f, "u8"),
+            StaticType::Uns16 => write!(f, "u16"),
+            StaticType::Uns32 => write!(f, "u32"), 
+            StaticType::Uns64 => write!(f, "u64"),
+            StaticType::Float32 => write!(f, "f32"),
+            StaticType::Float64 => write!(f, "f64"),
+            StaticType::PinState => write!(f, "PinState"),
+            StaticType::PinMode => write!(f, "PinMode"),
+            StaticType::Boolean => write!(f, "bool"),
+            StaticType::String => write!(f, "string"),
+            StaticType::Array(array_type) => write!(f, "Arr<{array_type}>"),
+            StaticType::Function => write!(f, "func"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

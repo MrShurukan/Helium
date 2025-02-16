@@ -5,25 +5,27 @@ use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
+use crate::frontend::utils::{LocatableInSource, SourceLocation};
 
 /// Statements are the backbone of the entire language.
 /// Source file represents a list of statements when parsed
 #[derive(Debug)]
 #[allow(clippy::struct_field_names)]
 pub struct Statement {
-    statement_type: StatementType,
-    pub line_start: usize,
-    pub line_end: usize,
-    /// Offset in grapheme count from the start of the first line
-    pub start_offset: usize,
-    /// Offset in grapheme count from the start of the last file
-    pub end_offset: usize
+    pub statement_type: StatementType,
+    pub source_location: SourceLocation,
+}
+
+impl LocatableInSource for Statement {
+    fn get_location(&self) -> &SourceLocation {
+        &self.source_location
+    }
 }
 
 #[derive(Debug)]
 pub enum StatementType {
     Expression(Expression),
-    VariableDeclaration { identifier: String, initializer: Option<Expression> },
+    VariableDeclaration { identifier: String, initializer: Expression },
     DefDeclaration(Rc<[SingleDefDeclaration]>),
     SetupDeclaration(Box<Statement>),
     LoopDeclaration(Box<Statement>),
@@ -36,30 +38,22 @@ pub enum StatementType {
 impl Statement {
     pub fn new_expression(expression: Expression) -> Self {
         Self {
-            line_start: expression.line_start,
-            line_end: expression.line_end,
-            start_offset: expression.start_offset,
-            end_offset: expression.end_offset,
+            source_location: expression.source_location,
             statement_type: StatementType::Expression(expression)
         }
     }
 
-    pub fn new_var_declaration(identifier: Token, initializer: Option<Expression>) -> Self {
-        let (line_end, end_offset) = if let Some(initializer) = &initializer {
-            (initializer.line_end, initializer.end_offset)
-        }
-        else {
-            (identifier.line, identifier.line_offset + identifier.lexeme_size)
-        };
-        
+    pub fn new_var_declaration(identifier: Token, initializer: Expression) -> Self {
         let TokenType::Literal(LiteralType::Identifier(ident)) = identifier.token_type
         else { unreachable!("Non-identifier passed to var statement") };
         
         Self {
-            line_start: identifier.line,
-            line_end,
-            start_offset: identifier.line_offset,
-            end_offset,
+            source_location: SourceLocation {
+                line_start: identifier.line,
+                line_end: initializer.source_location.line_end,
+                start_offset: identifier.line_offset,
+                end_offset: initializer.source_location.end_offset,
+            },
             statement_type: StatementType::VariableDeclaration { identifier: ident, initializer } 
         }
     }
@@ -72,30 +66,26 @@ impl Statement {
         let last = def_declarations.last().unwrap();
         
         Self {
-            line_start: first.line_start,
-            line_end: last.line_end,
-            start_offset: first.start_offset,
-            end_offset: last.end_offset,
+            source_location: SourceLocation {
+                line_start: first.source_location.line_start,
+                line_end: last.source_location.line_end,
+                start_offset: first.source_location.start_offset,
+                end_offset: last.source_location.end_offset,
+            },
             statement_type: StatementType::DefDeclaration(def_declarations),
         }
     }
     
     pub fn new_setup_declaration(body: Box<Statement>) -> Self {
         Self {
-            line_start: body.line_start,
-            line_end: body.line_end,
-            start_offset: body.start_offset,
-            end_offset: body.end_offset,
+            source_location: body.source_location,
             statement_type: StatementType::SetupDeclaration(body),
         }
     }
 
     pub fn new_loop_declaration(body: Box<Statement>) -> Self {
         Self {
-            line_start: body.line_start,
-            line_end: body.line_end,
-            start_offset: body.start_offset,
-            end_offset: body.end_offset,
+            source_location: body.source_location,
             statement_type: StatementType::LoopDeclaration(body),
         }
     }
@@ -103,37 +93,43 @@ impl Statement {
     /// `opening_brace` and `closing_brace` are used only to calculate the size of the block
     pub fn new_block(opening_brace: &Token, closing_brace: &Token, statements: Rc<[Statement]>) -> Self {
         Self {
-            line_start: opening_brace.line,
-            line_end: closing_brace.line,
-            start_offset: opening_brace.line_offset,
-            end_offset: closing_brace.line_offset,
+            source_location: SourceLocation {
+                line_start: opening_brace.line,
+                line_end: closing_brace.line,
+                start_offset: opening_brace.line_offset,
+                end_offset: closing_brace.line_offset,
+            },
             statement_type: StatementType::Block(statements),
         }
     }
     
     pub fn new_if(condition: Expression, then_body: Box<Statement>, else_body: Option<Box<Statement>>) -> Self {
         let (line_end, end_offset) = if let Some(else_body) = &else_body {
-            (else_body.line_end, else_body.end_offset)
+            (else_body.source_location.line_end, else_body.source_location.end_offset)
         }
         else {
-            (then_body.line_end, then_body.end_offset)
+            (then_body.source_location.line_end, then_body.source_location.end_offset)
         };
         
         Self {
-            line_start: condition.line_start,
-            line_end,
-            start_offset: condition.start_offset,
-            end_offset,
+            source_location: SourceLocation {
+                line_start: condition.source_location.line_start,
+                line_end,
+                start_offset: condition.source_location.start_offset,
+                end_offset,
+            },
             statement_type: StatementType::If { condition, then_body, else_body },
         }
     }
     
     pub fn new_while(condition: Expression, body: Box<Statement>) -> Self {
         Self {
-            line_start: condition.line_start,
-            line_end: body.line_end,
-            start_offset: condition.start_offset,
-            end_offset: body.end_offset,
+            source_location: SourceLocation {
+                line_start: condition.source_location.line_start,
+                line_end: body.source_location.line_end,
+                start_offset: condition.source_location.start_offset,
+                end_offset: body.source_location.end_offset,
+            },
             statement_type: StatementType::While { condition, body },
         }
     }
@@ -143,10 +139,12 @@ impl Statement {
         else { unreachable!("Non-identifier passed to for statement") };
         
         Self {
-            line_start: identifier.line,
-            line_end: body.line_end,
-            start_offset: identifier.line_offset,
-            end_offset: body.end_offset,
+            source_location: SourceLocation {
+                line_start: identifier.line,
+                line_end: body.source_location.line_end,
+                start_offset: identifier.line_offset,
+                end_offset: body.source_location.end_offset,
+            },
             statement_type: StatementType::For { identifier: ident, from, to, body },
         }
     }
@@ -164,11 +162,7 @@ impl Display for StatementType {
             StatementType::Expression(exp) => 
                 write!(f, "{exp};"),
             StatementType::VariableDeclaration { identifier, initializer } => 
-                if let Some(init) = initializer { 
-                    write!(f, "var {identifier} = {init};") 
-                } else { 
-                    write!(f, "var {identifier};")
-                }
+                write!(f, "var {identifier} = {initializer};"),
             StatementType::DefDeclaration(declarations) => {
                 writeln!(f, "def {{")?;
                 for declaration in declarations.iter() {
@@ -210,12 +204,7 @@ pub struct SingleDefDeclaration {
     identifier: String,
     port: PinRef,
     pin_mode: PinModeConstantType,
-    pub line_start: usize,
-    pub line_end: usize,
-    /// Offset in grapheme count from the start of the first line
-    pub start_offset: usize,
-    /// Offset in grapheme count from the start of the last file
-    pub end_offset: usize
+    source_location: SourceLocation,
 }
 
 impl SingleDefDeclaration {
@@ -224,11 +213,12 @@ impl SingleDefDeclaration {
         if let TokenType::Literal(LiteralType::Identifier(ident)) = identifier.token_type {
             if let TokenType::Constant(ConstantType::PinMode(pin)) = pin_mode.token_type {
                 Ok(SingleDefDeclaration {
-                    line_start: identifier.line,
-                    line_end: pin_mode.line,
-                    start_offset: identifier.line_offset,
-                    end_offset: pin_mode.line_offset + pin_mode.lexeme_size,
-                    
+                    source_location: SourceLocation {
+                        line_start: identifier.line,
+                        line_end: pin_mode.line,
+                        start_offset: identifier.line_offset,
+                        end_offset: pin_mode.line_offset + pin_mode.lexeme_size,
+                    },
                     identifier: ident, 
                     port, 
                     pin_mode: *pin,

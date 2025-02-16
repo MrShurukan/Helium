@@ -90,3 +90,20 @@ impl TokenIterator<'_> {
         self.tokens.get(self.index - 1)
     }
 }
+
+/// Anything that can be located in source via SourceLocation (i.e. Expressions or Statements)
+/// may implement this. Just makes it a bit easier to handle error printing in later stages of
+/// the compiler
+pub trait LocatableInSource {
+    fn get_location(&self) -> &SourceLocation;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SourceLocation {
+    pub line_start: usize,
+    pub line_end: usize,
+    /// Offset in grapheme count from the start of the first line
+    pub start_offset: usize,
+    /// Offset in grapheme count from the start of the last file
+    pub end_offset: usize
+}
