@@ -84,7 +84,8 @@ lazy_static! {
 pub enum LiteralType {
     Identifier(String),
     String(String),
-    Integer(i64),
+    // You can't read negative integers, this would be read as unary minus + positive integer
+    Integer(u64),
     Float(f64),
     Boolean(bool),
     PinMode(PinModeConstantType),

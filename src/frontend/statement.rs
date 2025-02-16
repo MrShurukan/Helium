@@ -33,18 +33,18 @@ impl Display for Statement {
                     write!(f, "var {identifier};")
                 }
             Statement::DefDeclaration(declarations) => {
-                write!(f, "def {{\n")?;
+                writeln!(f, "def {{")?;
                 for declaration in declarations.iter() {
-                    write!(f, "{} = {}.{} {:?};\n",
+                    writeln!(f, "{} = {}.{} {:?};",
                         declaration.identifier, declaration.port.port,
                         declaration.port.pin_number , declaration.pin_mode)?;
                 }
                 write!(f, "}}")
             },
             Statement::Block(statements) => {
-                write!(f, "{{\n")?;
+                writeln!(f, "{{")?;
                 for statement in statements.iter() {
-                    write!(f, "{}\n", statement)?;
+                    writeln!(f, "{statement}")?;
                 }
                 write!(f, "}}")
             },

@@ -268,7 +268,7 @@ impl Scanner<'_> {
     fn produce_integer_token(position_info: &mut PositionInfo, source: &ReadOnlyGraphemeSlice) -> Result<Token, ScannerError> {
         // Get the number itself
         let str: String = Self::get_current_lexeme(position_info, source);
-        let value: i64 = str.parse().map_err(|_| SE::new_with_location(
+        let value: u64 = str.parse().map_err(|_| SE::new_with_location(
             SET::IncorrectNumberToken { reason: "Couldn't convert to an integer".parse().unwrap() },
             position_info, source))?;
         
@@ -444,8 +444,10 @@ impl Display for ScannerError {
         if let Some(location) = &self.location {
             // Add tabs to each line of the location so it shifts to the right
             let location: String = location.split('\n')
-                .map(|line| format!("\t{line}\n"))
-                .collect();
+                .fold(String::new(), |mut output, line| {
+                    output += "\t"; output += line; output += "\n";
+                    output
+                });
             write!(f, "\n\t{}\n{}\n", "Happened here:".green(), location.trim_end())?;
         }
 

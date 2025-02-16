@@ -30,7 +30,7 @@ pub enum ExpressionType {
 // TODO: (like `PinRef`) 
 // I'm not sure of the solution as of right now
 impl Expression {
-    pub fn new_assignment(identifier: Expression, expression: Expression) -> Self {
+    pub fn new_assignment(identifier: &Expression, expression: Expression) -> Self {
         if let ExpressionType::Literal { value: LiteralType::Identifier(name) } = &identifier.expression_type {
             Self {
                 line_start: identifier.line_start,
@@ -70,7 +70,7 @@ impl Expression {
             end_offset: right.end_offset,
             expression_type: ExpressionType::Binary {
                 left: Box::new(left),
-                operator: operator.token_type.to_owned(),
+                operator: operator.token_type.clone(),
                 right: Box::new(right)
             },
         }
@@ -158,7 +158,13 @@ impl PinRef {
     pub fn new(port: Token, pin_number: Token) -> Result<PinRef, PinRefError> {
         if let TokenType::Port(port_name) = port.token_type {
             if let TokenType::Literal(LiteralType::Integer(pin_int)) = pin_number.token_type {
-                Ok(PinRef { port: port_name, pin_number: pin_int as usize })
+                let pin_number_convert = usize::try_from(pin_int)
+                    .map_err(|_| PinRefError { 
+                        token: pin_number, 
+                        message: "Invalid number for a pin (maybe it's too large?)"
+                    });
+                
+                Ok(PinRef { port: port_name, pin_number: pin_number_convert? })
             }
             else {
                 Err(PinRefError { token: pin_number, message: "Expected integer as pin number" })

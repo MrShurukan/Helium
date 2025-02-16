@@ -49,7 +49,7 @@ impl TokenIterator<'_> {
                 println!();
                 self.repeated_peek_count = 0;
             }
-            println!("[TokenIterator] Advancing to {} (read: {:?})", self.index.to_string().yellow(), next)
+            println!("[TokenIterator] Advancing to {} (read: {:?})", self.index.to_string().yellow(), next);
         }
         
         next
@@ -75,7 +75,7 @@ impl TokenIterator<'_> {
                     print!("\r{} {} ({} times)", "[TokenIterator] Repeated peek at".yellow(),
                            self.index.to_string().green(), self.repeated_peek_count+1);
                 }
-                self.repeated_peek_count += 1
+                self.repeated_peek_count += 1;
             }
         }
         else {

@@ -398,7 +398,7 @@ impl Parser<'_> {
                 tokens.advance();
                 // Assignments are right associative
                 let r_value = self.assignment(tokens)?;
-                return Ok(Expression::new_assignment(l_value, r_value));
+                return Ok(Expression::new_assignment(&l_value, r_value));
             }
 
             return Err(self.get_error_marked_line(ParserErrorType::InvalidAssignmentTarget, equals.clone()))
@@ -409,7 +409,7 @@ impl Parser<'_> {
     }
 
     // expr ? expr : expr
-    fn ternary<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+    fn ternary(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
         let mut expr = self.logic_or(tokens)?;
 
         let question_token = Self::peek(tokens)?;
@@ -449,14 +449,14 @@ impl Parser<'_> {
     }
 
     // != ==
-    fn equality<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+    fn equality(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
         let expr = parse_binary_with_error_produce!(self, TT::Punctuation(PT::BangEqual | PT::EqualEqual), tokens, comparison);
 
         Ok(expr)
     }
 
     // > >= < <=
-    fn comparison<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+    fn comparison(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
         let expr = parse_binary_with_error_produce!(self,
             TT::Punctuation(PT::Greater | PT::GreaterEqual | PT::Less | PT::LessEqual), tokens, term);
 
@@ -464,7 +464,7 @@ impl Parser<'_> {
     }
 
     // + -
-    fn term<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+    fn term(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
         // Only a plus should produce an error, because a minus could still be a unary operator
         let expr = parse_binary_with_error_produce!(self,
             TT::Punctuation(PT::Plus | PT::Minus), TT::Punctuation(PT::Plus), tokens, factor);
@@ -473,14 +473,14 @@ impl Parser<'_> {
     }
 
     // * /
-    fn factor<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+    fn factor(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
         let expr = parse_binary_with_error_produce!(self, TT::Punctuation(PT::Star | PT::Slash), tokens, unary);
 
         Ok(expr)
     }
 
     // ! - (as unary operator)
-    fn unary<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+    fn unary(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
         let token = Self::peek(tokens)?;
         if let TT::Punctuation(PT::Bang | PT::Minus) = &token.token_type {
             let token = token.clone();
@@ -494,7 +494,7 @@ impl Parser<'_> {
     }
 
     // Literals, groupings
-    fn primary<'a>(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
+    fn primary(&mut self, tokens: &mut TokenIterator) -> Result<Expression, ParserError> {
         let token = Self::peek(tokens)?.clone();
 
         let result = match token.token_type {
@@ -520,16 +520,15 @@ impl Parser<'_> {
                         ParserErrorType::UnclosedParenthesis, token
                     ));
                 }
-                else {
-                    let next_token = next_token.unwrap();
-                    match next_token.token_type {
-                        TT::Punctuation(PT::RightParen) => {},
+                
+                let next_token = next_token.unwrap();
+                match next_token.token_type {
+                    TT::Punctuation(PT::RightParen) => {},
 
-                        _ => {
-                            return Err(self.get_error_marked_line(
-                                ParserErrorType::UnclosedParenthesis, (*next_token).clone()
-                            ));
-                        }
+                    _ => {
+                        return Err(self.get_error_marked_line(
+                            ParserErrorType::UnclosedParenthesis, (*next_token).clone()
+                        ));
                     }
                 }
 
@@ -703,7 +702,7 @@ impl Display for ParserError {
         };
 
         if is_scanner_error {
-            write!(f, "{}", output)?;
+            write!(f, "{output}")?;
         }
         else {
             write!(f, "{}", output.red())?;
@@ -713,8 +712,10 @@ impl Display for ParserError {
         if let Some(location) = &self.location {
             // Add tabs to each line of the location so it shifts to the right
             let location: String = location.split('\n')
-                .map(|line| format!("\t{line}\n"))
-                .collect();
+                .fold(String::new(), |mut output, line| {
+                    output += "\t"; output += line; output += "\n";
+                    output
+                });
             write!(f, "\n\t{}\n{}\n", "Happened here:".green(), location.trim_end())?;
         }
 
