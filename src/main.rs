@@ -4,6 +4,7 @@ use colored::Colorize;
 use crate::frontend::{Parser, ParserError};
 
 mod frontend;
+mod middle_end;
 
 // TODO: Read up on exit codes. Maybe use something that already makes sense
 fn main() {
