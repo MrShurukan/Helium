@@ -139,9 +139,6 @@ impl Parser<'_> {
     /// This is parsed according to rules in `grammar.txt` (root of the repo)
     // TODO: A lot of things like blocks if unclosed will return an error to EOF with 'Incorrect token in this place'
     pub fn parse(&mut self) -> Result<Vec<Statement>, Vec<ParserError>> {
-        let mut statements: Vec<Statement> = Vec::new();
-        let mut errors: Vec<ParserError> = Vec::new();
-
         let tokens = self.scan()?;
         println!("Tokens:");
         for (i, token) in tokens.iter().enumerate() {
@@ -149,25 +146,76 @@ impl Parser<'_> {
         }
 
         let mut tokens = TokenIterator::new(tokens.as_slice());
+        self.read_top_level(&mut tokens)
+    }
 
-        while let Some(Token { token_type, ..}) = tokens.peek() {
+    // -------------------- THIS PART IS DECLARATIONS AND STATEMENTS -------------------- //
+    fn read_top_level(&mut self, tokens: &mut TokenIterator) -> Result<Vec<Statement>, Vec<ParserError>> {
+        let mut statements: Vec<Statement> = Vec::new();
+        let mut errors: Vec<ParserError> = Vec::new();
+
+        let mut read_setup = false;
+        let mut read_loop = false;
+
+        while let Some(token) = tokens.advance() {
             // EOF means statements are over and the parsing is done
-            if let TT::Eof = token_type {
+            if matches!(token.token_type, TT::Eof) {
                 break;
             };
 
-            // Program is a list of declarations (see grammar.txt)
-            let result = self.declaration(&mut tokens);
-            if let Ok(statement) = result {
-                statements.push(statement);
-            }
-            else {
-                let err = result.err().unwrap();
-                println!("{}: {}", "Err:".red(), err);
-                errors.push(err);
+            let result = match token.token_type {
+                TT::Keyword(KT::Var) if !read_setup && !read_loop =>
+                    self.var_declaration(tokens),
+                TT::Keyword(KT::Def) if !read_setup && !read_loop =>
+                    self.def_declaration(tokens),
+                // Can't declare global variables and ports after setup or loop
+                TT::Keyword(KT::Var) | TT::Keyword(KT::Def) => {
+                    let token = token.clone();
+                    // Discard the declaration
+                    _ = if matches!(token.token_type, TT::Keyword(KT::Var)) 
+                        { self.var_declaration(tokens) } else { self.def_declaration(tokens) };
+                    Err(self.get_error_marked_line(ParserErrorType::DefOrVarAfterSetupOrLoop, token))
+                },
+                TT::Keyword(KT::Setup) =>
+                    if read_setup {
+                        let token = token.clone();
+                        // Read the setup anyway, but discard the result
+                        _ = self.loop_declaration(tokens);
+                        Err(self.get_error_marked_line(ParserErrorType::DuplicateSetup, token.clone()))
+                    }
+                    else {
+                        read_setup = true;
+                        self.setup_declaration(tokens)
+                    },
+                TT::Keyword(KT::Loop) =>
+                    if read_loop {
+                        let token = token.clone();
+                        // Read the loop anyway, but discard the result
+                        _ = self.loop_declaration(tokens);
+                        Err(self.get_error_marked_line(ParserErrorType::DuplicateLoop, token))
+                    }
+                    else {
+                        read_loop = true;
+                        self.loop_declaration(tokens)
+                    },
+
+                _ => Err(self.get_error_marked_line(ParserErrorType::IncorrectGlobalToken, token.clone()))
+            };
+
+            match result {
+                Ok(statement) => {
+                    statements.push(statement);
+                }
+                Err(err) => {
+                    errors.push(err)
+                }
             }
         }
-        
+
+        if !read_loop {
+            errors.push(ParserError::new_without_token(ParserErrorType::MissingLoopDeclaration));
+        }
+
         if errors.is_empty() {
             Ok(statements)
         }
@@ -175,15 +223,27 @@ impl Parser<'_> {
             Err(errors)
         }
     }
+    fn top_level_declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
+        let token = Self::peek(tokens)?;
+        let result = match token.token_type {
+            TT::Keyword(KT::Var) => self.var_declaration(tokens),
+            TT::Keyword(KT::Def) => self.def_declaration(tokens),
+            _ => self.statement(tokens)
+        };
 
-    // -------------------- THIS PART IS DECLARATIONS AND STATEMENTS -------------------- //
+        // If we got an error, we align our tokens with the next valid entry point.
+        // See `Self::synchronize` comments for more info
+        if result.is_err() {
+            Self::synchronize(tokens);
+        }
+
+        result
+    }
+
     fn declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
         let token = Self::peek(tokens)?;
         let result = match token.token_type {
             TT::Keyword(KT::Var) => { Self::advance(tokens)?; self.var_declaration(tokens) },
-            TT::Keyword(KT::Def) => { Self::advance(tokens)?; self.def_declaration(tokens) },
-            TT::Keyword(KT::Setup) => { Self::advance(tokens)?; self.setup_declaration(tokens) },
-            TT::Keyword(KT::Loop) => { Self::advance(tokens)?; self.loop_declaration(tokens) },
             _ => self.statement(tokens)
         };
 
@@ -626,7 +686,7 @@ impl Parser<'_> {
 
         let line = line.unwrap();
         let line_number_string = format!("{}. ", token.source_location.line_start);
-        let spaces = " ".repeat(line_number_string.len() + token.source_location.start_offset - 1);
+        let spaces = " ".repeat(line_number_string.len() + token.source_location.start_offset);
         let lexeme_size = token.source_location.end_offset - token.source_location.start_offset;
         let marker = "^".repeat(lexeme_size).red();
 
@@ -703,7 +763,12 @@ impl Display for ParserError {
             ParserErrorType::InvalidPinRef(pin_ref_error) =>
                 &format!("{pin_ref_error}"),
             ParserErrorType::UnclosedDefBlock => "Def block was unclosed (missing '}')",
-            ParserErrorType::EmptyDefBlock => "Def block can't be empty"
+            ParserErrorType::EmptyDefBlock => "Def block can't be empty",
+            ParserErrorType::DefOrVarAfterSetupOrLoop => "'def' and 'var' statements must go before setup and loop statements",
+            ParserErrorType::DuplicateSetup => "Can't declare 'setup' more than once",
+            ParserErrorType::DuplicateLoop => "Can't declare 'loop' more than once",
+            ParserErrorType::IncorrectGlobalToken => "This token is invalid here (expected 'def', 'var', 'setup', 'loop')",
+            ParserErrorType::MissingLoopDeclaration => "'loop' must be defined"
         };
 
         if is_scanner_error {
@@ -724,10 +789,6 @@ impl Display for ParserError {
             write!(f, "\n\t{}\n{}\n", "Happened here:".green(), location.trim_end())?;
         }
 
-        if self.token.is_none() && !is_scanner_error {
-            write!(f, "{}", "(internal parser error, something went wrong)".yellow())?;
-        }
-
         Ok(())
     }
 }
@@ -746,7 +807,12 @@ pub enum ParserErrorType {
     InvalidDefDeclaration(DefDeclarationError),
     InvalidPinRef(PinRefError),
     UnclosedDefBlock,
-    EmptyDefBlock
+    EmptyDefBlock,
+    DefOrVarAfterSetupOrLoop,
+    DuplicateSetup,
+    DuplicateLoop,
+    IncorrectGlobalToken,
+    MissingLoopDeclaration
 }
 
 impl From<ScannerError> for ParserError {

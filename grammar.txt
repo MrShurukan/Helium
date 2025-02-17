@@ -1,8 +1,6 @@
-﻿program         -> declaration* EOF ;
+﻿program         -> topLevelDecl* setupDecl? loopDecl EOF ;
+topLevelDecl    -> (defDecl | varDecl) ;
 declaration     -> varDecl
-                   | defDecl
-                   | setupDecl
-                   | loopDecl
                    | statement ;
 
 varDecl         -> "var" IDENTIFIER ( ":" TYPE )? ( "=" expression )? ";" ;
