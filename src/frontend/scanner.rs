@@ -5,11 +5,12 @@ use colored::Colorize;
 use unicode_segmentation::Graphemes;
 use crate::frontend::position_info::PositionInfo;
 use crate::frontend::token::Token;
-use crate::frontend::token_type::{LiteralType, TokenType, CONSTANTS, KEYWORDS, TYPES};
+use crate::frontend::token_type::{LiteralType, TokenType, CONSTANTS, KEYWORDS};
 use crate::frontend::utils::{ReadOnlyGraphemeSlice, SourceLocation};
 
 use ScannerErrorType as SET;
 use ScannerError as SE;
+use crate::frontend::static_type::TYPES;
 
 /// This struct is responsible for converting the source file to a list of tokens.
 /// This list will later be used by other parts of the front-end (like `Parser`) to create

@@ -17,6 +17,7 @@ pub mod token_type;
 pub mod utils;
 mod position_info;
 pub mod expression;
+pub mod static_type;
 
 /// Main struct for the front-end of helium. This class receives a source file,
 /// starts up a scanner, gets tokens and then parses them into a list of statements.

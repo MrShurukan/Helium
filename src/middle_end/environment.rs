@@ -1,7 +1,7 @@
 ﻿use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use crate::frontend::token_type::StaticType;
+use crate::frontend::static_type::StaticType;
 
 /// Environment is a symbol table for identifiers
 #[derive(Clone)]

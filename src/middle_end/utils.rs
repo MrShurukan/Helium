@@ -1,4 +1,4 @@
-﻿use crate::frontend::token_type::StaticType;
+﻿use crate::frontend::static_type::StaticType;
 use crate::middle_end::environment::{Environment, EnvironmentError, EnvironmentErrorType};
 
 pub struct EnvironmentStack {

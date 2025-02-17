@@ -4,12 +4,13 @@ mod environment;
 use std::arch::x86_64::_xsaveopt;
 use crate::frontend::expression::{Expression, ExpressionType};
 use crate::frontend::statement::{SingleDefDeclaration, Statement, StatementType};
-use crate::frontend::token_type::{FloatType, IntegerType, KeywordType, LiteralType, PunctuationType, StaticType, TokenType};
+use crate::frontend::token_type::{KeywordType, LiteralType, PunctuationType, TokenType};
 use crate::frontend::utils::LocatableInSource;
 use crate::middle_end::utils::EnvironmentStack;
 use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use crate::frontend::static_type::{FloatType, IntegerType, StaticType};
 
 /// Semantic Analyzer is responsible for statically checking the language and figuring out
 /// incorrect operations, like type mismatches, incorrect assignments, variable scopes, etc.
