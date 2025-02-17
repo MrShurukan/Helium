@@ -57,17 +57,17 @@ lazy_static! {
     pub static ref TYPES: HashMap<&'static str, StaticType> = {
         let mut m = HashMap::new();
 
-        m.insert("i8",      StaticType::Int8);
-        m.insert("i16",     StaticType::Int16);
-        m.insert("i32",     StaticType::Int32);
-        m.insert("i64",     StaticType::Int64);
-        m.insert("u8",      StaticType::Uns8);
-        m.insert("u16",     StaticType::Uns16);
-        m.insert("u32",     StaticType::Uns32);
-        m.insert("u64",     StaticType::Uns64);
-
-        m.insert("f32",     StaticType::Float32);
-        m.insert("f64",     StaticType::Float64);
+        m.insert("i8",      StaticType::Integer(IntegerType::Int8)); 
+        m.insert("i16",     StaticType::Integer(IntegerType::Int16));
+        m.insert("i32",     StaticType::Integer(IntegerType::Int32));
+        m.insert("i64",     StaticType::Integer(IntegerType::Int64));
+        m.insert("u8",      StaticType::Integer(IntegerType::Uns8)); 
+        m.insert("u16",     StaticType::Integer(IntegerType::Uns16));
+        m.insert("u32",     StaticType::Integer(IntegerType::Uns32));
+        m.insert("u64",     StaticType::Integer(IntegerType::Uns64));
+        
+        m.insert("f32",     StaticType::Float(FloatType::Float32));
+        m.insert("f64",     StaticType::Float(FloatType::Float64));
 
         m.insert("PinState",    StaticType::PinState);
         m.insert("PinMode",     StaticType::PinMode);
@@ -124,10 +124,9 @@ pub enum PinModeConstantType {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum StaticType {
-    Int8, Int16, Int32, Int64,
-    Uns8, Uns16, Uns32, Uns64,
+    Integer(IntegerType),
 
-    Float32, Float64,
+    Float(FloatType),
 
     // LOW, HIGH
     PinState,
@@ -142,19 +141,30 @@ pub enum StaticType {
     Function
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum IntegerType {
+    Int8, Int16, Int32, Int64,
+    Uns8, Uns16, Uns32, Uns64,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum FloatType {
+    Float32, Float64,
+}
+
 impl Display for StaticType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            StaticType::Int8 => write!(f, "i8"),
-            StaticType::Int16 => write!(f, "i16"),
-            StaticType::Int32 => write!(f, "i32"),
-            StaticType::Int64 => write!(f, "i64"),
-            StaticType::Uns8 => write!(f, "u8"),
-            StaticType::Uns16 => write!(f, "u16"),
-            StaticType::Uns32 => write!(f, "u32"), 
-            StaticType::Uns64 => write!(f, "u64"),
-            StaticType::Float32 => write!(f, "f32"),
-            StaticType::Float64 => write!(f, "f64"),
+            StaticType::Integer(IntegerType::Int8) => write!(f, "i8"),
+            StaticType::Integer(IntegerType::Int16) => write!(f, "i16"),
+            StaticType::Integer(IntegerType::Int32) => write!(f, "i32"),
+            StaticType::Integer(IntegerType::Int64) => write!(f, "i64"),
+            StaticType::Integer(IntegerType::Uns8) => write!(f, "u8"),
+            StaticType::Integer(IntegerType::Uns16) => write!(f, "u16"),
+            StaticType::Integer(IntegerType::Uns32) => write!(f, "u32"),
+            StaticType::Integer(IntegerType::Uns64) => write!(f, "u64"),
+            StaticType::Float(FloatType::Float32) => write!(f, "f32"),
+            StaticType::Float(FloatType::Float64) => write!(f, "f64"),
             StaticType::PinState => write!(f, "PinState"),
             StaticType::PinMode => write!(f, "PinMode"),
             StaticType::Boolean => write!(f, "bool"),

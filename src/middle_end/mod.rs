@@ -1,9 +1,10 @@
 ﻿pub mod utils;
 mod environment;
 
+use std::arch::x86_64::_xsaveopt;
 use crate::frontend::expression::{Expression, ExpressionType};
 use crate::frontend::statement::{SingleDefDeclaration, Statement, StatementType};
-use crate::frontend::token_type::{LiteralType, PunctuationType, StaticType};
+use crate::frontend::token_type::{FloatType, IntegerType, KeywordType, LiteralType, PunctuationType, StaticType, TokenType};
 use crate::frontend::utils::LocatableInSource;
 use crate::middle_end::utils::EnvironmentStack;
 use colored::Colorize;
@@ -29,9 +30,7 @@ impl Analyzer<'_> {
     pub fn analyze(&mut self, statements: &[Statement]) -> Result<(), Vec<AnalyzerError>> {
         let mut errors: Vec<AnalyzerError> = Vec::new();
         for statement in statements {
-            if let Err(e) = self.analyze_statement(statement) {
-                errors.push(e);
-            }
+            self.analyze_statement(statement, &mut errors);
         }
 
         if errors.is_empty() {
@@ -42,193 +41,303 @@ impl Analyzer<'_> {
         }
     }
 
-    // TODO: Create new environments when processing blocks. Remove them after processing
-    fn analyze_statement(&mut self, statement: &Statement) -> Result<(), AnalyzerError> {
+    fn analyze_statement(&mut self, statement: &Statement, errors: &mut Vec<AnalyzerError>) {
         match &statement.statement_type {
             StatementType::Expression(expr) => {
-                self.analyze_expression(expr)?;
-                Ok(())
+                self.analyze_expression(expr, errors);
             },
             StatementType::VariableDeclaration { identifier, initializer } => {
-                let expression_type = self.analyze_expression(initializer)?;
-                self.environment.define(identifier.clone(), expression_type);
-                Ok(())
+                if let Some(expression_type) = self.analyze_expression(initializer, errors) {
+                    self.environment.define(identifier.clone(), expression_type)
+                }
             },
             StatementType::DefDeclaration(declarations) => {
-                // TODO: This will only yield one error at a time in a block
                 for declaration in declarations.iter() {
-                    self.analyze_def_declaration(declaration)?;
+                    self.analyze_def_declaration(declaration, errors);
                 }
-
-                Ok(())
             },
             StatementType::SetupDeclaration(statement) |
-            StatementType::LoopDeclaration(statement) => self.analyze_statement(statement),
+            StatementType::LoopDeclaration(statement) => self.analyze_statement(statement, errors),
             StatementType::Block(statements) => {
-                // TODO: This will only yield one error at a time in a block
+                self.environment.push_new();
                 for statement in statements.iter() {
-                    self.analyze_statement(statement)?;
+                    self.analyze_statement(statement, errors);
                 }
-
-                Ok(())
+                self.environment.remove_last().expect("last environment popped");
             },
             StatementType::If { condition, then_body, else_body } => {
-                let condition_type = self.analyze_expression(condition)?;
-                if !matches!(condition_type, StaticType::Boolean) {
-                    return Err(self.produce_error(
-                        AnalyzerErrorType::NonBooleanInCondition(condition_type),
-                        condition
-                    ))
-                }
-                
-                self.analyze_statement(then_body)?;
+                self.check_condition_boolean(errors, condition);
+
+                self.analyze_statement(then_body, errors);
                 if let Some(else_body) = else_body {
-                    self.analyze_statement(else_body)?;
+                    self.analyze_statement(else_body, errors);
                 }
-                
-                Ok(())
             },
             StatementType::While { condition, body } => {
-                let condition_type = self.analyze_expression(condition)?;
-                if !matches!(condition_type, StaticType::Boolean) {
-                    return Err(self.produce_error(
-                        AnalyzerErrorType::NonBooleanInCondition(condition_type),
-                        condition
-                    ))
-                }
+                self.check_condition_boolean(errors, condition);
 
-                self.analyze_statement(body)
+                self.analyze_statement(body, errors);
             },
             StatementType::For { identifier, from, to, body } => {
-                let from_type = self.analyze_expression(from)?;
-                let to_type = self.analyze_expression(to)?;
-                
-                // TODO: Ints should be separated into their own group for ease of checking
-                // TODO: This should check for all ints
-                if from_type != StaticType::Int64 {
-                    return Err(self.produce_error(
-                        AnalyzerErrorType::NonIntegerInFor(from_type),
-                        from
-                    ));
+                let from_type = self.analyze_expression(from, errors);
+                let to_type = self.analyze_expression(to, errors);
+
+                let mut error_happened = false;
+                let mut identifier_type = None;
+
+                if let Some(from_type) = from_type {
+                    if !matches!(from_type, StaticType::Integer(_)) {
+                        errors.push(self.produce_error(
+                            AnalyzerErrorType::NonIntegerInFor(from_type),
+                            from
+                        ));
+
+                        error_happened = true;
+                    }
                 }
 
-                // TODO: Same goes here
-                if to_type != StaticType::Int64 {
-                    return Err(self.produce_error(
-                        AnalyzerErrorType::NonIntegerInFor(to_type),
-                        to
-                    ));
+                if let Some(to_type) = to_type {
+                    if !matches!(to_type, StaticType::Integer(_)) {
+                        errors.push(self.produce_error(
+                            AnalyzerErrorType::NonIntegerInFor(to_type),
+                            from
+                        ));
+
+                        error_happened = true;
+                    }
+                    else if !error_happened {
+                        identifier_type = Some(to_type);
+                    }
                 }
-                
-                self.environment.define(identifier.clone(), from_type);
-                self.analyze_statement(body)
+
+                if let Some(identifier_type) = identifier_type {
+                    self.environment.define(identifier.clone(), identifier_type);
+                }
+
+                self.analyze_statement(body, errors);
             },
         }
     }
 
-    fn analyze_expression(&mut self, expression: &Expression) -> Result<StaticType, AnalyzerError> {
-        match &expression.expression_type {
-            ExpressionType::Binary { left, operator, right } => {
-                let types = (self.analyze_expression(left)?, self.analyze_expression(right)?);
-                todo!()
-            },
-            ExpressionType::Ternary { first, second, third } => {
-                let first_type = self.analyze_expression(first)?;
-                if !matches!(first_type, StaticType::Boolean) {
-                    return Err(self.produce_error(
-                        AnalyzerErrorType::NonBooleanInCondition(first_type),
-                        first.as_ref()
-                    ));
-                }
-
-                let second_type = self.analyze_expression(second)?;
-                let third_type = self.analyze_expression(third)?;
-
-                if second_type == third_type {
-                    Ok(second_type)
-                }
-                else {
-                    Err(self.produce_error(
-                        AnalyzerErrorType::MismatchTernary(second_type, third_type),
-                        expression
-                    ))
-                }
-            },
-            ExpressionType::Grouping { expression } => self.analyze_expression(expression),
-            ExpressionType::Literal { value } => {
-                match value {
-                    LiteralType::Identifier(name) => { self.try_get_identifier_type(name, expression) }
-                    LiteralType::String(_) => { Ok(StaticType::String) }
-                    LiteralType::Integer(_) => { Ok(StaticType::Int64) }
-                    LiteralType::Float(_) => { Ok(StaticType::Float64) }
-                    LiteralType::Boolean(_) => { Ok(StaticType::Boolean) }
-                    LiteralType::PinMode(_) => { Ok(StaticType::PinMode)}
-                    LiteralType::PinState(_) => { Ok(StaticType::PinState)}
-                }
-            },
-            ExpressionType::Unary { operator, right } => {
-                match operator {
-                    PunctuationType::Bang => Ok(StaticType::Boolean),
-                    PunctuationType::Minus => {
-                        let right_type = self.analyze_expression(right)?;
-                        match right_type {
-                            t @ (StaticType::Int8 |
-                                StaticType::Int16 |
-                                StaticType::Int32 |
-                                StaticType::Int64 |
-                                StaticType::Uns8 |
-                                StaticType::Uns16 |
-                                StaticType::Uns32 |
-                                StaticType::Uns64 |
-                                StaticType::Float32 |
-                                StaticType::Float64) => Ok(t),
-                            t => Err(self.produce_error(
-                                AnalyzerErrorType::WrongTypeUnaryOperator(operator.clone(), t),
-                                right.as_ref()
-                            ))
-                        }
-                    },
-
-                    _ => Err(self.produce_error(
-                        AnalyzerErrorType::InvalidUnaryOperator(operator.clone()),
-                        expression
-                    ))
-                }
-            },
-            ExpressionType::Assignment { identifier, expression } => {
-                let assignee_type = self.try_get_identifier_type(identifier, expression)?;
-
-                let expression_type = self.analyze_expression(expression)?;
-                if assignee_type == expression_type {
-                   Ok(expression_type)
-                }
-                else {
-                    Err(self.produce_error(
-                        AnalyzerErrorType::AssignmentTypeMismatch {
-                            assignee_type,
-                            assignment_type: expression_type,
-                        },
-                        expression.as_ref()
-                    ))
-                }
+    fn check_condition_boolean(&mut self, errors: &mut Vec<AnalyzerError>, condition: &Expression) {
+        if let Some(condition_type) = self.analyze_expression(condition, errors) {
+            if !matches!(condition_type, StaticType::Boolean) {
+                errors.push(self.produce_error(
+                    AnalyzerErrorType::NonBooleanInCondition(condition_type),
+                    condition
+                ));
             }
         }
     }
 
-    fn analyze_def_declaration(&mut self, declaration: &SingleDefDeclaration) -> Result<StaticType, AnalyzerError> {
+    fn analyze_expression(&mut self, expression: &Expression, errors: &mut Vec<AnalyzerError>) -> Option<StaticType> {
+        match &expression.expression_type {
+            ExpressionType::Binary { left, operator, right } => {
+                let types = (self.analyze_expression(left, errors)?, self.analyze_expression(right, errors)?);
+                match operator {
+                    TokenType::Punctuation(PunctuationType::Plus) => {
+                        // Concat
+                        // TODO: This assumes everything can be converted to string. Which isn't true
+                        if matches!(types.0, StaticType::String) || matches!(types.1, StaticType::String) {
+                            Some(StaticType::String)
+                        }
+                        else {
+                            let res1 = self.ensure_number_for_arithmetic(left, types.0, errors);
+                            let res2 = self.ensure_number_for_arithmetic(right, types.1, errors);
+
+                            if res1.is_err() || res2.is_err() {
+                                None
+                            }
+                            else {
+                                Some(Self::larger_numeric(types.0, types.1))
+                            }
+                        }
+                    },
+                    TokenType::Punctuation(PunctuationType::Minus) |
+                    TokenType::Punctuation(PunctuationType::Slash) |
+                    TokenType::Punctuation(PunctuationType::Star) => {
+                        let res1 = self.ensure_number_for_arithmetic(left, types.0, errors);
+                        let res2 = self.ensure_number_for_arithmetic(right, types.1, errors);
+
+                        if res1.is_err() || res2.is_err() {
+                            None
+                        }
+                        else {
+                            Some(Self::larger_numeric(types.0, types.1))
+                        }
+                    },
+                    // TODO: This isn't right, but this will have to do for now
+                    TokenType::Keyword(KeywordType::Or) |
+                    TokenType::Keyword(KeywordType::And) |
+                    TokenType::Punctuation(PunctuationType::EqualEqual) |
+                    TokenType::Punctuation(PunctuationType::BangEqual) |
+                    TokenType::Punctuation(PunctuationType::Greater) |
+                    TokenType::Punctuation(PunctuationType::GreaterEqual) |
+                    TokenType::Punctuation(PunctuationType::Less) |
+                    TokenType::Punctuation(PunctuationType::LessEqual) => Some(StaticType::Boolean),
+                    _ => {
+                        errors.push(self.produce_error(
+                            AnalyzerErrorType::InvalidBinaryOperator(operator.clone()),
+                            expression
+                        ));
+                        None
+                    }
+                }
+            },
+            ExpressionType::Ternary { first, second, third } => {
+                let first_type = self.analyze_expression(first, errors);
+                if let Some(first_type) = first_type {
+                    if !matches!(first_type, StaticType::Boolean) {
+                        errors.push(self.produce_error(
+                            AnalyzerErrorType::NonBooleanInCondition(first_type),
+                            first.as_ref()
+                        ));
+                    }
+                }
+
+                let second_type = self.analyze_expression(second, errors);
+                let third_type = self.analyze_expression(third, errors);
+
+                if let (Some(second_type), Some(third_type)) = (second_type, third_type) {
+                    return if second_type == third_type {
+                        Some(second_type)
+                    } else {
+                        errors.push(self.produce_error(
+                            AnalyzerErrorType::MismatchTernary(second_type, third_type),
+                            expression
+                        ));
+                        None
+                    }
+                }
+
+                None
+            },
+            ExpressionType::Grouping { expression } => self.analyze_expression(expression, errors),
+            ExpressionType::Literal { value } => {
+                match value {
+                    LiteralType::Identifier(name) => { self.try_get_identifier_type(name, expression, errors) }
+                    LiteralType::String(_) => { Some(StaticType::String) }
+                    LiteralType::Integer(_) => { Some(StaticType::Integer(IntegerType::Int64)) }
+                    LiteralType::Float(_) => { Some(StaticType::Float(FloatType::Float64)) }
+                    LiteralType::Boolean(_) => { Some(StaticType::Boolean) }
+                    LiteralType::PinMode(_) => { Some(StaticType::PinMode) }
+                    LiteralType::PinState(_) => { Some(StaticType::PinState) }
+                }
+            },
+            ExpressionType::Unary { operator, right } => {
+                match operator {
+                    PunctuationType::Bang => Some(StaticType::Boolean),
+                    PunctuationType::Minus => {
+                        let right_type = self.analyze_expression(right, errors)?;
+                        match right_type {
+                            StaticType::Integer(_) | StaticType::Float(_) => Some(right_type),
+                            t => {
+                                errors.push(self.produce_error(
+                                    AnalyzerErrorType::WrongTypeUnaryOperator(operator.clone(), t),
+                                    right.as_ref()
+                                ));
+
+                                None
+                            }
+                        }
+                    },
+
+                    _ => {
+                        errors.push(self.produce_error(
+                            AnalyzerErrorType::InvalidUnaryOperator(operator.clone()),
+                            expression
+                        ));
+
+                        None
+                    }
+                }
+            },
+            ExpressionType::Assignment { identifier, expression } => {
+                let assignee_type = self.try_get_identifier_type(identifier, expression, errors);
+                let expression_type = self.analyze_expression(expression, errors)?;
+
+                if let Some(assignee_type) = assignee_type {
+                    return if assignee_type == expression_type {
+                        Some(expression_type)
+                    }
+                    else {
+                        errors.push(self.produce_error(
+                            AnalyzerErrorType::AssignmentTypeMismatch {
+                                assignee_type,
+                                assignment_type: expression_type,
+                            },
+                            expression.as_ref()
+                        ));
+
+                        None
+                    }
+                }
+
+                None
+            }
+        }
+    }
+
+    fn ensure_number_for_arithmetic(&self, expression: &Expression, static_type: StaticType, errors: &mut Vec<AnalyzerError>) -> Result<(), ()> {
+        match static_type {
+            StaticType::Integer(_) | StaticType::Float(_) => { Ok(())}
+            _ => {
+                errors.push(self.produce_error(
+                    AnalyzerErrorType::NonNumericType(static_type),
+                    expression
+                ));
+                Err(())
+            }
+        }
+    }
+
+    fn analyze_def_declaration(&mut self, declaration: &SingleDefDeclaration, errors: &mut Vec<AnalyzerError>) {
         todo!("Check ports");
     }
 
-    fn try_get_identifier_type(&mut self, identifier: &String, expression: &Expression) -> Result<StaticType, AnalyzerError> {
-        self.environment.get_type(identifier)
-            .ok_or_else(|| self.produce_error(
+    fn try_get_identifier_type(&mut self, identifier: &String, expression: &Expression, errors: &mut Vec<AnalyzerError>) -> Option<StaticType> {
+        if let Some(t) = self.environment.get_type(identifier) {
+            Some(t)
+        }
+        else {
+            errors.push(self.produce_error(
                 AnalyzerErrorType::IdentifierWasNotDefined(identifier.clone()),
                 expression
-            ))
+            ));
+            None
+        }
     }
 
     fn produce_error<T: LocatableInSource>(&self, error_type: AnalyzerErrorType, locatable: &T) -> AnalyzerError {
         AnalyzerError::new(error_type, locatable, self.source)
+    }
+
+    fn larger_numeric(numeric1: StaticType, numeric2: StaticType) -> StaticType {
+        let rank1 = Self::numeric_rank(numeric1);
+        let rank2 = Self::numeric_rank(numeric2);
+
+        // Return the larger ranked type
+        if rank1 >= rank2 {
+            numeric1
+        } else {
+            numeric2
+        }
+    }
+
+    fn numeric_rank(typ: StaticType) -> u8 {
+        match typ {
+            StaticType::Float(FloatType::Float64) => 9,
+            StaticType::Float(FloatType::Float32) => 8,
+            StaticType::Integer(IntegerType::Int64) => 7,
+            StaticType::Integer(IntegerType::Int32) => 6,
+            StaticType::Integer(IntegerType::Int16) => 5,
+            StaticType::Integer(IntegerType::Int8) => 4,
+            StaticType::Integer(IntegerType::Uns64) => 3,
+            StaticType::Integer(IntegerType::Uns32) => 2,
+            StaticType::Integer(IntegerType::Uns16) => 1,
+            StaticType::Integer(IntegerType::Uns8) => 0,
+            _ => panic!("Non-numeric type passed to numeric_rank function (larger_numeric)")
+        }
     }
 }
 
@@ -297,7 +406,7 @@ impl AnalyzerError {
                     return result_string;
                 }
 
-                let marker = "*".repeat(line.len() - location.start_offset);
+                let marker = "*".repeat(line.len() - location.start_offset).red();
                 result_string += &format!("\n{spaces}{marker}");
             }
             // On every other line we skip the whitespace at the beginning
@@ -308,12 +417,12 @@ impl AnalyzerError {
                     line.chars().take_while(char::is_ascii_whitespace).count());
 
                 if line_number == location.line_end {
-                    let marker = "*".repeat(location.end_offset - spaces.len() + 2);
+                    let marker = "*".repeat(location.end_offset - spaces.len() + 2).red();
                     result_string += &format!("\n{spaces}{marker}");
                     return result_string;
                 }
 
-                let marker = "*".repeat(line.len() - spaces.len());
+                let marker = "*".repeat(line.len() - spaces.len()).red();
                 result_string += &format!("\n{spaces}{marker}");
             }
         }
@@ -329,10 +438,12 @@ pub enum AnalyzerErrorType {
     InvalidAssignmentTarget(String),
     AssignmentTypeMismatch { assignee_type: StaticType, assignment_type: StaticType },
     InvalidUnaryOperator(PunctuationType),
+    InvalidBinaryOperator(TokenType),
     WrongTypeUnaryOperator(PunctuationType, StaticType),
     NonBooleanInCondition(StaticType),
     MismatchTernary(StaticType, StaticType),
-    NonIntegerInFor(StaticType)
+    NonIntegerInFor(StaticType),
+    NonNumericType(StaticType)
 }
 
 impl Error for AnalyzerError {}
@@ -350,7 +461,7 @@ impl Display for AnalyzerError {
             AnalyzerErrorType::InvalidAssignmentTarget(name) =>
                 format!("Cannot assign to '{name}'"),
             AnalyzerErrorType::AssignmentTypeMismatch { assignee_type, assignment_type } =>
-                format!("Type mismatch: cannot assign '{assignment_type}' to '{assignee_type}"),
+                format!("Type mismatch: cannot assign '{assignment_type}' to '{assignee_type}'"),
             AnalyzerErrorType::InvalidUnaryOperator(punctuation) =>
                 format!("Invalid unary operator: {punctuation}"),
             AnalyzerErrorType::WrongTypeUnaryOperator(p, t) =>
@@ -360,7 +471,11 @@ impl Display for AnalyzerError {
             AnalyzerErrorType::MismatchTernary(t1, t2) =>
                 format!("Two branches of ternary operator have different types ('{t1}' and '{t2}'). They must be the same"),
             AnalyzerErrorType::NonIntegerInFor(t) =>
-                format!("For loops only support integers, instead found '{t}'")
+                format!("For loops only support integers, instead found '{t}'"),
+            AnalyzerErrorType::InvalidBinaryOperator(token_type) =>
+                format!("'{token_type:?}' can't be used as a binary operator"),
+            AnalyzerErrorType::NonNumericType(t) =>
+                format!("Expected a numeric type (integer or a float), but got '{t}'")
         }.red();
 
         // Add tabs to each line of the location so it shifts to the right

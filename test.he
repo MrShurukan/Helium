@@ -1,11 +1,16 @@
 ﻿if false {
-    var abcdefg = 2;
-    // Should throw analyzer error here
-    if abcdefg {
+    var a = false;
+    var abcdefg = a = true;
 
+    if abcdefg {
+        var b = 123;
     }
 
-    if abcdef {
+    // Should result in an error
+    b = 123;
+
+    // Should be an error
+    if abc {
 
     }
 }
