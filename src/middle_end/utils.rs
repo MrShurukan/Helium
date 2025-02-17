@@ -19,8 +19,7 @@ impl EnvironmentStack {
 
     fn first(&mut self) -> &mut Environment {
         self.environments
-            .iter_mut()
-            .nth(0)
+            .get_mut(0)
             .expect("Environment stack must always have at least one environment")
     }
 

@@ -169,7 +169,7 @@ impl Parser<'_> {
                 TT::Keyword(KT::Def) if !read_setup && !read_loop =>
                     self.def_declaration(tokens),
                 // Can't declare global variables and ports after setup or loop
-                TT::Keyword(KT::Var) | TT::Keyword(KT::Def) => {
+                TT::Keyword(KT::Var | KT::Def) => {
                     let token = token.clone();
                     // Discard the declaration
                     _ = if matches!(token.token_type, TT::Keyword(KT::Var)) 
@@ -207,7 +207,7 @@ impl Parser<'_> {
                     statements.push(statement);
                 }
                 Err(err) => {
-                    errors.push(err)
+                    errors.push(err);
                 }
             }
         }
@@ -255,20 +255,36 @@ impl Parser<'_> {
 
         result
     }
-
-    // TODO: Read the type after the identifier (: Type)
+    
     fn var_declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
         let ident_token = Self::advance(tokens)?;
         if !matches!(ident_token.token_type, TT::Literal(LT::Identifier(_))) {
             return Err(self.missing_token_error("Expected a variable name", tokens))
         }
         let ident_token = ident_token.clone();
+        let mut static_type = None;
 
-        check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' (initializer) here");
-        let initializer = self.expression(tokens)?;
+        if let TT::Punctuation(PT::Colon) = Self::peek(tokens)?.token_type {
+            Self::advance(tokens)?;
+            let token = Self::advance(tokens)?;
+            match token.token_type {
+                TT::Type(_) => static_type = Some(token.clone()),
+                _ => return Err(self.missing_token_error("Expected type after ':'", tokens))    
+            }
+        }
+        
+        let mut initializer = None; 
+        
+        if static_type.is_none() {
+            check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' (initializer) here");
+            initializer = Some(self.expression(tokens)?);
+        } else if let TT::Punctuation(PT::Equal) = Self::peek(tokens)?.token_type {
+            Self::advance(tokens)?;
+            initializer = Some(self.expression(tokens)?);
+        }
 
         check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected a ';' after variable declaration", use_prev_token);
-        Ok(Statement::new_var_declaration(ident_token, initializer))
+        Ok(Statement::new_var_declaration(ident_token, static_type, initializer))
     }
 
     fn def_declaration(&mut self, tokens: &mut TokenIterator) -> Result<Statement, ParserError> {
@@ -793,7 +809,6 @@ impl Display for ParserError {
     }
 }
 
-// TODO: Test every parser error type
 #[derive(Debug)]
 pub enum ParserErrorType {
     ScannerError(ScannerError),

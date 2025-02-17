@@ -1,11 +1,5 @@
-﻿var a = 123;
-var b = 123;
-def Button = PortB.2 INPUT;
-var c = 123;
-
-def {
-    a123 = PortC.2 INPUT;
-}
+﻿var c = 123;
+var a: i64;
 
 loop {
 

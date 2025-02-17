@@ -1,11 +1,12 @@
 ﻿use crate::frontend::expression::{Expression, PinRef};
+use crate::frontend::static_type::StaticType;
 use crate::frontend::token::Token;
 use crate::frontend::token_type::{ConstantType, LiteralType, PinModeConstantType, TokenType};
+use crate::frontend::utils::{LocatableInSource, SourceLocation};
 use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
-use crate::frontend::utils::{LocatableInSource, SourceLocation};
 
 /// Statements are the backbone of the entire language.
 /// Source file represents a list of statements when parsed
@@ -25,7 +26,7 @@ impl LocatableInSource for Statement {
 #[derive(Debug)]
 pub enum StatementType {
     Expression(Expression),
-    VariableDeclaration { identifier: String, initializer: Expression },
+    VariableDeclaration { identifier: String, static_type: Option<StaticType>, initializer: Option<Expression> },
     DefDeclaration(Rc<[SingleDefDeclaration]>),
     SetupDeclaration(Box<Statement>),
     LoopDeclaration(Box<Statement>),
@@ -43,13 +44,31 @@ impl Statement {
         }
     }
 
-    pub fn new_var_declaration(identifier: Token, initializer: Expression) -> Self {
+    pub fn new_var_declaration(identifier: Token, static_type: Option<Token>, initializer: Option<Expression>) -> Self {
         let TokenType::Literal(LiteralType::Identifier(ident)) = identifier.token_type
         else { unreachable!("Non-identifier passed to var statement") };
+        
+        let mut st_t: Option<StaticType> = None;
+        if let Some(token) = &static_type {
+            let TokenType::Type(t) = token.token_type
+            else { unreachable!("Non-type passed to var statement") };
+            
+            st_t = Some(*t);
+        }
 
+        let end = if let Some(init) = &initializer {
+            init.source_location
+        }
+        else if st_t.is_some() {
+            static_type.unwrap().source_location
+        }
+        else {
+            identifier.source_location
+        };
+        
         Self {
-            source_location: SourceLocation::new_from_start_end(identifier.source_location, initializer.source_location),
-            statement_type: StatementType::VariableDeclaration { identifier: ident, initializer }
+            source_location: SourceLocation::new_from_start_end(identifier.source_location, end),
+            statement_type: StatementType::VariableDeclaration { identifier: ident, static_type: st_t, initializer }
         }
     }
 
@@ -136,8 +155,19 @@ impl Display for StatementType {
         match self {
             StatementType::Expression(exp) =>
                 write!(f, "{exp};"),
-            StatementType::VariableDeclaration { identifier, initializer } =>
-                write!(f, "var {identifier} = {initializer};"),
+            StatementType::VariableDeclaration { identifier, static_type, initializer } =>
+            {
+                match (static_type, initializer) {
+                    (Some(st_type), Some(init)) =>
+                        write!(f, "var {identifier}: {st_type} = {init};"),
+                    (Some(st_type), None) =>
+                        write!(f, "var {identifier}: {st_type};"),
+                    (None, Some(init)) =>
+                        write!(f, "var {identifier} = {init};"),
+                    (None, None) =>
+                        write!(f, "var {identifier};"),
+                }   
+            },
             StatementType::DefDeclaration(declarations) => {
                 writeln!(f, "def {{")?;
                 for declaration in declarations.iter() {

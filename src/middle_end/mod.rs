@@ -1,11 +1,10 @@
 ﻿pub mod utils;
 mod environment;
 
-use std::arch::x86_64::_xsaveopt;
 use crate::frontend::expression::{Expression, ExpressionType};
 use crate::frontend::statement::{SingleDefDeclaration, Statement, StatementType};
 use crate::frontend::token_type::{KeywordType, LiteralType, PunctuationType, TokenType};
-use crate::frontend::utils::LocatableInSource;
+use crate::frontend::utils::{LocatableInSource, SourceLocation};
 use crate::middle_end::utils::EnvironmentStack;
 use colored::Colorize;
 use std::error::Error;
@@ -47,9 +46,37 @@ impl Analyzer<'_> {
             StatementType::Expression(expr) => {
                 self.analyze_expression(expr, errors);
             },
-            StatementType::VariableDeclaration { identifier, initializer } => {
-                if let Some(expression_type) = self.analyze_expression(initializer, errors) {
-                    self.environment.define(identifier.clone(), expression_type)
+            StatementType::VariableDeclaration { identifier, static_type, initializer } => {
+                match (static_type, initializer) {
+                    (Some(static_type), Some(initializer)) => {
+                        self.environment.define(identifier.clone(), *static_type);
+                        if let Some(expression_type) = self.analyze_expression(initializer, errors) {
+                            if expression_type != *static_type {
+                                errors.push(self.produce_error(
+                                    AnalyzerErrorType::VarDeclarationTypeMismatch(*static_type, expression_type),
+                                    initializer
+                                ));
+                            }
+                        }
+                    },
+                    (Some(static_type), None) => {
+                        self.environment.define(identifier.clone(), *static_type);
+                    },
+                    (None, Some(initializer)) => {
+                        if let Some(expression_type) = self.analyze_expression(initializer, errors) {
+                            self.environment.define(identifier.clone(), expression_type);
+                        }
+                        else {
+                            self.environment.define(identifier.clone(), StaticType::Unknown);
+                        }
+                    },
+                    (None, None) => {
+                        self.environment.define(identifier.clone(), StaticType::Unknown);
+                        errors.push(self.produce_error_all_line(
+                            AnalyzerErrorType::VarDeclarationMissingTypeAndInit,
+                            statement.source_location.line_start
+                        ));
+                    },
                 }
             },
             StatementType::DefDeclaration(declarations) => {
@@ -154,9 +181,9 @@ impl Analyzer<'_> {
                             }
                         }
                     },
-                    TokenType::Punctuation(PunctuationType::Minus) |
-                    TokenType::Punctuation(PunctuationType::Slash) |
-                    TokenType::Punctuation(PunctuationType::Star) => {
+                    TokenType::Punctuation(PunctuationType::Minus | 
+                                           PunctuationType::Slash | 
+                                           PunctuationType::Star) => {
                         let res1 = self.ensure_number_for_arithmetic(left, types.0, errors);
                         let res2 = self.ensure_number_for_arithmetic(right, types.1, errors);
 
@@ -168,14 +195,13 @@ impl Analyzer<'_> {
                         }
                     },
                     // TODO: This isn't right, but this will have to do for now
-                    TokenType::Keyword(KeywordType::Or) |
-                    TokenType::Keyword(KeywordType::And) |
-                    TokenType::Punctuation(PunctuationType::EqualEqual) |
-                    TokenType::Punctuation(PunctuationType::BangEqual) |
-                    TokenType::Punctuation(PunctuationType::Greater) |
-                    TokenType::Punctuation(PunctuationType::GreaterEqual) |
-                    TokenType::Punctuation(PunctuationType::Less) |
-                    TokenType::Punctuation(PunctuationType::LessEqual) => Some(StaticType::Boolean),
+                    TokenType::Keyword(KeywordType::Or | KeywordType::And) |
+                    TokenType::Punctuation(PunctuationType::EqualEqual | 
+                                           PunctuationType::BangEqual  |
+                                           PunctuationType::Greater |
+                                           PunctuationType::GreaterEqual |
+                                           PunctuationType::Less |
+                                           PunctuationType::LessEqual) => Some(StaticType::Boolean),
                     _ => {
                         errors.push(self.produce_error(
                             AnalyzerErrorType::InvalidBinaryOperator(operator.clone()),
@@ -259,8 +285,7 @@ impl Analyzer<'_> {
 
                 if let Some(assignee_type) = assignee_type {
                     return match (assignee_type, expression_type) {
-                        (StaticType::Pin, StaticType::PinState) |
-                        (StaticType::Pin, StaticType::PinMode) => Some(expression_type),
+                        (StaticType::Pin, StaticType::PinState | StaticType::PinMode) => Some(expression_type),
                         
                         (t1, t2) if t1 == t2 => Some(t2),
                         
@@ -327,6 +352,10 @@ impl Analyzer<'_> {
         AnalyzerError::new(error_type, locatable, self.source)
     }
 
+    fn produce_error_all_line(&self, error_type: AnalyzerErrorType, line: usize) -> AnalyzerError {
+        AnalyzerError::new_all_line(error_type, line, self.source)
+    }
+
     fn larger_numeric(numeric1: StaticType, numeric2: StaticType) -> StaticType {
         let rank1 = Self::numeric_rank(numeric1);
         let rank2 = Self::numeric_rank(numeric2);
@@ -376,6 +405,28 @@ impl AnalyzerError {
         }
     }
 
+    fn new_all_line(error_type: AnalyzerErrorType, line: usize, source: &str) -> AnalyzerError {
+        let line_len = source
+            .split('\n')
+            .nth(line-1)
+            .expect("Couldn't get line from source (new_all_line)")
+            .len();
+        
+        let location = SourceLocation {
+            line_start: line,
+            line_end: line,
+            start_offset: 0,
+            end_offset: line_len,
+        };
+        
+        AnalyzerError {
+            location: AnalyzerError::get_error_marked_line_location(&location, source),
+            error_type,
+            line_start: location.line_start,
+            line_end: location.line_end,
+        }
+    }
+
     // TODO: Refactor that a bit
     /// Gets a helper string for error displaying with a marker on every second line.
     /// ### Example
@@ -393,7 +444,10 @@ impl AnalyzerError {
     /// the `expression.line_end` numbers. Lines are fetched from `source` string.
     pub fn get_error_marked_line<T: LocatableInSource>(locatable: &T, source: &str) -> String {
         let location = locatable.get_location();
-
+        Self::get_error_marked_line_location(location, source)
+    }
+    
+    pub fn get_error_marked_line_location(location: &SourceLocation, source: &str) -> String {
         let mut result_string = String::new();
         for line_number in location.line_start..=location.line_end {
             let line = source.split('\n').nth(line_number - 1);
@@ -459,7 +513,9 @@ pub enum AnalyzerErrorType {
     MismatchTernary(StaticType, StaticType),
     NonIntegerInFor(StaticType),
     NonNumericType(StaticType),
-    PortNameAlreadyDefined(String)
+    PortNameAlreadyDefined(String),
+    VarDeclarationTypeMismatch(StaticType, StaticType),
+    VarDeclarationMissingTypeAndInit
 }
 
 impl Error for AnalyzerError {}
@@ -494,6 +550,10 @@ impl Display for AnalyzerError {
                 format!("Expected a numeric type (integer or a float), but got '{t}'"),
             AnalyzerErrorType::PortNameAlreadyDefined(identifier) =>
                 format!("Name '{identifier}' is already in use by another port or a variable"),
+            AnalyzerErrorType::VarDeclarationTypeMismatch(t1, t2) =>
+                format!("Type mismatch: variable is of type '{t1}', but initializer is '{t2}'"),
+            AnalyzerErrorType::VarDeclarationMissingTypeAndInit =>
+                "Variable declaration must either specify a type (: Type) or have an initializer (= expr)".to_string(),
         }.red();
 
         // Add tabs to each line of the location so it shifts to the right

@@ -34,9 +34,9 @@ pub enum StaticType {
 
     Float(FloatType),
 
-    /// LOW, HIGH
+    /// `LOW`, `HIGH`
     PinState,
-    /// INPUT, OUTPUT, INPUT_PULLUP, INPUT_PULLDOWN
+    /// `INPUT`, `OUTPUT`, `INPUT_PULLUP`, `INPUT_PULLDOWN`
     PinMode,
 
     Boolean,

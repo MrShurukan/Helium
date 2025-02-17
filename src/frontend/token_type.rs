@@ -1,7 +1,7 @@
-﻿use lazy_static::lazy_static;
+﻿use crate::frontend::static_type::StaticType;
+use lazy_static::lazy_static;
 use std::collections::HashMap;
-use std::fmt::{write, Display, Formatter};
-use crate::frontend::static_type::StaticType;
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
 pub enum TokenType {
