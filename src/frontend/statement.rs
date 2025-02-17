@@ -176,10 +176,16 @@ impl Display for StatementType {
 
 #[derive(Debug)]
 pub struct SingleDefDeclaration {
-    identifier: String,
-    port: PinRef,
-    pin_mode: PinModeConstantType,
-    source_location: SourceLocation,
+    pub identifier: String,
+    pub port: PinRef,
+    pub pin_mode: PinModeConstantType,
+    pub source_location: SourceLocation,
+}
+
+impl LocatableInSource for SingleDefDeclaration {
+    fn get_location(&self) -> &SourceLocation {
+        &self.source_location
+    }
 }
 
 impl SingleDefDeclaration {

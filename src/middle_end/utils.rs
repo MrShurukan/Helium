@@ -17,6 +17,13 @@ impl EnvironmentStack {
             .expect("Environment stack must always have at least one environment")
     }
 
+    fn first(&mut self) -> &mut Environment {
+        self.environments
+            .iter_mut()
+            .nth(0)
+            .expect("Environment stack must always have at least one environment")
+    }
+
     pub fn define(&mut self, name: String, static_type: StaticType) {
         self.last().define(name, static_type);
     }
@@ -34,21 +41,9 @@ impl EnvironmentStack {
         None
     }
 
-    // pub fn assign(&mut self, name: String, static_type: StaticType) -> Result<(), EnvironmentError> {
-    //     for environment in self.environments.iter_mut().rev() {
-    //         // Try to set the value in the current environment
-    //         if environment.values.contains_key(&name) {
-    //             environment.values.insert(name, static_type);
-    //             return Ok(());
-    //         }
-    //         else {
-    //             // If not found, try moving up by one environment
-    //             continue;
-    //         }
-    //     }
-    // 
-    //     Err(EnvironmentError::new(EnvironmentErrorType::UndefinedVariable(name)))
-    // }
+    pub fn define_global(&mut self, name: String, static_type: StaticType) {
+        self.first().define(name, static_type);
+    }
 
     pub fn push_new(&mut self) {
         self.environments.push(Environment::new());

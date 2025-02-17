@@ -1,6 +1,6 @@
 ﻿use lazy_static::lazy_static;
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
+use std::fmt::{write, Display, Formatter};
 
 #[derive(Debug, Clone)]
 pub enum TokenType {
@@ -138,7 +138,9 @@ pub enum StaticType {
 
     Array(&'static StaticType),
     // TODO: Function would need argument types + return type
-    Function
+    Function,
+    // Actual pin, like PortB.2
+    Pin
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -170,7 +172,8 @@ impl Display for StaticType {
             StaticType::Boolean => write!(f, "bool"),
             StaticType::String => write!(f, "string"),
             StaticType::Array(array_type) => write!(f, "Arr<{array_type}>"),
-            StaticType::Function => write!(f, "func"),
+            StaticType::Function => write!(f, "Func"),
+            StaticType::Pin => write!(f, "Pin")
         }
     }
 }

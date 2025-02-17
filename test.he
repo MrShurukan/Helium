@@ -1,16 +1,20 @@
-﻿if false {
-    var a = false;
-    var abcdefg = a = true;
+﻿// Simple LED + Button example
 
-    if abcdefg {
-        var b = 123;
+def {
+    Button = PortD.2 INPUT;
+    Led    = PortC.5 OUTPUT;
+}
+
+setup {
+    var a = Led = LOW;
+}
+
+loop {
+    // Button is pressed when it's connected to GND
+    if Button == LOW {
+        Led = HIGH;
     }
-
-    // Should result in an error
-    b = 123;
-
-    // Should be an error
-    if abc {
-
+    else {
+        Led = LOW;
     }
 }

@@ -257,19 +257,25 @@ impl Analyzer<'_> {
                 let expression_type = self.analyze_expression(expression, errors)?;
 
                 if let Some(assignee_type) = assignee_type {
-                    return if assignee_type == expression_type {
-                        Some(expression_type)
-                    }
-                    else {
-                        errors.push(self.produce_error(
-                            AnalyzerErrorType::AssignmentTypeMismatch {
-                                assignee_type,
-                                assignment_type: expression_type,
-                            },
-                            expression.as_ref()
-                        ));
+                    return match (assignee_type, expression_type) {
+                        (StaticType::Pin, StaticType::PinState) |
+                        (StaticType::Pin, StaticType::PinMode) => Some(expression_type),
+                        
+                        (t1, t2) if t1 == t2 => Some(t2),
+                        
+                        (t1, t2) => {
+                            // TODO: Cast check (i.e. float = int)
+                            
+                            errors.push(self.produce_error(
+                                AnalyzerErrorType::AssignmentTypeMismatch {
+                                    assignee_type,
+                                    assignment_type: expression_type,
+                                },
+                                expression.as_ref()
+                            ));
 
-                        None
+                            None
+                        }
                     }
                 }
 
@@ -292,7 +298,15 @@ impl Analyzer<'_> {
     }
 
     fn analyze_def_declaration(&mut self, declaration: &SingleDefDeclaration, errors: &mut Vec<AnalyzerError>) {
-        todo!("Check ports");
+        if self.environment.get_type(&declaration.identifier).is_some() {
+            errors.push(self.produce_error(
+                AnalyzerErrorType::PortNameAlreadyDefined(declaration.identifier.clone()),
+                declaration
+            ));
+        }
+        else {
+            self.environment.define_global(declaration.identifier.clone(), StaticType::Pin);
+        }
     }
 
     fn try_get_identifier_type(&mut self, identifier: &String, expression: &Expression, errors: &mut Vec<AnalyzerError>) -> Option<StaticType> {
@@ -443,7 +457,8 @@ pub enum AnalyzerErrorType {
     NonBooleanInCondition(StaticType),
     MismatchTernary(StaticType, StaticType),
     NonIntegerInFor(StaticType),
-    NonNumericType(StaticType)
+    NonNumericType(StaticType),
+    PortNameAlreadyDefined(String)
 }
 
 impl Error for AnalyzerError {}
@@ -475,7 +490,9 @@ impl Display for AnalyzerError {
             AnalyzerErrorType::InvalidBinaryOperator(token_type) =>
                 format!("'{token_type:?}' can't be used as a binary operator"),
             AnalyzerErrorType::NonNumericType(t) =>
-                format!("Expected a numeric type (integer or a float), but got '{t}'")
+                format!("Expected a numeric type (integer or a float), but got '{t}'"),
+            AnalyzerErrorType::PortNameAlreadyDefined(identifier) =>
+                format!("Name '{identifier}' is already in use by another port or a variable"),
         }.red();
 
         // Add tabs to each line of the location so it shifts to the right
