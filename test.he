@@ -1,6 +1,25 @@
-﻿var c = 123;
-var a: i64;
+﻿// Simple LED + Button example
+
+def {
+    Button = PortD.2 INPUT;
+    Led    = PortC.5 OUTPUT;
+}
+
+var button2: PinState = HIGH;
+
+setup {
+    Led = LOW;
+    if button2 == 123 {
+        !Wow = 123;
+    }
+}
 
 loop {
-
+    // Button is pressed when it's connected to GND
+    if Button == LOW {
+        Led = HIGH;
+    }
+    else {
+        Led = LOW;
+    }
 }

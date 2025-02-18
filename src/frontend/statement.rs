@@ -44,7 +44,7 @@ impl Statement {
         }
     }
 
-    pub fn new_var_declaration(identifier: Token, static_type: Option<Token>, initializer: Option<Expression>) -> Self {
+    pub fn new_var_declaration(var_keyword: Token, identifier: Token, static_type: Option<Token>, initializer: Option<Expression>) -> Self {
         let TokenType::Literal(LiteralType::Identifier(ident)) = identifier.token_type
         else { unreachable!("Non-identifier passed to var statement") };
         
@@ -67,7 +67,7 @@ impl Statement {
         };
         
         Self {
-            source_location: SourceLocation::new_from_start_end(identifier.source_location, end),
+            source_location: SourceLocation::new_from_start_end(var_keyword.source_location, end),
             statement_type: StatementType::VariableDeclaration { identifier: ident, static_type: st_t, initializer }
         }
     }
