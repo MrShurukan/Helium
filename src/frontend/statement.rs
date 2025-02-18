@@ -30,7 +30,7 @@ pub enum StatementType {
     DefDeclaration(Rc<[SingleDefDeclaration]>),
     SetupDeclaration(Box<Statement>),
     LoopDeclaration(Box<Statement>),
-    Block(Rc<[Statement]>),
+    Block(Vec<Statement>),
     If { condition: Expression, then_body: Box<Statement>, else_body: Option<Box<Statement>> },
     While { condition: Expression, body: Box<Statement> },
     For { identifier: String, from: Expression, to: Expression, body: Box<Statement> }
@@ -100,7 +100,7 @@ impl Statement {
     }
 
     /// `opening_brace` and `closing_brace` are used only to calculate the size of the block
-    pub fn new_block(opening_brace: &Token, closing_brace: &Token, statements: Rc<[Statement]>) -> Self {
+    pub fn new_block(opening_brace: &Token, closing_brace: &Token, statements: Vec<Statement>) -> Self {
         Self {
             source_location: SourceLocation::new_from_start_end(opening_brace.source_location, closing_brace.source_location),
             statement_type: StatementType::Block(statements),

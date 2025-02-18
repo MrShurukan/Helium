@@ -1,6 +1,8 @@
 ﻿use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::ptr::write;
 use colored::Colorize;
+use crate::frontend::static_type::StaticType;
 use crate::frontend::token::Token;
 use crate::frontend::token_type::{LiteralType, PunctuationType, TokenType};
 use crate::frontend::utils::{LocatableInSource, SourceLocation};
@@ -10,6 +12,8 @@ use crate::frontend::utils::{LocatableInSource, SourceLocation};
 pub struct Expression {
     pub expression_type: ExpressionType,
     pub source_location: SourceLocation,
+    // TODO: Comment this
+    pub static_type: StaticType
 }
 
 impl LocatableInSource for Expression {
@@ -40,6 +44,7 @@ impl Expression {
                     identifier: name.to_owned(),
                     expression: Box::new(expression),
                 },
+                static_type: StaticType::Unknown
             }
         }
         else {
@@ -55,6 +60,7 @@ impl Expression {
                 second: Box::new(second),
                 third: Box::new(third)
             },
+            static_type: StaticType::Unknown
         }
     }
 
@@ -66,6 +72,7 @@ impl Expression {
                 operator: operator.token_type.clone(),
                 right: Box::new(right)
             },
+            static_type: StaticType::Unknown
         }
     }
 
@@ -74,6 +81,7 @@ impl Expression {
             Self {
                 source_location: SourceLocation::new_from_start_end(operator.source_location, expression.source_location),
                 expression_type: ExpressionType::Unary { operator: op.to_owned(), right: Box::new(expression) },
+                static_type: StaticType::Unknown
             }
         }
         else {
@@ -86,6 +94,7 @@ impl Expression {
             Self {
                 source_location: token.source_location,
                 expression_type: ExpressionType::Literal { value: literal_type.clone() },
+                static_type: StaticType::Unknown
             }
         }
         else {
@@ -97,6 +106,7 @@ impl Expression {
         Self {
             source_location: token.source_location,
             expression_type: ExpressionType::Literal { value: literal_type },
+            static_type: StaticType::Unknown
         }
     }
 
@@ -109,12 +119,18 @@ impl Expression {
                 end_offset: expression.source_location.end_offset + 1,
             },
             expression_type: ExpressionType::Grouping { expression: Box::new(expression) },
+            static_type: StaticType::Unknown
         }
     }
 }
 
 impl Display for Expression {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.static_type {
+            StaticType::Unknown => write!(f, "{}", format!("{}", self.static_type).red())?,
+            _ => write!(f, "{}", format!("<{}>", self.static_type).yellow())?,
+        }
+
         match &self.expression_type {
             ExpressionType::Binary { left, operator, right } =>
                 write!(f, "{left} {operator:?} {right}"),

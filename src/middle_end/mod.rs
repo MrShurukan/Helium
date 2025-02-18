@@ -1,4 +1,4 @@
-﻿pub mod utils;
+pub mod utils;
 mod environment;
 
 use crate::frontend::expression::{Expression, ExpressionType};
@@ -20,7 +20,7 @@ pub struct Analyzer<'a> {
     /// latest code block. You can access outer environments by moving back from
     /// the end
     environment: &'a mut EnvironmentStack,
-    /// List of errors that will be accumulated during the call of `parse`
+    /// List of errors that will be accumulated during the call of `analyze`
     errors: Vec<AnalyzerError>
 }
 
@@ -29,7 +29,7 @@ impl Analyzer<'_> {
         Analyzer { source, environment: environment_stack, errors: Vec::new() }
     }
 
-    pub fn analyze(mut self, statements: &[Statement]) -> Result<(), Vec<AnalyzerError>> {
+    pub fn analyze(mut self, statements: &mut [Statement]) -> Result<(), Vec<AnalyzerError>> {
         for statement in statements {
             self.analyze_statement(statement);
         }
@@ -42,8 +42,8 @@ impl Analyzer<'_> {
         }
     }
 
-    fn analyze_statement(&mut self, statement: &Statement) {
-        match &statement.statement_type {
+    fn analyze_statement(&mut self, statement: &mut Statement) {
+        match &mut statement.statement_type {
             StatementType::Expression(expr) => {
                 self.analyze_expression(expr);
             },
@@ -89,7 +89,7 @@ impl Analyzer<'_> {
             StatementType::LoopDeclaration(statement) => self.analyze_statement(statement),
             StatementType::Block(statements) => {
                 self.environment.push_new();
-                for statement in statements.iter() {
+                for statement in statements {
                     self.analyze_statement(statement);
                 }
                 self.environment.remove_last().expect("last environment popped");
@@ -148,7 +148,7 @@ impl Analyzer<'_> {
         }
     }
 
-    fn check_condition_boolean(&mut self, condition: &Expression) {
+    fn check_condition_boolean(&mut self, condition: &mut Expression) {
         if let Some(condition_type) = self.analyze_expression(condition) {
             if !matches!(condition_type, StaticType::Boolean) {
                 self.errors.push(self.produce_error(
@@ -159,8 +159,8 @@ impl Analyzer<'_> {
         }
     }
 
-    fn analyze_expression(&mut self, expression: &Expression) -> Option<StaticType> {
-        match &expression.expression_type {
+    fn analyze_expression(&mut self, expression: &mut Expression) -> Option<StaticType> {
+        let static_type = match &mut expression.expression_type {
             ExpressionType::Binary { left, operator, right } => {
                 let types = (self.analyze_expression(left)?, self.analyze_expression(right)?);
                 match operator {
@@ -243,7 +243,7 @@ impl Analyzer<'_> {
             ExpressionType::Grouping { expression } => self.analyze_expression(expression),
             ExpressionType::Literal { value } => {
                 match value {
-                    LiteralType::Identifier(name) => { self.try_get_identifier_type(name, expression) }
+                    LiteralType::Identifier(name) => { self.try_get_identifier_type(name, &expression.source_location) }
                     LiteralType::String(_) => { Some(StaticType::String) }
                     LiteralType::Integer(_) => { Some(StaticType::Integer(IntegerType::Int64)) }
                     LiteralType::Float(_) => { Some(StaticType::Float(FloatType::Float64)) }
@@ -281,11 +281,11 @@ impl Analyzer<'_> {
                 }
             },
             ExpressionType::Assignment { identifier, expression: assign_expr } => {
-                let assignee_type = self.try_get_identifier_type(identifier, expression);
+                let assignee_type = self.try_get_identifier_type(identifier, &expression.source_location);
                 let expression_type = self.analyze_expression(assign_expr)?;
 
                 if let Some(assignee_type) = assignee_type {
-                    return match (assignee_type, expression_type) {
+                    match (assignee_type, expression_type) {
                         (StaticType::Pin, StaticType::PinState | StaticType::PinMode) => Some(expression_type),
                         
                         (t1, t2) if t1 == t2 => Some(t2),
@@ -305,10 +305,17 @@ impl Analyzer<'_> {
                         }
                     }
                 }
-
-                None
+                else {
+                    None
+                }
             }
+        };
+        if let Some(static_type) = static_type {
+            println!("Marking statement with type {}", static_type.to_string().green());
+            expression.static_type = static_type
         }
+        
+        static_type
     }
 
     fn ensure_number_for_arithmetic(&mut self, expression: &Expression, static_type: StaticType) -> Result<(), ()> {
@@ -336,14 +343,14 @@ impl Analyzer<'_> {
         }
     }
 
-    fn try_get_identifier_type<T: LocatableInSource>(&mut self, identifier: &String, locatable: &T) -> Option<StaticType> {
+    fn try_get_identifier_type(&mut self, identifier: &String, source_location: &SourceLocation) -> Option<StaticType> {
         if let Some(t) = self.environment.get_type(identifier) {
             Some(t)
         }
         else {
-            self.errors.push(self.produce_error(
+            self.errors.push(self.produce_error_location(
                 AnalyzerErrorType::IdentifierWasNotDefined(identifier.clone()),
-                locatable
+                source_location
             ));
             None
         }
@@ -351,6 +358,10 @@ impl Analyzer<'_> {
 
     fn produce_error<T: LocatableInSource>(&self, error_type: AnalyzerErrorType, locatable: &T) -> AnalyzerError {
         AnalyzerError::new(error_type, locatable, self.source)
+    }
+
+    fn produce_error_location(&self, error_type: AnalyzerErrorType, location: &SourceLocation) -> AnalyzerError {
+        AnalyzerError::new_location(error_type, location, self.source)
     }
 
     fn produce_error_all_line(&self, error_type: AnalyzerErrorType, line: usize) -> AnalyzerError {
@@ -398,8 +409,12 @@ pub struct AnalyzerError {
 impl AnalyzerError {
     fn new<T: LocatableInSource>(error_type: AnalyzerErrorType, locatable: &T, source: &str) -> AnalyzerError {
         let location = locatable.get_location();
+        Self::new_location(error_type, location, source)
+    }
+    
+    fn new_location(error_type: AnalyzerErrorType, location: &SourceLocation, source: &str) -> AnalyzerError {
         AnalyzerError {
-            location: AnalyzerError::get_error_marked_line(locatable, source),
+            location: AnalyzerError::get_error_marked_line_location(location, source),
             error_type,
             line_start: location.line_start,
             line_end: location.line_end,

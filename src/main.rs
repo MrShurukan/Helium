@@ -28,19 +28,19 @@ fn main() {
         }
     };
 
-    let statements = match parse_source(&contents) {
+    let mut statements = match parse_source(&contents) {
         Ok(statements) => statements,
         Err(errors) => {
             report_errors(&errors, "parser");
         }
     };
 
+    analyze_statements(&contents, &mut statements);
+    
     println!("Statements:");
     for (i, statement) in statements.iter().enumerate() {
         println!("{i}) {statement}");
     }
-
-    analyze_statements(&contents, &statements);
 }
 
 fn read_source_file(file_path: &str) -> Result<String, std::io::Error> {
@@ -48,13 +48,13 @@ fn read_source_file(file_path: &str) -> Result<String, std::io::Error> {
 }
 
 fn parse_source(contents: &str) -> Result<Vec<Statement>, Vec<ParserError>> {
-    let mut parser = Parser::new(contents);
+    let parser = Parser::new(contents);
     parser.parse()
 }
 
-fn analyze_statements(contents: &str, statements: &[Statement]) {
+fn analyze_statements(contents: &str, statements: &mut [Statement]) {
     let mut empty_environment = EnvironmentStack::new();
-    let mut analyzer = Analyzer::new_with_environment(contents, &mut empty_environment);
+    let analyzer = Analyzer::new_with_environment(contents, &mut empty_environment);
 
     if let Err(errors) = analyzer.analyze(statements) {
         report_errors(errors.as_slice(), "analyzer")

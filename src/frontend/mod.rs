@@ -483,7 +483,7 @@ impl Parser<'_> {
             }
         };
         
-        Some(Statement::new_block(&left_brace, right_brace, statements.into()))
+        Some(Statement::new_block(&left_brace, right_brace, statements))
     }
 
     fn expression_statement(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
