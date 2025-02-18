@@ -24,6 +24,7 @@ impl LocatableInSource for Expression {
 
 #[derive(Debug, Clone)]
 pub enum ExpressionType {
+    Identifier(String),
     Binary { left: Box<Expression>, operator: TokenType, right: Box<Expression> },
     Ternary { first: Box<Expression>, second: Box<Expression>, third: Box<Expression> },
     Grouping { expression: Box<Expression> },
@@ -37,7 +38,7 @@ pub enum ExpressionType {
 // I'm not sure of the solution as of right now
 impl Expression {
     pub fn new_assignment(identifier: &Expression, expression: Expression) -> Self {
-        if let ExpressionType::Literal { value: LiteralType::Identifier(name) } = &identifier.expression_type {
+        if let ExpressionType::Identifier(name) = &identifier.expression_type {
             Self {
                 source_location: SourceLocation::new_from_start_end(identifier.source_location, expression.source_location),
                 expression_type: ExpressionType::Assignment {
@@ -110,6 +111,19 @@ impl Expression {
         }
     }
 
+    pub fn new_identifier(token: &Token) -> Self {
+        if let Token { token_type: TokenType::Identifier(name), .. } = token {
+            Self {
+                source_location: token.source_location,
+                expression_type: ExpressionType::Identifier(name.clone()),
+                static_type: StaticType::Unknown
+            }
+        }
+        else {
+            unreachable!("Non-identifier token passed to new_identifier expression function");
+        }
+    }
+
     pub fn new_grouping(expression: Expression) -> Self {
         Self {
             source_location: SourceLocation {
@@ -143,7 +157,9 @@ impl Display for Expression {
             ExpressionType::Unary { operator, right } =>
                 write!(f, "({operator:?} {right})"),
             ExpressionType::Assignment { identifier, expression } =>
-                write!(f, "{identifier} = {expression}")
+                write!(f, "{identifier} = {expression}"),
+            ExpressionType::Identifier(name) =>
+                write!(f, "{name}")
         }
     }
 }

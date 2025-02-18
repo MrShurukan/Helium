@@ -5,6 +5,7 @@ use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
 pub enum TokenType {
+    Identifier(String),
     Literal(LiteralType),
     Port(String),
     // static lifetime, as we will read from KEYWORDS and CONSTANTS HashMaps
@@ -59,9 +60,9 @@ lazy_static! {
 
 #[derive(Debug, Clone)]
 pub enum LiteralType {
-    Identifier(String),
     String(String),
     // You can't read negative integers, this would be read as unary minus + positive integer
+    // This will then be optimized during later stages
     Integer(u64),
     Float(f64),
     Boolean(bool),

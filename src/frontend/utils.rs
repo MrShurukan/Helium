@@ -98,7 +98,7 @@ pub trait LocatableInSource {
     fn get_location(&self) -> &SourceLocation;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct SourceLocation {
     pub line_start: usize,
     pub line_end: usize,

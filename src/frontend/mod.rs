@@ -260,7 +260,7 @@ impl Parser<'_> {
             .clone();
         
         let ident_token = self.advance(tokens)?;
-        if !matches!(ident_token.token_type, TT::Literal(LT::Identifier(_))) {
+        if !matches!(ident_token.token_type, TT::Identifier(_)) {
             self.errors.push(self.missing_token_error("Expected a variable name", tokens));
             return None;
         }
@@ -308,7 +308,7 @@ impl Parser<'_> {
         let token = self.peek(tokens)?;
         match token {
             // Identifier = it's a one-liner
-            Token { token_type: TT::Literal(LT::Identifier(_)), .. } => {
+            Token { token_type: TT::Identifier(_), .. } => {
                 let def_declaration = self.single_def_declaration(tokens)?;
                 Some(Statement::new_def_declaration(Rc::new([def_declaration])))
             },
@@ -357,7 +357,7 @@ impl Parser<'_> {
     }
 
     fn single_def_declaration(&mut self, tokens: &mut TokenIterator) -> Option<SingleDefDeclaration> {
-        let identifier = check_and_consume!(self, tokens, TT::Literal(LT::Identifier(_)), "Expected identifier after this token", use_prev_token).clone();
+        let identifier = check_and_consume!(self, tokens, TT::Identifier(_), "Expected identifier after this token", use_prev_token).clone();
         check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' after an identifier in a def statement");
         let pin_ref = self.pin_ref(tokens)?;
         let pin_mode = check_and_consume!(self, tokens, TT::Constant(CT::PinMode(_)),
@@ -404,7 +404,7 @@ impl Parser<'_> {
 
     fn for_statement(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         let ident_token = self.advance(tokens)?;
-        if !matches!(ident_token.token_type, TT::Literal(LT::Identifier(_))) {
+        if !matches!(ident_token.token_type, TT::Identifier(_)) {
             self.errors.push(self.missing_token_error("Expected identifier after 'for'", tokens));
             return None;
         }
@@ -508,7 +508,7 @@ impl Parser<'_> {
 
         let equals = self.peek(tokens)?;
         if let TT::Punctuation(PT::Equal) = equals.token_type {
-            if let ExpressionType::Literal { value: LT::Identifier(_) } = &l_value.expression_type {
+            if let ExpressionType::Identifier(_) = &l_value.expression_type {
                 tokens.advance();
                 // Assignments are right associative
                 let r_value = self.assignment(tokens)?;
@@ -614,6 +614,7 @@ impl Parser<'_> {
         let token = self.peek(tokens)?.clone();
 
         let result = match token.token_type {
+            TT::Identifier(_) => { Some(Expression::new_identifier(&token)) },
             TT::Literal(_) => { Some(Expression::new_literal(&token)) },
             TT::Constant(CT::Boolean(constant)) => {
                 match constant {

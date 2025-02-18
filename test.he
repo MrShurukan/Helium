@@ -1,27 +1,34 @@
 ﻿// Simple LED + Button example
 
+/* var global: u16 = 123;
+
 def {
     Button = PortD.2 INPUT;
     Led    = PortC.5 OUTPUT;
-}
+} */
 
 setup {
+    /* var a: i32 = 1 + global;
+    var b = 2;
+
+    var optimizeMe = 2 * (a*a) + 3 * (a*b);
+    var optimizeMe2 = 2 * optimizeMe + 35;
+    var optimizeMe3 = 2 * optimizeMe + 12;
+
+    Led = LOW; */
+
+    if true {
     var a = 123;
-    var b = 123.0;
-    var c = a + b;
-
-    var uns: u16 = 123;
-    var sin: i64 = uns + 123;
-
-    Led = LOW;
+    var x = ((a + a) + (a + a) + ((a + a) + (a + a)))
+    }
 }
 
 loop {
-    // Button is pressed when it's connected to GND
+    /*// Button is pressed when it's connected to GND
     if Button == LOW {
         Led = HIGH;
     }
     else {
         Led = LOW;
-    }
+    }*/
 }

@@ -26,6 +26,7 @@ impl LocatableInSource for Statement {
 #[derive(Debug)]
 pub enum StatementType {
     Expression(Expression),
+    /// Static type will always be filled later during semantic analysis 
     VariableDeclaration { identifier: String, static_type: Option<StaticType>, initializer: Option<Expression> },
     DefDeclaration(Rc<[SingleDefDeclaration]>),
     SetupDeclaration(Box<Statement>),
@@ -45,7 +46,7 @@ impl Statement {
     }
 
     pub fn new_var_declaration(var_keyword: Token, identifier: Token, static_type: Option<Token>, initializer: Option<Expression>) -> Self {
-        let TokenType::Literal(LiteralType::Identifier(ident)) = identifier.token_type
+        let TokenType::Identifier(ident) = identifier.token_type
         else { unreachable!("Non-identifier passed to var statement") };
         
         let mut st_t: Option<StaticType> = None;
@@ -134,7 +135,7 @@ impl Statement {
     }
 
     pub fn new_for(identifier: Token, from: Expression, to: Expression, body: Box<Statement>) -> Self {
-        let TokenType::Literal(LiteralType::Identifier(ident)) = identifier.token_type
+        let TokenType::Identifier(ident) = identifier.token_type
         else { unreachable!("Non-identifier passed to for statement") };
 
         Self {
@@ -159,13 +160,13 @@ impl Display for StatementType {
             {
                 match (static_type, initializer) {
                     (Some(st_type), Some(init)) =>
-                        write!(f, "var {identifier}: {st_type} = {init};"),
+                        write!(f, "var {identifier}: {} = {init};", st_type.to_string().yellow()),
                     (Some(st_type), None) =>
-                        write!(f, "var {identifier}: {st_type};"),
+                        write!(f, "var {identifier}: {};", st_type.to_string().yellow()),
                     (None, Some(init)) =>
-                        write!(f, "var {identifier} = {init};"),
+                        write!(f, "{}var {identifier} = {init};", "[no type!]".red()),
                     (None, None) =>
-                        write!(f, "var {identifier};"),
+                        write!(f, "{}var {identifier};", "[no type!]".red()),
                 }   
             },
             StatementType::DefDeclaration(declarations) => {
@@ -221,7 +222,7 @@ impl LocatableInSource for SingleDefDeclaration {
 impl SingleDefDeclaration {
     // TODO: Figure out a cleaner way with these if lets...
     pub fn new(identifier: Token, port: PinRef, pin_mode: Token) -> Result<SingleDefDeclaration, DefDeclarationError> {
-        if let TokenType::Literal(LiteralType::Identifier(ident)) = identifier.token_type {
+        if let TokenType::Identifier(ident) = identifier.token_type {
             if let TokenType::Constant(ConstantType::PinMode(pin)) = pin_mode.token_type {
                 Ok(SingleDefDeclaration {
                     source_location: SourceLocation::new_from_start_end(identifier.source_location, pin_mode.source_location),

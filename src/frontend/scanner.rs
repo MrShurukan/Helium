@@ -312,7 +312,7 @@ impl Scanner<'_> {
             Ok(Self::produce_token(TokenType::Port(port_name.unwrap().to_owned()), position_info))
         }
         else {
-            Ok(Self::produce_token(TokenType::Literal(LiteralType::Identifier(lexeme)), position_info))
+            Ok(Self::produce_token(TokenType::Identifier(lexeme), position_info))
         }
     }
 

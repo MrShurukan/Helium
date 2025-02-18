@@ -49,7 +49,7 @@ impl Analyzer<'_> {
                 self.analyze_expression(expr);
             },
             StatementType::VariableDeclaration { identifier, static_type, initializer } => {
-                match (static_type, initializer) {
+                match (&static_type, initializer) {
                     (Some(static_type), Some(initializer)) => {
                         self.environment.define(identifier.clone(), *static_type);
                         if let Some(expression_type) = self.analyze_expression(initializer) {
@@ -74,6 +74,7 @@ impl Analyzer<'_> {
                                     expression_type = StaticType::Float(FloatType::Float32),
                                 _ => {}
                             };
+                            *static_type = Some(expression_type);
                             self.environment.define(identifier.clone(), expression_type);
                         }
                         else {
@@ -250,9 +251,9 @@ impl Analyzer<'_> {
                 None
             },
             ExpressionType::Grouping { expression } => self.analyze_expression(expression),
+            ExpressionType::Identifier(name) => self.try_get_identifier_type(name, &expression.source_location),
             ExpressionType::Literal { value } => {
                 match value {
-                    LiteralType::Identifier(name) => { self.try_get_identifier_type(name, &expression.source_location) }
                     LiteralType::String(_) => { Some(StaticType::String) }
                     LiteralType::Integer(_) => { Some(StaticType::Integer(IntegerType::Literal)) }
                     LiteralType::Float(_) => { Some(StaticType::Float(FloatType::Literal)) }
