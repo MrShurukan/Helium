@@ -9,7 +9,8 @@ use crate::middle_end::utils::EnvironmentStack;
 use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use crate::frontend::static_type::{FloatType, IntegerType, StaticType};
+use lazy_static::lazy_static;
+use crate::frontend::static_type::{FloatType, IntegerType, SignedIntegerType, StaticType, UnsignedIntegerType};
 
 /// Semantic Analyzer is responsible for statically checking the language and figuring out
 /// incorrect operations, like type mismatches, incorrect assignments, variable scopes, etc.
@@ -52,7 +53,7 @@ impl Analyzer<'_> {
                     (Some(static_type), Some(initializer)) => {
                         self.environment.define(identifier.clone(), *static_type);
                         if let Some(expression_type) = self.analyze_expression(initializer) {
-                            if expression_type != *static_type {
+                            if !Self::can_implicitly_cast(expression_type, *static_type) {
                                 self.errors.push(self.produce_error(
                                     AnalyzerErrorType::VarDeclarationTypeMismatch(*static_type, expression_type),
                                     initializer
@@ -64,7 +65,15 @@ impl Analyzer<'_> {
                         self.environment.define(identifier.clone(), *static_type);
                     },
                     (None, Some(initializer)) => {
-                        if let Some(expression_type) = self.analyze_expression(initializer) {
+                        if let Some(mut expression_type) = self.analyze_expression(initializer) {
+                            // If there is no explicit type - literals are counted as i32 and f32.
+                            match expression_type {
+                                StaticType::Integer(IntegerType::Literal) =>
+                                    expression_type = StaticType::Integer(IntegerType::Signed(SignedIntegerType::Int32)),
+                                StaticType::Float(FloatType::Literal) =>
+                                    expression_type = StaticType::Float(FloatType::Float32),
+                                _ => {}
+                            };
                             self.environment.define(identifier.clone(), expression_type);
                         }
                         else {
@@ -174,11 +183,11 @@ impl Analyzer<'_> {
                             let res1 = self.ensure_number_for_arithmetic(left, types.0);
                             let res2 = self.ensure_number_for_arithmetic(right, types.1);
 
-                            if res1.is_err() || res2.is_err() {
+                            if !res1 || !res2 {
                                 None
                             }
                             else {
-                                Some(Self::larger_numeric(types.0, types.1))
+                                Self::larger_numeric(types.0, types.1)
                             }
                         }
                     },
@@ -188,11 +197,11 @@ impl Analyzer<'_> {
                         let res1 = self.ensure_number_for_arithmetic(left, types.0);
                         let res2 = self.ensure_number_for_arithmetic(right, types.1);
 
-                        if res1.is_err() || res2.is_err() {
+                        if !res1 || !res2 {
                             None
                         }
                         else {
-                            Some(Self::larger_numeric(types.0, types.1))
+                            Self::larger_numeric(types.0, types.1)
                         }
                     },
                     // TODO: This isn't right, but this will have to do for now
@@ -245,8 +254,8 @@ impl Analyzer<'_> {
                 match value {
                     LiteralType::Identifier(name) => { self.try_get_identifier_type(name, &expression.source_location) }
                     LiteralType::String(_) => { Some(StaticType::String) }
-                    LiteralType::Integer(_) => { Some(StaticType::Integer(IntegerType::Int64)) }
-                    LiteralType::Float(_) => { Some(StaticType::Float(FloatType::Float64)) }
+                    LiteralType::Integer(_) => { Some(StaticType::Integer(IntegerType::Literal)) }
+                    LiteralType::Float(_) => { Some(StaticType::Float(FloatType::Literal)) }
                     LiteralType::Boolean(_) => { Some(StaticType::Boolean) }
                     LiteralType::PinMode(_) => { Some(StaticType::PinMode) }
                     LiteralType::PinState(_) => { Some(StaticType::PinState) }
@@ -291,17 +300,21 @@ impl Analyzer<'_> {
                         (t1, t2) if t1 == t2 => Some(t2),
                         
                         (t1, t2) => {
-                            // TODO: Cast check (i.e. float = int)
-                            
-                            self.errors.push(self.produce_error(
-                                AnalyzerErrorType::AssignmentTypeMismatch {
-                                    assignee_type,
-                                    assignment_type: expression_type,
-                                },
-                                assign_expr.as_ref()
-                            ));
+                            // Safe cast check (i.e. float = int)
+                            if Self::can_implicitly_cast(t2, t1) {
+                                Some(t1)
+                            }
+                            else {
+                                self.errors.push(self.produce_error(
+                                    AnalyzerErrorType::AssignmentTypeMismatch {
+                                        assignee_type,
+                                        assignment_type: expression_type,
+                                    },
+                                    assign_expr.as_ref()
+                                ));
 
-                            None
+                                None
+                            }
                         }
                     }
                 }
@@ -310,23 +323,35 @@ impl Analyzer<'_> {
                 }
             }
         };
+        
         if let Some(static_type) = static_type {
-            println!("Marking statement with type {}", static_type.to_string().green());
+            if let StaticType::Unknown = static_type {
+                self.errors.push(self.produce_error(
+                    AnalyzerErrorType::UnknownTypeAssignedToExpression,
+                    expression
+                ));
+            }
             expression.static_type = static_type
         }
-        
+        else {
+            self.errors.push(self.produce_error(
+                AnalyzerErrorType::UnknownTypeAssignedToExpression,
+                expression
+            ));
+        }
+
         static_type
     }
 
-    fn ensure_number_for_arithmetic(&mut self, expression: &Expression, static_type: StaticType) -> Result<(), ()> {
+    fn ensure_number_for_arithmetic(&mut self, expression: &Expression, static_type: StaticType) -> bool {
         match static_type {
-            StaticType::Integer(_) | StaticType::Float(_) => { Ok(())}
+            StaticType::Integer(_) | StaticType::Float(_) => { true }
             _ => {
                 self.errors.push(self.produce_error(
                     AnalyzerErrorType::NonNumericType(static_type),
                     expression
                 ));
-                Err(())
+                false
             }
         }
     }
@@ -368,35 +393,87 @@ impl Analyzer<'_> {
         AnalyzerError::new_all_line(error_type, line, self.source)
     }
 
-    fn larger_numeric(numeric1: StaticType, numeric2: StaticType) -> StaticType {
-        let rank1 = Self::numeric_rank(numeric1);
-        let rank2 = Self::numeric_rank(numeric2);
+    fn larger_numeric(numeric1: StaticType, numeric2: StaticType) -> Option<StaticType> {
+        if Self::can_implicitly_cast(numeric1, numeric2) {
+            Some(numeric2)
+        }
+        else if Self::can_implicitly_cast(numeric2, numeric1) {
+            Some(numeric1)
+        }
+        else {
+            None
+        }
+    }
+    
+    fn can_implicitly_cast(cast_from: StaticType, cast_to: StaticType) -> bool {
+        // Just in case - if types match then cast is also allowed
+        if cast_from == cast_to { return true; }
 
-        // Return the larger ranked type
-        if rank1 >= rank2 {
-            numeric1
-        } else {
-            numeric2
+        // Implicit casts only work for numerical types right now
+        if !matches!(cast_from, StaticType::Integer(_) | StaticType::Float(_)) ||
+            !matches!(cast_to, StaticType::Integer(_) | StaticType::Float(_)) {
+            return false;
+        }
+        
+        match (cast_from, cast_to) {
+            // Integer to Float
+            (StaticType::Integer(_), StaticType::Float(_)) => true,
+
+            // Float to Float (only widening allowed)
+            (StaticType::Float(FloatType::Float32), StaticType::Float(FloatType::Float64)) => true,
+            (StaticType::Float(FloatType::Literal), StaticType::Float(_)) => true,
+            (StaticType::Float(_), StaticType::Float(_)) => false,
+
+            // Integer to Integer
+            (StaticType::Integer(IntegerType::Signed(from)), StaticType::Integer(IntegerType::Signed(to))) => {
+                Self::signed_integer_widening(from, to)
+            }
+            (StaticType::Integer(IntegerType::Unsigned(from)), StaticType::Integer(IntegerType::Unsigned(to))) => {
+                Self::unsigned_integer_widening(from, to)
+            }
+            (StaticType::Integer(IntegerType::Unsigned(from)), StaticType::Integer(IntegerType::Signed(to))) => {
+                Self::unsigned_to_signed_widening(from, to)
+            }
+            
+            // Integer Literals
+            // TODO: Check for boundaries! Values may overflow/underflow
+            (StaticType::Integer(IntegerType::Literal), StaticType::Integer(_)) => true,
+
+            // Other cases
+            _ => false,
         }
     }
 
-    fn numeric_rank(typ: StaticType) -> u8 {
-        match typ {
-            StaticType::Float(FloatType::Float64) => 9,
-            StaticType::Float(FloatType::Float32) => 8,
-            StaticType::Integer(IntegerType::Int64) => 7,
-            StaticType::Integer(IntegerType::Int32) => 6,
-            StaticType::Integer(IntegerType::Int16) => 5,
-            StaticType::Integer(IntegerType::Int8) => 4,
-            StaticType::Integer(IntegerType::Uns64) => 3,
-            StaticType::Integer(IntegerType::Uns32) => 2,
-            StaticType::Integer(IntegerType::Uns16) => 1,
-            StaticType::Integer(IntegerType::Uns8) => 0,
-            _ => panic!("Non-numeric type passed to numeric_rank function (larger_numeric)")
-        }
+    fn signed_integer_widening(from: SignedIntegerType, to: SignedIntegerType) -> bool {
+        matches!((from, to),
+            (SignedIntegerType::Int8, SignedIntegerType::Int16)
+                | (SignedIntegerType::Int8, SignedIntegerType::Int32)
+                | (SignedIntegerType::Int8, SignedIntegerType::Int64)
+                | (SignedIntegerType::Int16, SignedIntegerType::Int32)
+                | (SignedIntegerType::Int16, SignedIntegerType::Int64)
+                | (SignedIntegerType::Int32, SignedIntegerType::Int64))
+    }
+
+    fn unsigned_integer_widening(from: UnsignedIntegerType, to: UnsignedIntegerType) -> bool {
+        matches!((from, to),
+            (UnsignedIntegerType::Uns8, UnsignedIntegerType::Uns16)
+                | (UnsignedIntegerType::Uns8, UnsignedIntegerType::Uns32)
+                | (UnsignedIntegerType::Uns8, UnsignedIntegerType::Uns64)
+                | (UnsignedIntegerType::Uns16, UnsignedIntegerType::Uns32)
+                | (UnsignedIntegerType::Uns16, UnsignedIntegerType::Uns64)
+                | (UnsignedIntegerType::Uns32, UnsignedIntegerType::Uns64))
+    }
+
+    fn unsigned_to_signed_widening(from: UnsignedIntegerType, to: SignedIntegerType) -> bool {
+        matches!((from, to),
+                | (UnsignedIntegerType::Uns8, SignedIntegerType::Int16)
+                | (UnsignedIntegerType::Uns8, SignedIntegerType::Int32)
+                | (UnsignedIntegerType::Uns8, SignedIntegerType::Int64)
+                | (UnsignedIntegerType::Uns16, SignedIntegerType::Int32)
+                | (UnsignedIntegerType::Uns16, SignedIntegerType::Int64)
+                | (UnsignedIntegerType::Uns32, SignedIntegerType::Int64))
     }
 }
-
 
 #[derive(Debug)]
 pub struct AnalyzerError {
@@ -411,7 +488,7 @@ impl AnalyzerError {
         let location = locatable.get_location();
         Self::new_location(error_type, location, source)
     }
-    
+
     fn new_location(error_type: AnalyzerErrorType, location: &SourceLocation, source: &str) -> AnalyzerError {
         AnalyzerError {
             location: AnalyzerError::get_error_marked_line_location(location, source),
@@ -531,7 +608,8 @@ pub enum AnalyzerErrorType {
     NonNumericType(StaticType),
     PortNameAlreadyDefined(String),
     VarDeclarationTypeMismatch(StaticType, StaticType),
-    VarDeclarationMissingTypeAndInit
+    VarDeclarationMissingTypeAndInit,
+    UnknownTypeAssignedToExpression
 }
 
 impl Error for AnalyzerError {}
@@ -549,7 +627,7 @@ impl Display for AnalyzerError {
             AnalyzerErrorType::InvalidAssignmentTarget(name) =>
                 format!("Cannot assign to '{name}'"),
             AnalyzerErrorType::AssignmentTypeMismatch { assignee_type, assignment_type } =>
-                format!("Type mismatch: cannot assign '{assignment_type}' to '{assignee_type}'"),
+                format!("Type mismatch: cannot assign '{assignment_type}' to '{assignee_type}' (maybe use an explicit cast?)"),
             AnalyzerErrorType::InvalidUnaryOperator(punctuation) =>
                 format!("Invalid unary operator: {punctuation}"),
             AnalyzerErrorType::WrongTypeUnaryOperator(p, t) =>
@@ -567,9 +645,11 @@ impl Display for AnalyzerError {
             AnalyzerErrorType::PortNameAlreadyDefined(identifier) =>
                 format!("Name '{identifier}' is already in use by another port or a variable"),
             AnalyzerErrorType::VarDeclarationTypeMismatch(t1, t2) =>
-                format!("Type mismatch: variable is of type '{t1}', but initializer is '{t2}'"),
+                format!("Type mismatch: variable is of type '{t1}', but initializer is '{t2}' (maybe use an explicit cast?)"),
             AnalyzerErrorType::VarDeclarationMissingTypeAndInit =>
                 "Variable declaration must either specify a type (: Type) or have an initializer (= expr)".to_string(),
+            AnalyzerErrorType::UnknownTypeAssignedToExpression =>
+                "Internal error occured. Wasn't able to evaluate this expression. This is an internal compiler bug".to_string(),
         }.red();
 
         // Add tabs to each line of the location so it shifts to the right

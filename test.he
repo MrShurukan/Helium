@@ -6,6 +6,13 @@ def {
 }
 
 setup {
+    var a = 123;
+    var b = 123.0;
+    var c = a + b;
+
+    var uns: u16 = 123;
+    var sin: i64 = uns + 123;
+
     Led = LOW;
 }
 
