@@ -5,13 +5,8 @@ def {
     Led    = PortC.5 OUTPUT;
 }
 
-var button2: PinState = HIGH;
-
 setup {
     Led = LOW;
-    if button2 == 123 {
-        !Wow = 123;
-    }
 }
 
 loop {

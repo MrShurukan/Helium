@@ -28,6 +28,7 @@ pub mod static_type;
 pub struct Parser<'a> {
     /// Reference to an original string to point out errors with a location
     pub source: &'a str,
+    /// List of errors that will be accumulated during the call of `parse`
     errors: Vec<ParserError>
 }
 

@@ -19,40 +19,41 @@ pub struct Analyzer<'a> {
     /// Environment stack. The latest environment on the stack represents the
     /// latest code block. You can access outer environments by moving back from
     /// the end
-    environment: &'a mut EnvironmentStack
+    environment: &'a mut EnvironmentStack,
+    /// List of errors that will be accumulated during the call of `parse`
+    errors: Vec<AnalyzerError>
 }
 
 impl Analyzer<'_> {
     pub fn new_with_environment<'a>(source: &'a str, environment_stack: &'a mut EnvironmentStack) -> Analyzer<'a> {
-        Analyzer { source, environment: environment_stack }
+        Analyzer { source, environment: environment_stack, errors: Vec::new() }
     }
 
-    pub fn analyze(&mut self, statements: &[Statement]) -> Result<(), Vec<AnalyzerError>> {
-        let mut errors: Vec<AnalyzerError> = Vec::new();
+    pub fn analyze(mut self, statements: &[Statement]) -> Result<(), Vec<AnalyzerError>> {
         for statement in statements {
-            self.analyze_statement(statement, &mut errors);
+            self.analyze_statement(statement);
         }
 
-        if errors.is_empty() {
+        if self.errors.is_empty() {
             Ok(())
         }
         else {
-            Err(errors)
+            Err(self.errors)
         }
     }
 
-    fn analyze_statement(&mut self, statement: &Statement, errors: &mut Vec<AnalyzerError>) {
+    fn analyze_statement(&mut self, statement: &Statement) {
         match &statement.statement_type {
             StatementType::Expression(expr) => {
-                self.analyze_expression(expr, errors);
+                self.analyze_expression(expr);
             },
             StatementType::VariableDeclaration { identifier, static_type, initializer } => {
                 match (static_type, initializer) {
                     (Some(static_type), Some(initializer)) => {
                         self.environment.define(identifier.clone(), *static_type);
-                        if let Some(expression_type) = self.analyze_expression(initializer, errors) {
+                        if let Some(expression_type) = self.analyze_expression(initializer) {
                             if expression_type != *static_type {
-                                errors.push(self.produce_error(
+                                self.errors.push(self.produce_error(
                                     AnalyzerErrorType::VarDeclarationTypeMismatch(*static_type, expression_type),
                                     initializer
                                 ));
@@ -63,7 +64,7 @@ impl Analyzer<'_> {
                         self.environment.define(identifier.clone(), *static_type);
                     },
                     (None, Some(initializer)) => {
-                        if let Some(expression_type) = self.analyze_expression(initializer, errors) {
+                        if let Some(expression_type) = self.analyze_expression(initializer) {
                             self.environment.define(identifier.clone(), expression_type);
                         }
                         else {
@@ -72,7 +73,7 @@ impl Analyzer<'_> {
                     },
                     (None, None) => {
                         self.environment.define(identifier.clone(), StaticType::Unknown);
-                        errors.push(self.produce_error_all_line(
+                        self.errors.push(self.produce_error_all_line(
                             AnalyzerErrorType::VarDeclarationMissingTypeAndInit,
                             statement.source_location.line_start
                         ));
@@ -81,41 +82,41 @@ impl Analyzer<'_> {
             },
             StatementType::DefDeclaration(declarations) => {
                 for declaration in declarations.iter() {
-                    self.analyze_def_declaration(declaration, errors);
+                    self.analyze_def_declaration(declaration);
                 }
             },
             StatementType::SetupDeclaration(statement) |
-            StatementType::LoopDeclaration(statement) => self.analyze_statement(statement, errors),
+            StatementType::LoopDeclaration(statement) => self.analyze_statement(statement),
             StatementType::Block(statements) => {
                 self.environment.push_new();
                 for statement in statements.iter() {
-                    self.analyze_statement(statement, errors);
+                    self.analyze_statement(statement);
                 }
                 self.environment.remove_last().expect("last environment popped");
             },
             StatementType::If { condition, then_body, else_body } => {
-                self.check_condition_boolean(errors, condition);
+                self.check_condition_boolean(condition);
 
-                self.analyze_statement(then_body, errors);
+                self.analyze_statement(then_body);
                 if let Some(else_body) = else_body {
-                    self.analyze_statement(else_body, errors);
+                    self.analyze_statement(else_body);
                 }
             },
             StatementType::While { condition, body } => {
-                self.check_condition_boolean(errors, condition);
+                self.check_condition_boolean(condition);
 
-                self.analyze_statement(body, errors);
+                self.analyze_statement(body);
             },
             StatementType::For { identifier, from, to, body } => {
-                let from_type = self.analyze_expression(from, errors);
-                let to_type = self.analyze_expression(to, errors);
+                let from_type = self.analyze_expression(from);
+                let to_type = self.analyze_expression(to);
 
                 let mut error_happened = false;
                 let mut identifier_type = None;
 
                 if let Some(from_type) = from_type {
                     if !matches!(from_type, StaticType::Integer(_)) {
-                        errors.push(self.produce_error(
+                        self.errors.push(self.produce_error(
                             AnalyzerErrorType::NonIntegerInFor(from_type),
                             from
                         ));
@@ -126,7 +127,7 @@ impl Analyzer<'_> {
 
                 if let Some(to_type) = to_type {
                     if !matches!(to_type, StaticType::Integer(_)) {
-                        errors.push(self.produce_error(
+                        self.errors.push(self.produce_error(
                             AnalyzerErrorType::NonIntegerInFor(to_type),
                             from
                         ));
@@ -142,15 +143,15 @@ impl Analyzer<'_> {
                     self.environment.define(identifier.clone(), identifier_type);
                 }
 
-                self.analyze_statement(body, errors);
+                self.analyze_statement(body);
             },
         }
     }
 
-    fn check_condition_boolean(&mut self, errors: &mut Vec<AnalyzerError>, condition: &Expression) {
-        if let Some(condition_type) = self.analyze_expression(condition, errors) {
+    fn check_condition_boolean(&mut self, condition: &Expression) {
+        if let Some(condition_type) = self.analyze_expression(condition) {
             if !matches!(condition_type, StaticType::Boolean) {
-                errors.push(self.produce_error(
+                self.errors.push(self.produce_error(
                     AnalyzerErrorType::NonBooleanInCondition(condition_type),
                     condition
                 ));
@@ -158,10 +159,10 @@ impl Analyzer<'_> {
         }
     }
 
-    fn analyze_expression(&mut self, expression: &Expression, errors: &mut Vec<AnalyzerError>) -> Option<StaticType> {
+    fn analyze_expression(&mut self, expression: &Expression) -> Option<StaticType> {
         match &expression.expression_type {
             ExpressionType::Binary { left, operator, right } => {
-                let types = (self.analyze_expression(left, errors)?, self.analyze_expression(right, errors)?);
+                let types = (self.analyze_expression(left)?, self.analyze_expression(right)?);
                 match operator {
                     TokenType::Punctuation(PunctuationType::Plus) => {
                         // Concat
@@ -170,8 +171,8 @@ impl Analyzer<'_> {
                             Some(StaticType::String)
                         }
                         else {
-                            let res1 = self.ensure_number_for_arithmetic(left, types.0, errors);
-                            let res2 = self.ensure_number_for_arithmetic(right, types.1, errors);
+                            let res1 = self.ensure_number_for_arithmetic(left, types.0);
+                            let res2 = self.ensure_number_for_arithmetic(right, types.1);
 
                             if res1.is_err() || res2.is_err() {
                                 None
@@ -184,8 +185,8 @@ impl Analyzer<'_> {
                     TokenType::Punctuation(PunctuationType::Minus | 
                                            PunctuationType::Slash | 
                                            PunctuationType::Star) => {
-                        let res1 = self.ensure_number_for_arithmetic(left, types.0, errors);
-                        let res2 = self.ensure_number_for_arithmetic(right, types.1, errors);
+                        let res1 = self.ensure_number_for_arithmetic(left, types.0);
+                        let res2 = self.ensure_number_for_arithmetic(right, types.1);
 
                         if res1.is_err() || res2.is_err() {
                             None
@@ -203,7 +204,7 @@ impl Analyzer<'_> {
                                            PunctuationType::Less |
                                            PunctuationType::LessEqual) => Some(StaticType::Boolean),
                     _ => {
-                        errors.push(self.produce_error(
+                        self.errors.push(self.produce_error(
                             AnalyzerErrorType::InvalidBinaryOperator(operator.clone()),
                             expression
                         ));
@@ -212,24 +213,24 @@ impl Analyzer<'_> {
                 }
             },
             ExpressionType::Ternary { first, second, third } => {
-                let first_type = self.analyze_expression(first, errors);
+                let first_type = self.analyze_expression(first);
                 if let Some(first_type) = first_type {
                     if !matches!(first_type, StaticType::Boolean) {
-                        errors.push(self.produce_error(
+                        self.errors.push(self.produce_error(
                             AnalyzerErrorType::NonBooleanInCondition(first_type),
                             first.as_ref()
                         ));
                     }
                 }
 
-                let second_type = self.analyze_expression(second, errors);
-                let third_type = self.analyze_expression(third, errors);
+                let second_type = self.analyze_expression(second);
+                let third_type = self.analyze_expression(third);
 
                 if let (Some(second_type), Some(third_type)) = (second_type, third_type) {
                     return if second_type == third_type {
                         Some(second_type)
                     } else {
-                        errors.push(self.produce_error(
+                        self.errors.push(self.produce_error(
                             AnalyzerErrorType::MismatchTernary(second_type, third_type),
                             expression
                         ));
@@ -239,10 +240,10 @@ impl Analyzer<'_> {
 
                 None
             },
-            ExpressionType::Grouping { expression } => self.analyze_expression(expression, errors),
+            ExpressionType::Grouping { expression } => self.analyze_expression(expression),
             ExpressionType::Literal { value } => {
                 match value {
-                    LiteralType::Identifier(name) => { self.try_get_identifier_type(name, expression, errors) }
+                    LiteralType::Identifier(name) => { self.try_get_identifier_type(name, expression) }
                     LiteralType::String(_) => { Some(StaticType::String) }
                     LiteralType::Integer(_) => { Some(StaticType::Integer(IntegerType::Int64)) }
                     LiteralType::Float(_) => { Some(StaticType::Float(FloatType::Float64)) }
@@ -255,11 +256,11 @@ impl Analyzer<'_> {
                 match operator {
                     PunctuationType::Bang => Some(StaticType::Boolean),
                     PunctuationType::Minus => {
-                        let right_type = self.analyze_expression(right, errors)?;
+                        let right_type = self.analyze_expression(right)?;
                         match right_type {
                             StaticType::Integer(_) | StaticType::Float(_) => Some(right_type),
                             t => {
-                                errors.push(self.produce_error(
+                                self.errors.push(self.produce_error(
                                     AnalyzerErrorType::WrongTypeUnaryOperator(operator.clone(), t),
                                     right.as_ref()
                                 ));
@@ -270,7 +271,7 @@ impl Analyzer<'_> {
                     },
 
                     _ => {
-                        errors.push(self.produce_error(
+                        self.errors.push(self.produce_error(
                             AnalyzerErrorType::InvalidUnaryOperator(operator.clone()),
                             expression
                         ));
@@ -279,9 +280,9 @@ impl Analyzer<'_> {
                     }
                 }
             },
-            ExpressionType::Assignment { identifier, expression } => {
-                let assignee_type = self.try_get_identifier_type(identifier, expression, errors);
-                let expression_type = self.analyze_expression(expression, errors)?;
+            ExpressionType::Assignment { identifier, expression: assign_expr } => {
+                let assignee_type = self.try_get_identifier_type(identifier, expression);
+                let expression_type = self.analyze_expression(assign_expr)?;
 
                 if let Some(assignee_type) = assignee_type {
                     return match (assignee_type, expression_type) {
@@ -292,12 +293,12 @@ impl Analyzer<'_> {
                         (t1, t2) => {
                             // TODO: Cast check (i.e. float = int)
                             
-                            errors.push(self.produce_error(
+                            self.errors.push(self.produce_error(
                                 AnalyzerErrorType::AssignmentTypeMismatch {
                                     assignee_type,
                                     assignment_type: expression_type,
                                 },
-                                expression.as_ref()
+                                assign_expr.as_ref()
                             ));
 
                             None
@@ -310,11 +311,11 @@ impl Analyzer<'_> {
         }
     }
 
-    fn ensure_number_for_arithmetic(&self, expression: &Expression, static_type: StaticType, errors: &mut Vec<AnalyzerError>) -> Result<(), ()> {
+    fn ensure_number_for_arithmetic(&mut self, expression: &Expression, static_type: StaticType) -> Result<(), ()> {
         match static_type {
             StaticType::Integer(_) | StaticType::Float(_) => { Ok(())}
             _ => {
-                errors.push(self.produce_error(
+                self.errors.push(self.produce_error(
                     AnalyzerErrorType::NonNumericType(static_type),
                     expression
                 ));
@@ -323,9 +324,9 @@ impl Analyzer<'_> {
         }
     }
 
-    fn analyze_def_declaration(&mut self, declaration: &SingleDefDeclaration, errors: &mut Vec<AnalyzerError>) {
+    fn analyze_def_declaration(&mut self, declaration: &SingleDefDeclaration) {
         if self.environment.get_type(&declaration.identifier).is_some() {
-            errors.push(self.produce_error(
+            self.errors.push(self.produce_error(
                 AnalyzerErrorType::PortNameAlreadyDefined(declaration.identifier.clone()),
                 declaration
             ));
@@ -335,14 +336,14 @@ impl Analyzer<'_> {
         }
     }
 
-    fn try_get_identifier_type(&mut self, identifier: &String, expression: &Expression, errors: &mut Vec<AnalyzerError>) -> Option<StaticType> {
+    fn try_get_identifier_type<T: LocatableInSource>(&mut self, identifier: &String, locatable: &T) -> Option<StaticType> {
         if let Some(t) = self.environment.get_type(identifier) {
             Some(t)
         }
         else {
-            errors.push(self.produce_error(
+            self.errors.push(self.produce_error(
                 AnalyzerErrorType::IdentifierWasNotDefined(identifier.clone()),
-                expression
+                locatable
             ));
             None
         }
