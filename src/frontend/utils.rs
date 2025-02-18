@@ -31,7 +31,8 @@ pub struct TokenIterator<'a> {
     tokens: &'a [Token],
     iter: Peekable<Iter<'a, Token>>,
     index: usize,
-    repeated_peek_count: usize,
+    /// Holds how many times current token was peeked
+    pub repeated_peek_count: usize,
     last_peeked_index: Option<usize>
 }
 
@@ -84,6 +85,13 @@ impl TokenIterator<'_> {
 
         self.last_peeked_index = Some(self.index);
         peeked
+    }
+    
+    /// This is the nuke button. If called token iterator will march until the end, effectively
+    /// running out of tokens immediately. Useful as a "get-me-out-of-parser" measure (i.e. infinite
+    /// loop detection)
+    pub fn invalidate(&mut self) {
+        while let Some(_) = self.iter.next() {}
     }
     
     pub fn previous(&self) -> Option<&Token> {

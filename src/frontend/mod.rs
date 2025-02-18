@@ -319,7 +319,7 @@ impl Parser<'_> {
                 
                 let mut def_declarations: Vec<SingleDefDeclaration> = Vec::new();
                 loop {
-                    let next_token = tokens.peek();
+                    let next_token = self.peek(tokens);
                     if next_token.is_none() {
                         self.errors.push(self.get_error_marked_line(
                             ParserErrorType::UnclosedDefBlock,
@@ -631,7 +631,7 @@ impl Parser<'_> {
             TT::Punctuation(PT::LeftParen) => {
                 tokens.advance();
                 let expr = self.expression(tokens)?;
-                let next_token = tokens.peek();
+                let next_token = self.peek(tokens);
                 if next_token.is_none() {
                     self.errors.push(self.get_error_marked_line(
                         ParserErrorType::UnclosedParenthesis, token
@@ -656,13 +656,13 @@ impl Parser<'_> {
             _ => { None }
         };
 
-        if result.is_some() { tokens.advance(); }
-        else {
+        if result.is_none() {
             self.errors.push(
                 self.get_error_marked_line(ParserErrorType::IncorrectToken(String::new()), token.clone())
             );
         }
-        
+
+        tokens.advance();
         result
     }
 
@@ -671,7 +671,27 @@ impl Parser<'_> {
     /// A helper wrapper around `tokens.peek()` function.
     /// Appends an error if peeking yielded no results
     fn peek<'a>(&mut self, tokens: &'a mut TokenIterator) -> Option<&'a Token> {
+        // Infinite loop prevention
+        // This shouldn't happen in production, but it helps in development as it spits out errors
+        // instead of hanging forever
+        if tokens.repeated_peek_count > 1000 {
+            let token = tokens.peek();
+            if let Some(token) = token {
+                self.errors.push(self.get_error_marked_line(
+                    ParserErrorType::InfiniteLoopDetected,
+                    (*token).clone()
+                ));
+            }
+            else {
+                self.errors.push(ParserError::new_without_token(ParserErrorType::InfiniteLoopDetected));
+            }
+            
+            tokens.invalidate();
+            return None;
+        }
+
         let token = tokens.peek();
+        
         if let Some(token) = token {
             Some(token)
         }
@@ -832,7 +852,8 @@ impl Display for ParserError {
             ParserErrorType::DuplicateSetup => "Can't declare 'setup' more than once",
             ParserErrorType::DuplicateLoop => "Can't declare 'loop' more than once",
             ParserErrorType::IncorrectGlobalToken => "This token is invalid here (expected 'def', 'var', 'setup', 'loop')",
-            ParserErrorType::MissingLoopDeclaration => "'loop' must be defined"
+            ParserErrorType::MissingLoopDeclaration => "'loop' must be defined",
+            ParserErrorType::InfiniteLoopDetected => "Parser got stuck in an infinite loop here (internal error)"
         };
 
         if is_scanner_error {
@@ -875,7 +896,8 @@ pub enum ParserErrorType {
     DuplicateSetup,
     DuplicateLoop,
     IncorrectGlobalToken,
-    MissingLoopDeclaration
+    MissingLoopDeclaration,
+    InfiniteLoopDetected
 }
 
 impl From<ScannerError> for ParserError {
