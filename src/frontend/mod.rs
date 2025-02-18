@@ -732,10 +732,14 @@ impl Parser<'_> {
                 return;
             }
 
-            // Keyword is a nice way to know we are aligned
-            if let TT::Keyword(_) = token.token_type {
-                return;
+            match token.token_type {
+                // Keyword is a nice way to know we are aligned
+                TT::Keyword(_) => return,
+                // Finding the end of blocks should help parser correctly close them
+                TT::Punctuation(PT::RightBrace) => return,
+                _ => {}
             }
+            
 
             tokens.advance();
         }

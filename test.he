@@ -18,8 +18,8 @@ setup {
     Led = LOW; */
 
     if true {
-    var a = 123;
-    var x = ((a + a) + (a + a) + ((a + a) + (a + a)))
+        var a = 123;
+        var x = ((a + a) + (a + a) + ((a + a) + (a + a)))
     }
 }
 
