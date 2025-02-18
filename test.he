@@ -17,10 +17,15 @@ setup {
 
     Led = LOW; */
 
-    if true {
-        var a = 123;
-        var x = ((a + a) + (a + a) + ((a + a) + (a + a)))
-    }
+    var a = 123;
+    var x = ((a + a) + (a + a) + ((a + a) + (a + a)));
+    // t1 = 123
+    // var a = t1
+    // t2 = a
+    // t3 = t2 + t2
+    // t4 = t3 + t3
+    // t5 = t4 + t4
+    // x = t5;
 }
 
 loop {

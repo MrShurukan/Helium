@@ -27,6 +27,7 @@ pub enum ExpressionType {
     Identifier(String),
     Binary { left: Box<Expression>, operator: TokenType, right: Box<Expression> },
     Ternary { first: Box<Expression>, second: Box<Expression>, third: Box<Expression> },
+    // TODO: Pack that into tuple enum type
     Grouping { expression: Box<Expression> },
     Literal { value: LiteralType },
     Unary { operator: PunctuationType, right: Box<Expression> },
@@ -147,7 +148,7 @@ impl Display for Expression {
 
         match &self.expression_type {
             ExpressionType::Binary { left, operator, right } =>
-                write!(f, "{left} {operator:?} {right}"),
+                write!(f, "{left} {} {right}", format!("{operator:?}").green()),
             ExpressionType::Ternary { first, second, third } =>
                 write!(f, "{first} ? {second} : {third}"),
             ExpressionType::Grouping { expression } => 

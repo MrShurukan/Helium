@@ -1,5 +1,6 @@
-pub mod utils;
+﻿pub mod utils;
 mod environment;
+pub mod dag_builder;
 
 use crate::frontend::expression::{Expression, ExpressionType};
 use crate::frontend::statement::{SingleDefDeclaration, Statement, StatementType};

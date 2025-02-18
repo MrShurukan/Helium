@@ -1,4 +1,4 @@
-use crate::frontend::statement::Statement;
+use crate::frontend::statement::{Statement, StatementType};
 use crate::frontend::{Parser, ParserError};
 use crate::middle_end::utils::EnvironmentStack;
 use crate::middle_end::Analyzer;
@@ -6,6 +6,7 @@ use colored::Colorize;
 use std::error::Error;
 use std::process::exit;
 use std::{env, fs};
+use crate::middle_end::dag_builder::DagBuilder;
 
 mod frontend;
 mod middle_end;
@@ -36,6 +37,28 @@ fn main() {
     };
 
     analyze_statements(&contents, &mut statements);
+    // Just a hack to get setup at the moment
+    let setup = statements.first().unwrap();
+    let mut dag_builder = DagBuilder::new();
+    
+    // TODO: Remake statements that require block in them to just hold the Vec itself, not the
+    // TODO: redundant Box<Statement> variable
+    if let Statement { statement_type: StatementType::SetupDeclaration(block), .. } = setup {
+        if let Statement { statement_type: StatementType::Block(setup_statements), .. } = block.as_ref() {
+            for statement in setup_statements {
+                if let StatementType::VariableDeclaration { initializer, .. } = &statement.statement_type {
+                    if let Some(init) = initializer {
+                        dag_builder.process_expression(init);
+                    }
+                }
+            }
+        }
+        else { panic!() }
+    }
+    else { panic!("Didn't find setup for DAG") }
+    
+    println!("Dag table:");
+    dag_builder.print_table();
     
     println!("Statements:");
     for (i, statement) in statements.iter().enumerate() {
@@ -52,6 +75,7 @@ fn parse_source(contents: &str) -> Result<Vec<Statement>, Vec<ParserError>> {
     parser.parse()
 }
 
+/// This modifies the statements and fills them with types + performs a static analysis
 fn analyze_statements(contents: &str, statements: &mut [Statement]) {
     let mut empty_environment = EnvironmentStack::new();
     let analyzer = Analyzer::new_with_environment(contents, &mut empty_environment);

@@ -28,7 +28,7 @@ lazy_static! {
     };
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum StaticType {
     Integer(IntegerType),
 
@@ -59,7 +59,7 @@ pub enum StaticType {
     Unknown
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum IntegerType {
     Signed(SignedIntegerType),
     Unsigned(UnsignedIntegerType),
@@ -68,17 +68,17 @@ pub enum IntegerType {
     Literal
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum SignedIntegerType {
     Int8, Int16, Int32, Int64,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum UnsignedIntegerType {
     Uns8, Uns16, Uns32, Uns64,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum FloatType {
     Float32, Float64,
     /// Represents literal of yet unknown type. Will be converted to an appropriate `FloatType`
