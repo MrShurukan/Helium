@@ -24,7 +24,7 @@ impl IRBuilder {
         Self { 
             ir_vec: Vec::new(),
             local_variables: HashMap::new(),
-            last_register_number: 1,
+            last_register_number: 0,
             processed_dags: HashMap::new()
         }
     }
