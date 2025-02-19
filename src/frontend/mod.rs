@@ -1,6 +1,6 @@
 ﻿use crate::frontend::expression::{Expression, ExpressionType, PinRef, PinRefError};
 use crate::frontend::scanner::{Scanner, ScannerError};
-use crate::frontend::statement::{DefDeclarationError, SingleDefDeclaration, Statement};
+use crate::frontend::statement::{DefDeclarationError, SingleDefDeclaration, Statement, StatementType};
 use crate::frontend::token::Token;
 use crate::frontend::token_type::{KeywordType as KT, LiteralType as LT, PunctuationType as PT,
                                   TokenType as TT, ConstantType as CT, BooleanConstantType as BCT};
@@ -310,7 +310,7 @@ impl Parser<'_> {
             // Identifier = it's a one-liner
             Token { token_type: TT::Identifier(_), .. } => {
                 let def_declaration = self.single_def_declaration(tokens)?;
-                Some(Statement::new_def_declaration(Rc::new([def_declaration])))
+                Some(Statement::new_def_declaration(vec![def_declaration]))
             },
             // Left brace = it's a multiline version
             Token { token_type: TT::Punctuation(PT::LeftBrace), .. } => {
@@ -342,7 +342,7 @@ impl Parser<'_> {
                     None
                 }
                 else { 
-                    Some(Statement::new_def_declaration(def_declarations.into()))
+                    Some(Statement::new_def_declaration(def_declarations))
                 }
             },
             // Error
@@ -382,13 +382,19 @@ impl Parser<'_> {
     fn setup_declaration(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "Expected '{' after setup", use_prev_token);
         let block = self.block_statement(tokens)?;
-        Some(Statement::new_setup_declaration(Box::new(block)))
+        if let StatementType::Block(statements) = block.statement_type {
+            Some(Statement::new_setup_declaration(statements, block.source_location))
+        }
+        else { unreachable!() }
     }
 
     fn loop_declaration(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "Expected '{' after loop", use_prev_token);
         let block = self.block_statement(tokens)?;
-        Some(Statement::new_loop_declaration(Box::new(block)))
+        if let StatementType::Block(statements) = block.statement_type {
+            Some(Statement::new_loop_declaration(statements, block.source_location))
+        }
+        else { unreachable!() }
     }
 
     fn statement(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {

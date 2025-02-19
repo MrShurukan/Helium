@@ -15,7 +15,6 @@ impl DagBuilder {
     }
     
     pub fn process_expression(&mut self, expression: &Expression) -> Rc<DagNode> {
-        // let source_location = expression.source_location;
         match &expression.expression_type {
             ExpressionType::Literal { value } => {
                 match value {
@@ -34,7 +33,7 @@ impl DagBuilder {
                                 let right = self.process_expression(right);
                                 
                                 self.get_or_insert(DagNode { dag_type: 
-                                    DagType::IntegerAddition { left, right } })
+                                    DagType::IntegerAddition(left, right) })
                             },
                             _ => panic!("Dag is not ready to accept addition of type {}", expression.static_type)
                         }
@@ -46,9 +45,7 @@ impl DagBuilder {
                 self.process_expression(expression)
             },
             ExpressionType::Identifier(name) => {
-                self.get_or_insert(DagNode { dag_type: DagType::Identifier {
-                    name: name.clone(), static_type: expression.static_type
-                } })
+                self.get_or_insert(DagNode { dag_type: DagType::Identifier(name.clone()) })
             }
             _ => panic!("Dag is not ready to accept {:?}", expression.expression_type)
         }
@@ -57,7 +54,8 @@ impl DagBuilder {
     pub fn get_or_insert(&mut self, node: DagNode) -> Rc<DagNode> {
         let node_rc = Rc::new(node);
         if let Some(existing) = self.table.get(&node_rc) {
-            existing.clone()  // Return existing node if found
+            // Return existing node if found
+            existing.clone()
         } else {
             self.table.insert(node_rc.clone());
             node_rc
@@ -73,21 +71,19 @@ impl DagBuilder {
 
 /// Directed Acyclic Graph - used for optimizing the AST (specifically the expressions)
 /// DAG is not great at working out code flow, so it's used to just optimized expressions.
-/// This bundled with AST will be converted to TAC later as a final IR of this compiler
+/// This bundled with AST will be converted to Linear IR later
 #[derive(Debug, Clone, Eq)]
 pub struct DagNode {
     pub dag_type: DagType,
-    // source_location: SourceLocation
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum DagType {
-    Identifier { static_type: StaticType, name: String },
+    Identifier(String),
     IntegerValue(u64),
-    IntegerAddition { left: Rc<DagNode>, right: Rc<DagNode> }
+    IntegerAddition(Rc<DagNode>, Rc<DagNode>)
 }
 
-// Implement PartialEq & Hash for DagNode
 impl PartialEq for DagNode {
     fn eq(&self, other: &DagNode) -> bool {
         self.dag_type == other.dag_type

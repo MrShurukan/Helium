@@ -26,11 +26,12 @@ impl LocatableInSource for Statement {
 #[derive(Debug)]
 pub enum StatementType {
     Expression(Expression),
-    /// Static type will always be filled later during semantic analysis 
+    /// Static type will always be filled later during semantic analysis
+    /// Same with initializer. If it's missing it will be filled with a default init value
     VariableDeclaration { identifier: String, static_type: Option<StaticType>, initializer: Option<Expression> },
-    DefDeclaration(Rc<[SingleDefDeclaration]>),
-    SetupDeclaration(Box<Statement>),
-    LoopDeclaration(Box<Statement>),
+    DefDeclaration(Vec<SingleDefDeclaration>),
+    SetupDeclaration(Vec<Statement>),
+    LoopDeclaration(Vec<Statement>),
     Block(Vec<Statement>),
     If { condition: Expression, then_body: Box<Statement>, else_body: Option<Box<Statement>> },
     While { condition: Expression, body: Box<Statement> },
@@ -73,7 +74,7 @@ impl Statement {
         }
     }
 
-    pub fn new_def_declaration(def_declarations: Rc<[SingleDefDeclaration]>) -> Self {
+    pub fn new_def_declaration(def_declarations: Vec<SingleDefDeclaration>) -> Self {
         if def_declarations.is_empty() {
             unreachable!("No SingleDefDeclaration was passed to new_def_declaration")
         }
@@ -86,16 +87,16 @@ impl Statement {
         }
     }
 
-    pub fn new_setup_declaration(body: Box<Statement>) -> Self {
+    pub fn new_setup_declaration(body: Vec<Statement>, source_location: SourceLocation) -> Self {
         Self {
-            source_location: body.source_location,
+            source_location,
             statement_type: StatementType::SetupDeclaration(body),
         }
     }
 
-    pub fn new_loop_declaration(body: Box<Statement>) -> Self {
+    pub fn new_loop_declaration(body: Vec<Statement>, source_location: SourceLocation) -> Self {
         Self {
-            source_location: body.source_location,
+            source_location,
             statement_type: StatementType::LoopDeclaration(body),
         }
     }
@@ -179,11 +180,7 @@ impl Display for StatementType {
                 write!(f, "}}")
             },
             StatementType::Block(statements) => {
-                writeln!(f, "{{")?;
-                for statement in statements.iter() {
-                    writeln!(f, "{statement}")?;
-                }
-                write!(f, "}}")
+                Self::write_block(f, statements)
             },
             StatementType::If { condition, then_body, else_body } => {
                 write!(f, "if {condition} {then_body}")?;
@@ -197,11 +194,21 @@ impl Display for StatementType {
                 write!(f, "while {condition} {body}"),
             StatementType::For { identifier, from, to, body } =>
                 write!(f, "for {identifier} = {from} to {to} {body}"),
-            StatementType::SetupDeclaration(block) =>
-                write!(f, "setup {block}"),
-            StatementType::LoopDeclaration(block) =>
-                write!(f, "loop {block}"),             
+            StatementType::SetupDeclaration(statements) =>
+                { write!(f, "setup ")?; Self::write_block(f, statements) },
+            StatementType::LoopDeclaration(statements) =>
+                { write!(f, "loop ")?; Self::write_block(f, statements) }
         }
+    }
+}
+
+impl StatementType {
+    fn write_block(f: &mut Formatter, statements: &Vec<Statement>) -> std::fmt::Result {
+        writeln!(f, "{{")?;
+        for statement in statements.iter() {
+            writeln!(f, "{statement}")?;
+        }
+        write!(f, "}}")
     }
 }
 

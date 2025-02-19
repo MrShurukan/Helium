@@ -1,6 +1,7 @@
 ﻿pub mod utils;
 mod environment;
 pub mod dag_builder;
+pub mod linear_ir;
 
 use crate::frontend::expression::{Expression, ExpressionType};
 use crate::frontend::statement::{SingleDefDeclaration, Statement, StatementType};
@@ -50,7 +51,7 @@ impl Analyzer<'_> {
                 self.analyze_expression(expr);
             },
             StatementType::VariableDeclaration { identifier, static_type, initializer } => {
-                match (&static_type, initializer) {
+                match (static_type.as_mut(), initializer.as_mut()) {
                     (Some(static_type), Some(initializer)) => {
                         self.environment.define(identifier.clone(), *static_type);
                         if let Some(expression_type) = self.analyze_expression(initializer) {
@@ -64,6 +65,24 @@ impl Analyzer<'_> {
                     },
                     (Some(static_type), None) => {
                         self.environment.define(identifier.clone(), *static_type);
+                        // If there is no explicit initializer - create a default one
+                        let literal = match static_type {
+                            StaticType::Integer(_) => Some(LiteralType::Integer(0)),
+                            StaticType::Float(_) => Some(LiteralType::Float(0.0)),
+                            StaticType::Boolean => Some(LiteralType::Boolean(false)),
+                            StaticType::String => Some(LiteralType::String("".to_string())),
+                            _ => {
+                                self.errors.push(self.produce_error_location(
+                                    AnalyzerErrorType::NoDefaultInitializer(*static_type),
+                                    &statement.source_location
+                                ));
+                                None
+                            }
+                        };
+                        
+                        if let Some(literal) = literal {
+                            *initializer = Some(Expression::new_literal_tokenless(literal));
+                        }
                     },
                     (None, Some(initializer)) => {
                         if let Some(mut expression_type) = self.analyze_expression(initializer) {
@@ -96,15 +115,9 @@ impl Analyzer<'_> {
                     self.analyze_def_declaration(declaration);
                 }
             },
-            StatementType::SetupDeclaration(statement) |
-            StatementType::LoopDeclaration(statement) => self.analyze_statement(statement),
-            StatementType::Block(statements) => {
-                self.environment.push_new();
-                for statement in statements {
-                    self.analyze_statement(statement);
-                }
-                self.environment.remove_last().expect("last environment popped");
-            },
+            StatementType::SetupDeclaration(statements) |
+            StatementType::LoopDeclaration(statements) |
+            StatementType::Block(statements) => self.analyze_block(statements),
             StatementType::If { condition, then_body, else_body } => {
                 self.check_condition_boolean(condition);
 
@@ -157,6 +170,14 @@ impl Analyzer<'_> {
                 self.analyze_statement(body);
             },
         }
+    }
+
+    fn analyze_block(&mut self, statements: &mut Vec<Statement>) {
+        self.environment.push_new();
+        for statement in statements {
+            self.analyze_statement(statement);
+        }
+        self.environment.remove_last().expect("last environment popped");
     }
 
     fn check_condition_boolean(&mut self, condition: &mut Expression) {
@@ -611,7 +632,8 @@ pub enum AnalyzerErrorType {
     PortNameAlreadyDefined(String),
     VarDeclarationTypeMismatch(StaticType, StaticType),
     VarDeclarationMissingTypeAndInit,
-    UnknownTypeAssignedToExpression
+    UnknownTypeAssignedToExpression,
+    NoDefaultInitializer(StaticType)
 }
 
 impl Error for AnalyzerError {}
@@ -652,6 +674,8 @@ impl Display for AnalyzerError {
                 "Variable declaration must either specify a type (: Type) or have an initializer (= expr)".to_string(),
             AnalyzerErrorType::UnknownTypeAssignedToExpression =>
                 "Internal error occured. Wasn't able to evaluate this expression. This is an internal compiler bug".to_string(),
+            AnalyzerErrorType::NoDefaultInitializer(static_type) =>
+                format!("There is no default value for '{static_type}', provide an initializer")
         }.red();
 
         // Add tabs to each line of the location so it shifts to the right

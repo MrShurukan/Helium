@@ -112,6 +112,16 @@ impl Expression {
         }
     }
 
+    /// This should be used only during Static Analysis as this will create a "fake" expression
+    /// that doesn't point to any real source
+    pub fn new_literal_tokenless(literal_type: LiteralType) -> Self {
+        Self {
+            source_location: SourceLocation::default(),
+            expression_type: ExpressionType::Literal { value: literal_type },
+            static_type: StaticType::Unknown
+        }
+    }
+
     pub fn new_identifier(token: &Token) -> Self {
         if let Token { token_type: TokenType::Identifier(name), .. } = token {
             Self {

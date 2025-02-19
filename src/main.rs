@@ -1,4 +1,4 @@
-use crate::frontend::statement::{Statement, StatementType};
+use crate::frontend::statement::{SingleDefDeclaration, Statement, StatementType};
 use crate::frontend::{Parser, ParserError};
 use crate::middle_end::utils::EnvironmentStack;
 use crate::middle_end::Analyzer;
@@ -6,7 +6,9 @@ use colored::Colorize;
 use std::error::Error;
 use std::process::exit;
 use std::{env, fs};
+use std::fmt::{Display, Formatter};
 use crate::middle_end::dag_builder::DagBuilder;
+use crate::middle_end::linear_ir::{IRBuilder, IntermediateRepresentation};
 
 mod frontend;
 mod middle_end;
@@ -32,37 +34,27 @@ fn main() {
     let mut statements = match parse_source(&contents) {
         Ok(statements) => statements,
         Err(errors) => {
-            report_errors(&errors, "parser");
+            report_errors_and_exit(&errors, "parser");
         }
     };
 
     analyze_statements(&contents, &mut statements);
-    // Just a hack to get setup at the moment
-    let setup = statements.first().unwrap();
-    let mut dag_builder = DagBuilder::new();
-    
-    // TODO: Remake statements that require block in them to just hold the Vec itself, not the
-    // TODO: redundant Box<Statement> variable
-    if let Statement { statement_type: StatementType::SetupDeclaration(block), .. } = setup {
-        if let Statement { statement_type: StatementType::Block(setup_statements), .. } = block.as_ref() {
-            for statement in setup_statements {
-                if let StatementType::VariableDeclaration { initializer, .. } = &statement.statement_type {
-                    if let Some(init) = initializer {
-                        dag_builder.process_expression(init);
-                    }
-                }
-            }
-        }
-        else { panic!() }
-    }
-    else { panic!("Didn't find setup for DAG") }
-    
-    println!("Dag table:");
-    dag_builder.print_table();
     
     println!("Statements:");
     for (i, statement) in statements.iter().enumerate() {
         println!("{i}) {statement}");
+    }
+
+    let program = structure_program(statements);
+    if let Err(structure_error) = program {
+        report_errors_and_exit(&[structure_error], "structure organizer");
+    }
+    let program = program.unwrap();
+    
+    println!("Setup IR:");
+    let ir_vec = convert_to_ir(program);
+    for ir in ir_vec {
+        println!("{ir}")
     }
 }
 
@@ -81,11 +73,58 @@ fn analyze_statements(contents: &str, statements: &mut [Statement]) {
     let analyzer = Analyzer::new_with_environment(contents, &mut empty_environment);
 
     if let Err(errors) = analyzer.analyze(statements) {
-        report_errors(errors.as_slice(), "analyzer")
+        report_errors_and_exit(errors.as_slice(), "analyzer")
     }
 }
 
-fn report_errors<E: Error>(errors: &[E], error_source: &'static str) -> ! {
+fn structure_program(statements: Vec<Statement>) -> Result<Program, StructureError> {
+    let mut def_declarations: Vec<SingleDefDeclaration> = Vec::new();
+    let mut global_var_declarations: Vec<Statement> = Vec::new();
+    let mut setup_block: Vec<Statement> = Vec::new();
+    let mut loop_block: Vec<Statement> = Vec::new();
+    
+    for statement in statements {
+        match statement.statement_type {
+            StatementType::DefDeclaration(declarations) => def_declarations = declarations,
+            StatementType::VariableDeclaration { .. } => global_var_declarations.push(statement),
+            StatementType::SetupDeclaration(statements) => setup_block = statements,
+            StatementType::LoopDeclaration(statements) => loop_block = statements,
+            _ => {}
+        }
+    }
+    
+    Ok(Program { def_declarations, global_var_declarations, setup_block, loop_block })
+}
+
+struct Program {
+    def_declarations: Vec<SingleDefDeclaration>,
+    global_var_declarations: Vec<Statement>,
+    /// Will be empty if setup is absent
+    setup_block: Vec<Statement>,
+    loop_block: Vec<Statement>
+}
+
+#[derive(Debug)]
+enum StructureError {
+    NoLoopPresent
+}
+
+impl Error for StructureError {}
+impl Display for StructureError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StructureError::NoLoopPresent => write!(f, "There was no loop block present in the source file")
+        }
+    }
+}
+
+fn convert_to_ir(program: Program) -> Vec<IntermediateRepresentation> {
+    // Right now we do just the setup as a test
+    let ir_builder = IRBuilder::new();
+    ir_builder.produce_ir(&program.setup_block)
+}
+
+fn report_errors_and_exit<E: Error>(errors: &[E], error_source: &'static str) -> ! {
     eprintln!("{} (originated from {})", "Wasn't able to compile the file!".yellow(), error_source);
     let error_errors = if errors.len() == 1 { "error" } else { "errors" };
     eprintln!("{} {error_errors} found.\n", errors.len());
