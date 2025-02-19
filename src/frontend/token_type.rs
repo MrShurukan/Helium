@@ -89,12 +89,12 @@ pub enum BooleanConstantType {
     True, False,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum PinStateConstantType {
     Low, High,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub enum PinModeConstantType {
     Input, InputPullDown, InputPullUp,
     Output

@@ -1,6 +1,6 @@
 ﻿use crate::frontend::expression::{Expression, ExpressionType};
 use crate::frontend::static_type::StaticType;
-use crate::frontend::token_type::{LiteralType, PunctuationType, TokenType};
+use crate::frontend::token_type::{LiteralType, PinModeConstantType, PinStateConstantType, PunctuationType, TokenType};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -23,6 +23,12 @@ impl DagBuilder {
                     LiteralType::Integer(int) => {
                         Ok(self.get_or_insert(DagNode { dag_type: DagType::IntegerValue(*int) }))
                     },
+                    LiteralType::PinState(pin_state) => {
+                        Ok(self.get_or_insert(DagNode { dag_type: DagType::PinStateValue(pin_state.clone()) }))
+                    },
+                    LiteralType::PinMode(pin_mode) => {
+                        Ok(self.get_or_insert(DagNode { dag_type: DagType::PinModeValue(pin_mode.clone()) }))
+                    }
                     _ => Err(DagError::CannotProcessLiteral(expression.static_type))
                 }
             },
@@ -49,7 +55,20 @@ impl DagBuilder {
             },
             ExpressionType::Identifier(name) => {
                 Ok(self.get_or_insert(DagNode { dag_type: DagType::Identifier(name.clone()) }))
-            }
+            },
+            ExpressionType::Assignment { identifier, expression } => {
+                let expr_dag = self.process_expression(expression)?;
+                // PinState and PinMode assignments could be accomplished both
+                // to variables and to Pins. But they are still marked as a separate node
+                // to simplify IR generation
+                let dag_type = match expression.static_type {
+                    StaticType::PinState => DagType::AssignmentPinState(identifier.clone(), expr_dag),
+                    StaticType::PinMode => DagType::AssignmentPinMode(identifier.clone(), expr_dag),
+                    _ => DagType::Assignment(identifier.clone(), expr_dag),
+                };
+
+                Ok(self.get_or_insert(DagNode { dag_type }))
+            },
             _ => Err(DagError::UnknownExpressionType(expression.expression_type.clone()))
         }
     }
@@ -84,7 +103,12 @@ pub struct DagNode {
 pub enum DagType {
     Identifier(String),
     IntegerValue(u64),
-    IntegerAddition(Rc<DagNode>, Rc<DagNode>)
+    PinModeValue(PinModeConstantType),
+    PinStateValue(PinStateConstantType),
+    IntegerAddition(Rc<DagNode>, Rc<DagNode>),
+    Assignment(String, Rc<DagNode>),
+    AssignmentPinMode(String, Rc<DagNode>),
+    AssignmentPinState(String, Rc<DagNode>),
 }
 
 impl PartialEq for DagNode {
