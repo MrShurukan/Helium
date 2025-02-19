@@ -1,6 +1,6 @@
 use crate::frontend::statement::{SingleDefDeclaration, Statement, StatementType};
 use crate::frontend::{Parser, ParserError};
-use crate::middle_end::linear_ir::{IRBuilder, IntermediateRepresentation};
+use crate::middle_end::linear_ir::{IRBuilder, IRError, IntermediateRepresentation};
 use crate::middle_end::utils::EnvironmentStack;
 use crate::middle_end::Analyzer;
 use colored::Colorize;
@@ -51,9 +51,13 @@ fn main() {
     }
     let program = program.unwrap();
     
+    let ir_vec = convert_to_ir(program, &contents);
+    if let Err(ir_error) = ir_vec {
+        report_errors_and_exit(&[ir_error], "IR builder");
+    }
+
     println!("Setup IR:");
-    let ir_vec = convert_to_ir(&program);
-    for ir in ir_vec {
+    for ir in ir_vec.unwrap() {
         println!("{ir}");
     }
 }
@@ -128,10 +132,10 @@ impl Display for StructureError {
     }
 }
 
-fn convert_to_ir(program: &Program) -> Vec<IntermediateRepresentation> {
+fn convert_to_ir(program: Program, source: &str) -> Result<Vec<IntermediateRepresentation>, IRError> {
     // Right now we do just the setup as a test
-    let ir_builder = IRBuilder::new();
-    ir_builder.produce_ir(&program.setup_block)
+    let ir_builder = IRBuilder::new(source);
+    ir_builder.produce_ir(program.setup_block)
 }
 
 fn report_errors_and_exit<E: Error>(errors: &[E], error_source: &'static str) -> ! {

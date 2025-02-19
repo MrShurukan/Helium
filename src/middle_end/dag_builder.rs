@@ -2,6 +2,8 @@
 use crate::frontend::static_type::StaticType;
 use crate::frontend::token_type::{LiteralType, PunctuationType, TokenType};
 use std::collections::HashSet;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
@@ -14,14 +16,14 @@ impl DagBuilder {
         Self { table: HashSet::new() }
     }
 
-    pub fn process_expression(&mut self, expression: &Expression) -> Rc<DagNode> {
+    pub fn process_expression(&mut self, expression: &Expression) -> Result<Rc<DagNode>, DagError> {
         match &expression.expression_type {
             ExpressionType::Literal { value } => {
                 match value {
                     LiteralType::Integer(int) => {
-                        self.get_or_insert(DagNode { dag_type: DagType::IntegerValue(*int) })
+                        Ok(self.get_or_insert(DagNode { dag_type: DagType::IntegerValue(*int) }))
                     },
-                    _ => panic!("Dag is not ready to accept literal type of {}", expression.static_type)
+                    _ => Err(DagError::CannotProcessLiteral(expression.static_type))
                 }
             },
             ExpressionType::Binary { left, operator, right } => {
@@ -30,25 +32,25 @@ impl DagBuilder {
                         match expression.static_type {
                             StaticType::Integer(int_type) => {
                                 // TODO: Casts if the types don't match the outer expression type
-                                let left = self.process_expression(left);
-                                let right = self.process_expression(right);
+                                let left = self.process_expression(left)?;
+                                let right = self.process_expression(right)?;
 
-                                self.get_or_insert(DagNode { dag_type:
-                                    DagType::IntegerAddition(left, right) })
+                                Ok(self.get_or_insert(DagNode { dag_type:
+                                    DagType::IntegerAddition(left, right) }))
                             },
-                            _ => panic!("Dag is not ready to accept addition of type {}", expression.static_type)
+                            _ => Err(DagError::UnknownAdditionType(expression.static_type))
                         }
                     },
-                    _ => panic!("Dag is not ready to accept binary operator {operator:?}")
+                    _ => Err(DagError::UnknownBinaryOperator(operator.clone()))
                 }
             },
             ExpressionType::Grouping { expression } => {
                 self.process_expression(expression)
             },
             ExpressionType::Identifier(name) => {
-                self.get_or_insert(DagNode { dag_type: DagType::Identifier(name.clone()) })
+                Ok(self.get_or_insert(DagNode { dag_type: DagType::Identifier(name.clone()) }))
             }
-            _ => panic!("Dag is not ready to accept {:?}", expression.expression_type)
+            _ => Err(DagError::UnknownExpressionType(expression.expression_type.clone()))
         }
     }
 
@@ -94,5 +96,29 @@ impl PartialEq for DagNode {
 impl Hash for DagNode {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.dag_type.hash(state);
+    }
+}
+
+#[derive(Debug)]
+pub enum DagError {
+    CannotProcessLiteral(StaticType),
+    UnknownAdditionType(StaticType),
+    UnknownBinaryOperator(TokenType),
+    UnknownExpressionType(ExpressionType)
+}
+
+impl Error for DagError {}
+impl Display for DagError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DagError::CannotProcessLiteral(static_type) =>
+                write!(f, "Dag is not ready to accept literal type of {static_type}"),
+            DagError::UnknownAdditionType(static_type) =>
+                write!(f, "Dag is not ready to accept addition of type {static_type}"),
+            DagError::UnknownBinaryOperator(token_type) =>
+                write!(f, "Dag is not ready to accept binary operator {token_type:?}"),
+            DagError::UnknownExpressionType(expression_type) =>
+                write!(f, "Dag is not ready to accept {expression_type:?}"),
+        }
     }
 }

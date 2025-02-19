@@ -1,62 +1,73 @@
-﻿use crate::frontend::expression::Expression;
+﻿use crate::frontend::expression::{Expression, ExpressionType};
 use crate::frontend::statement::{Statement, StatementType};
 use crate::frontend::token_type::LiteralType;
-use crate::frontend::utils::SourceLocation;
-use crate::middle_end::dag_builder::{DagBuilder, DagNode, DagType};
+use crate::frontend::utils::{LocatableInSource, SourceLocation};
+use crate::middle_end::dag_builder::{DagBuilder, DagError, DagNode, DagType};
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
+use colored::Colorize;
+use crate::middle_end::AnalyzerErrorType;
+use crate::middle_end::error_printer::{get_error_marked_line, get_error_marked_line_location};
 
 // TODO: Comments
 // TODO: Proper errors, not panics
 type RegisterNumber = u32;
-pub struct IRBuilder {
+pub struct IRBuilder<'a> {
     ir_vec: Vec<IntermediateRepresentation>,
     last_register_number: RegisterNumber,
     local_variables: HashMap<String, RegisterNumber>,
-    processed_dags: HashMap<Rc<DagNode>, RegisterNumber>
+    processed_dags: HashMap<Rc<DagNode>, RegisterNumber>,
+    source: &'a str,
 }
 
-impl IRBuilder {
-    pub fn new() -> Self {
-        Self { 
+impl IRBuilder<'_> {
+    pub fn new(source: &str) -> IRBuilder {
+        IRBuilder { 
             ir_vec: Vec::new(),
             local_variables: HashMap::new(),
             last_register_number: 0,
-            processed_dags: HashMap::new()
+            processed_dags: HashMap::new(),
+            source
         }
     }
     
-    pub fn produce_ir(mut self, statements: &[Statement]) -> Vec<IntermediateRepresentation> {
+    pub fn produce_ir(mut self, statements: Vec<Statement>) -> Result<Vec<IntermediateRepresentation>, IRError> {
         for statement in statements {
-            self.statement(statement);
+            self.statement(statement)?;
         }
         
-        self.ir_vec
+        Ok(self.ir_vec)
     }
     
-    fn statement(&mut self, statement: &Statement) {
-        let source_location = Rc::new(statement.source_location);
+    fn statement(&mut self, statement: Statement) -> Result<(), IRError> {
+        let source_location = statement.source_location;
         
         match &statement.statement_type {
-            StatementType::Expression(expression) => _ = self.expression(expression),
+            StatementType::Expression(expression) => {
+                _ = self.expression(expression);
+                Ok(())
+            },
             StatementType::VariableDeclaration { identifier, initializer, .. } => {
                 if let Some(init_expr) = initializer {
-                    let register_number = self.expression(init_expr);
+                    let register_number = self.expression(init_expr)?;
                     self.local_variables.insert(identifier.clone(), register_number);
+                    Ok(())
                 }
-                else { panic!("Variable declaration without initializer"); }
+                else { Err(IRError::new(IRErrorType::VariableDeclarationWithoutInit, &source_location, self.source)) }
             },
-            _ => panic!("Can't yet produce IR for {}", statement.statement_type)
+            _ => Err(IRError::new(IRErrorType::CannotProduceIRForStmt(statement.statement_type), &source_location, self.source))
         }
     }
     
-    fn expression(&mut self, expression: &Expression) -> RegisterNumber {
+    fn expression(&mut self, expression: &Expression) -> Result<RegisterNumber, IRError> {
         // We use dag here to produce optimized expressions
         let mut dag_builder = DagBuilder::new();
-        let dag = dag_builder.process_expression(expression);
+        let dag = dag_builder.process_expression(expression)
+            .map_err(|err| IRError::new(IRErrorType::DagError(err), &expression.source_location, self.source))?;
         
-        self.dag(&dag, expression)
+        Ok(self.dag(&dag, expression))
     }
     
     fn dag(&mut self, dag_node: &Rc<DagNode>, expression: &Expression) -> RegisterNumber {
@@ -154,4 +165,49 @@ pub enum IRType {
 pub enum LoadType {
     Immediate(LiteralType),
     Memory(String)
+}
+
+#[derive(Debug)]
+pub struct IRError {
+    error_type: IRErrorType,
+    location: String
+}
+
+impl IRError {
+    pub fn new(error_type: IRErrorType, source_location: &SourceLocation, source: &str) -> Self {
+        let location = get_error_marked_line_location(source_location, source);
+        Self { error_type, location }
+    }
+}
+
+impl Error for IRError {}
+impl Display for IRError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let error_header = "[Internal compiler error] IR Error";
+
+        let message = match &self.error_type {
+            IRErrorType::VariableDeclarationWithoutInit =>
+                "Variable declaration without initializer".to_string(),
+            IRErrorType::CannotProduceIRForStmt(statement_type) => 
+                format!("Can't produce IR for statement '{statement_type}', not yet implemented"),
+            IRErrorType::DagError(dag_error) => dag_error.to_string()
+        }.red();
+
+        // Add tabs to each line of the location so it shifts to the right
+        let location: String = self.location.split('\n')
+            .fold(String::new(), |mut output, line| {
+                output += "\t"; output += line; output += "\n";
+                output
+            });
+
+        write!(f, "{error_header}\n{message}")?;
+        write!(f, "\n\t{}\n{}\n", "Happened here:".green(), location.trim_end())
+    }
+}
+
+#[derive(Debug)]
+pub enum IRErrorType {
+    VariableDeclarationWithoutInit,
+    CannotProduceIRForStmt(StatementType),
+    DagError(DagError),
 }

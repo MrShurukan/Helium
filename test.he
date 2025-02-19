@@ -1,6 +1,6 @@
 ﻿setup {
     var a = 123;
-    var x = ((a + a) + (a + a) + ((a + a) + (a + a)));
+    var x = ((a + a) * (a + a) + ((a + a) + (a + a)));
 }
 
 loop {}
