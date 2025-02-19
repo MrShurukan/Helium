@@ -1,19 +1,19 @@
 use crate::frontend::statement::{SingleDefDeclaration, Statement, StatementType};
 use crate::frontend::{Parser, ParserError};
+use crate::middle_end::linear_ir::{IRBuilder, IntermediateRepresentation};
 use crate::middle_end::utils::EnvironmentStack;
 use crate::middle_end::Analyzer;
 use colored::Colorize;
 use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::process::exit;
 use std::{env, fs};
-use std::fmt::{Display, Formatter};
-use crate::middle_end::dag_builder::DagBuilder;
-use crate::middle_end::linear_ir::{IRBuilder, IntermediateRepresentation};
 
 mod frontend;
 mod middle_end;
 
 // TODO: Read up on exit codes. Maybe use something that already makes sense
+// TODO: Remove all the explicit panic! from the code, handle errors gracefully
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
@@ -52,9 +52,9 @@ fn main() {
     let program = program.unwrap();
     
     println!("Setup IR:");
-    let ir_vec = convert_to_ir(program);
+    let ir_vec = convert_to_ir(&program);
     for ir in ir_vec {
-        println!("{ir}")
+        println!("{ir}");
     }
 }
 
@@ -93,7 +93,12 @@ fn structure_program(statements: Vec<Statement>) -> Result<Program, StructureErr
         }
     }
     
-    Ok(Program { def_declarations, global_var_declarations, setup_block, loop_block })
+    if loop_block.is_empty() {
+        Err(StructureError::NoLoopPresent)
+    }
+    else {
+        Ok(Program { def_declarations, global_var_declarations, setup_block, loop_block })
+    }
 }
 
 struct Program {
@@ -118,7 +123,7 @@ impl Display for StructureError {
     }
 }
 
-fn convert_to_ir(program: Program) -> Vec<IntermediateRepresentation> {
+fn convert_to_ir(program: &Program) -> Vec<IntermediateRepresentation> {
     // Right now we do just the setup as a test
     let ir_builder = IRBuilder::new();
     ir_builder.produce_ir(&program.setup_block)

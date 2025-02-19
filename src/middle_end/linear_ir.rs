@@ -1,13 +1,11 @@
-﻿use std::collections::{HashMap, HashSet};
-use std::fmt::{write, Display, Formatter};
-use std::rc::Rc;
-use colored::Colorize;
-use crate::frontend::expression::{Expression, ExpressionType};
+﻿use crate::frontend::expression::Expression;
 use crate::frontend::statement::{Statement, StatementType};
-use crate::frontend::static_type::StaticType;
 use crate::frontend::token_type::LiteralType;
 use crate::frontend::utils::SourceLocation;
 use crate::middle_end::dag_builder::{DagBuilder, DagNode, DagType};
+use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
+use std::rc::Rc;
 
 // TODO: Comments
 // TODO: Proper errors, not panics
@@ -67,7 +65,7 @@ impl IRBuilder {
             return *register_number;
         }
         
-        let register_number = self.calculate_register_from_dag(&dag_node, expression);
+        let register_number = self.calculate_register_from_dag(dag_node, expression);
         self.processed_dags.insert(Rc::clone(dag_node), register_number);
         
         register_number

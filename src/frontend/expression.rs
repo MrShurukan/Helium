@@ -1,11 +1,10 @@
-﻿use std::error::Error;
-use std::fmt::{Display, Formatter};
-use std::ptr::write;
-use colored::Colorize;
-use crate::frontend::static_type::StaticType;
+﻿use crate::frontend::static_type::StaticType;
 use crate::frontend::token::Token;
 use crate::frontend::token_type::{LiteralType, PunctuationType, TokenType};
 use crate::frontend::utils::{LocatableInSource, SourceLocation};
+use colored::Colorize;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_field_names)]

@@ -1,12 +1,11 @@
 ﻿use crate::frontend::expression::{Expression, PinRef};
 use crate::frontend::static_type::StaticType;
 use crate::frontend::token::Token;
-use crate::frontend::token_type::{ConstantType, LiteralType, PinModeConstantType, TokenType};
+use crate::frontend::token_type::{ConstantType, PinModeConstantType, TokenType};
 use crate::frontend::utils::{LocatableInSource, SourceLocation};
 use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::rc::Rc;
 
 /// Statements are the backbone of the entire language.
 /// Source file represents a list of statements when parsed
@@ -46,7 +45,7 @@ impl Statement {
         }
     }
 
-    pub fn new_var_declaration(var_keyword: Token, identifier: Token, static_type: Option<Token>, initializer: Option<Expression>) -> Self {
+    pub fn new_var_declaration(var_keyword: &Token, identifier: Token, static_type: Option<Token>, initializer: Option<Expression>) -> Self {
         let TokenType::Identifier(ident) = identifier.token_type
         else { unreachable!("Non-identifier passed to var statement") };
         
@@ -172,7 +171,7 @@ impl Display for StatementType {
             },
             StatementType::DefDeclaration(declarations) => {
                 writeln!(f, "def {{")?;
-                for declaration in declarations.iter() {
+                for declaration in declarations {
                     writeln!(f, "{} = {}.{} {:?};",
                         declaration.identifier, declaration.port.port,
                         declaration.port.pin_number , declaration.pin_mode)?;
@@ -203,9 +202,9 @@ impl Display for StatementType {
 }
 
 impl StatementType {
-    fn write_block(f: &mut Formatter, statements: &Vec<Statement>) -> std::fmt::Result {
+    fn write_block(f: &mut Formatter, statements: &[Statement]) -> std::fmt::Result {
         writeln!(f, "{{")?;
-        for statement in statements.iter() {
+        for statement in statements {
             writeln!(f, "{statement}")?;
         }
         write!(f, "}}")

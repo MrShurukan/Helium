@@ -1,9 +1,9 @@
-﻿use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
-use crate::frontend::expression::{Expression, ExpressionType};
+﻿use crate::frontend::expression::{Expression, ExpressionType};
 use crate::frontend::static_type::StaticType;
 use crate::frontend::token_type::{LiteralType, PunctuationType, TokenType};
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 pub struct DagBuilder {
     table: HashSet<Rc<DagNode>>,
@@ -13,7 +13,7 @@ impl DagBuilder {
     pub fn new() -> Self {
         Self { table: HashSet::new() }
     }
-    
+
     pub fn process_expression(&mut self, expression: &Expression) -> Rc<DagNode> {
         match &expression.expression_type {
             ExpressionType::Literal { value } => {
@@ -29,16 +29,17 @@ impl DagBuilder {
                     TokenType::Punctuation(PunctuationType::Plus) => {
                         match expression.static_type {
                             StaticType::Integer(int_type) => {
+                                // TODO: Casts if the types don't match the outer expression type
                                 let left = self.process_expression(left);
                                 let right = self.process_expression(right);
-                                
-                                self.get_or_insert(DagNode { dag_type: 
+
+                                self.get_or_insert(DagNode { dag_type:
                                     DagType::IntegerAddition(left, right) })
                             },
                             _ => panic!("Dag is not ready to accept addition of type {}", expression.static_type)
                         }
                     },
-                    _ => panic!("Dag is not ready to accept binary operator {:?}", operator)
+                    _ => panic!("Dag is not ready to accept binary operator {operator:?}")
                 }
             },
             ExpressionType::Grouping { expression } => {
@@ -64,7 +65,7 @@ impl DagBuilder {
 
     pub fn print_table(&self) {
         for (i, value) in self.table.iter().enumerate() {
-            println!("{i}. {:?}", value);
+            println!("{i}. {value:?}");
         }
     }
 }

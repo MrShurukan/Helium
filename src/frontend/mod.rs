@@ -2,13 +2,12 @@
 use crate::frontend::scanner::{Scanner, ScannerError};
 use crate::frontend::statement::{DefDeclarationError, SingleDefDeclaration, Statement, StatementType};
 use crate::frontend::token::Token;
-use crate::frontend::token_type::{KeywordType as KT, LiteralType as LT, PunctuationType as PT,
-                                  TokenType as TT, ConstantType as CT, BooleanConstantType as BCT};
+use crate::frontend::token_type::{BooleanConstantType as BCT, ConstantType as CT, KeywordType as KT,
+                                  LiteralType as LT, PunctuationType as PT, TokenType as TT};
 use crate::frontend::utils::TokenIterator;
 use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::rc::Rc;
 
 mod scanner;
 pub mod statement;
@@ -270,14 +269,13 @@ impl Parser<'_> {
         if let TT::Punctuation(PT::Colon) = self.peek(tokens)?.token_type {
             self.advance(tokens)?;
             let token = self.peek(tokens)?;
-            match token.token_type {
-                TT::Type(_) => static_type = Some(token.clone()),
-                _ => {
-                    self.errors.push(self.get_error_marked_line(
-                        ParserErrorType::IncorrectToken(format!("Expected type after ':', got '{:?}'", token.token_type)),
-                        token.clone()));
-                    return None;
-                }
+            if let TT::Type(_) = token.token_type {
+                static_type = Some(token.clone());
+            } else {
+                self.errors.push(self.get_error_marked_line(
+                    ParserErrorType::IncorrectToken(format!("Expected type after ':', got '{:?}'", token.token_type)),
+                    token.clone()));
+                return None;
             }
             self.advance(tokens)?;
         }
@@ -293,7 +291,7 @@ impl Parser<'_> {
         }
 
         check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected a ';' after variable declaration", use_prev_token);
-        Some(Statement::new_var_declaration(var_keyword, ident_token, static_type, initializer))
+        Some(Statement::new_var_declaration(&var_keyword, ident_token, static_type, initializer))
     }
 
     fn def_declaration(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
@@ -468,10 +466,11 @@ impl Parser<'_> {
         loop {
             match self.peek(tokens) {
                 // Right brace means we have reached the end of this block
-                Some(Token { token_type: TT::Punctuation(PT::RightBrace), .. }) => { break; }
+                Some(Token { token_type: TT::Punctuation(PT::RightBrace), .. }) |
+                // Hitting the end of tokens counts too
+                None => { break; }
                 // Anything else should be parsed by self.declaration
                 Some(_) => {}
-                None => { break; }
             }
 
             let declaration = self.declaration(tokens);
@@ -481,13 +480,13 @@ impl Parser<'_> {
             }
         }
 
-        let right_brace = match self.peek(tokens) {
-            Some(Token{ token_type: TT::Punctuation(PT::RightBrace), ..}) => tokens.advance().unwrap(),
-            _ => {
+        let right_brace = 
+            if let Some(Token { token_type: TT::Punctuation(PT::RightBrace), .. }) = self.peek(tokens) {
+                tokens.advance().unwrap()
+            } else {
                 self.errors.push(self.missing_token_error_previous("Expected '}' after a block", tokens));
                 return None;
-            }
-        };
+            };
         
         Some(Statement::new_block(&left_brace, right_brace, statements))
     }
@@ -646,15 +645,12 @@ impl Parser<'_> {
                 }
                 
                 let next_token = next_token.unwrap();
-                match next_token.token_type {
-                    TT::Punctuation(PT::RightParen) => {},
-
-                    _ => {
-                        self.errors.push(self.get_error_marked_line(
-                            ParserErrorType::UnclosedParenthesis, (*next_token).clone()
-                        ));
-                        return None;
-                    }
+                if let TT::Punctuation(PT::RightParen) = next_token.token_type {} 
+                else {
+                    self.errors.push(self.get_error_marked_line(
+                        ParserErrorType::UnclosedParenthesis, (*next_token).clone()
+                    ));
+                    return None;
                 }
 
                 Some(Expression::new_grouping(expr))
@@ -740,7 +736,7 @@ impl Parser<'_> {
 
             match token.token_type {
                 // Keyword is a nice way to know we are aligned
-                TT::Keyword(_) => return,
+                TT::Keyword(_) |
                 // Finding the end of blocks should help parser correctly close them
                 TT::Punctuation(PT::RightBrace) => return,
                 _ => {}

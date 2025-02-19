@@ -5,14 +5,13 @@ pub mod linear_ir;
 
 use crate::frontend::expression::{Expression, ExpressionType};
 use crate::frontend::statement::{SingleDefDeclaration, Statement, StatementType};
+use crate::frontend::static_type::{FloatType, IntegerType, SignedIntegerType, StaticType, UnsignedIntegerType};
 use crate::frontend::token_type::{KeywordType, LiteralType, PunctuationType, TokenType};
 use crate::frontend::utils::{LocatableInSource, SourceLocation};
 use crate::middle_end::utils::EnvironmentStack;
 use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use lazy_static::lazy_static;
-use crate::frontend::static_type::{FloatType, IntegerType, SignedIntegerType, StaticType, UnsignedIntegerType};
 
 /// Semantic Analyzer is responsible for statically checking the language and figuring out
 /// incorrect operations, like type mismatches, incorrect assignments, variable scopes, etc.
@@ -70,7 +69,7 @@ impl Analyzer<'_> {
                             StaticType::Integer(_) => Some(LiteralType::Integer(0)),
                             StaticType::Float(_) => Some(LiteralType::Float(0.0)),
                             StaticType::Boolean => Some(LiteralType::Boolean(false)),
-                            StaticType::String => Some(LiteralType::String("".to_string())),
+                            StaticType::String => Some(LiteralType::String(String::new())),
                             _ => {
                                 self.errors.push(self.produce_error_location(
                                     AnalyzerErrorType::NoDefaultInitializer(*static_type),
@@ -79,7 +78,7 @@ impl Analyzer<'_> {
                                 None
                             }
                         };
-                        
+
                         if let Some(literal) = literal {
                             *initializer = Some(Expression::new_literal_tokenless(literal));
                         }
@@ -354,7 +353,7 @@ impl Analyzer<'_> {
                     expression
                 ));
             }
-            expression.static_type = static_type
+            expression.static_type = static_type;
         }
         else {
             self.errors.push(self.produce_error(
@@ -440,12 +439,13 @@ impl Analyzer<'_> {
         
         match (cast_from, cast_to) {
             // Integer to Float
-            (StaticType::Integer(_), StaticType::Float(_)) => true,
-
+            (StaticType::Integer(_), StaticType::Float(_)) |
             // Float to Float (only widening allowed)
-            (StaticType::Float(FloatType::Float32), StaticType::Float(FloatType::Float64)) => true,
-            (StaticType::Float(FloatType::Literal), StaticType::Float(_)) => true,
-            (StaticType::Float(_), StaticType::Float(_)) => false,
+            (StaticType::Float(FloatType::Float32), StaticType::Float(FloatType::Float64)) |
+            (StaticType::Float(FloatType::Literal), StaticType::Float(_)) |
+            // Integer Literals
+            // TODO: Check for boundaries! Values may overflow/underflow
+            (StaticType::Integer(IntegerType::Literal), StaticType::Integer(_)) => true,
 
             // Integer to Integer
             (StaticType::Integer(IntegerType::Signed(from)), StaticType::Integer(IntegerType::Signed(to))) => {
@@ -457,10 +457,6 @@ impl Analyzer<'_> {
             (StaticType::Integer(IntegerType::Unsigned(from)), StaticType::Integer(IntegerType::Signed(to))) => {
                 Self::unsigned_to_signed_widening(from, to)
             }
-            
-            // Integer Literals
-            // TODO: Check for boundaries! Values may overflow/underflow
-            (StaticType::Integer(IntegerType::Literal), StaticType::Integer(_)) => true,
 
             // Other cases
             _ => false,
@@ -469,31 +465,37 @@ impl Analyzer<'_> {
 
     fn signed_integer_widening(from: SignedIntegerType, to: SignedIntegerType) -> bool {
         matches!((from, to),
-            (SignedIntegerType::Int8, SignedIntegerType::Int16)
-                | (SignedIntegerType::Int8, SignedIntegerType::Int32)
-                | (SignedIntegerType::Int8, SignedIntegerType::Int64)
-                | (SignedIntegerType::Int16, SignedIntegerType::Int32)
-                | (SignedIntegerType::Int16, SignedIntegerType::Int64)
+                | (SignedIntegerType::Int8,  SignedIntegerType::Int16 |
+                                             SignedIntegerType::Int32 |
+                                             SignedIntegerType::Int64)
+            
+                | (SignedIntegerType::Int16, SignedIntegerType::Int32 |
+                                             SignedIntegerType::Int64)
+            
                 | (SignedIntegerType::Int32, SignedIntegerType::Int64))
     }
 
     fn unsigned_integer_widening(from: UnsignedIntegerType, to: UnsignedIntegerType) -> bool {
         matches!((from, to),
-            (UnsignedIntegerType::Uns8, UnsignedIntegerType::Uns16)
-                | (UnsignedIntegerType::Uns8, UnsignedIntegerType::Uns32)
-                | (UnsignedIntegerType::Uns8, UnsignedIntegerType::Uns64)
-                | (UnsignedIntegerType::Uns16, UnsignedIntegerType::Uns32)
-                | (UnsignedIntegerType::Uns16, UnsignedIntegerType::Uns64)
+                | (UnsignedIntegerType::Uns8,  UnsignedIntegerType::Uns16 |
+                                               UnsignedIntegerType::Uns32 |
+                                               UnsignedIntegerType::Uns64)
+            
+                | (UnsignedIntegerType::Uns16, UnsignedIntegerType::Uns32 |
+                                               UnsignedIntegerType::Uns64)
+            
                 | (UnsignedIntegerType::Uns32, UnsignedIntegerType::Uns64))
     }
 
     fn unsigned_to_signed_widening(from: UnsignedIntegerType, to: SignedIntegerType) -> bool {
         matches!((from, to),
-                | (UnsignedIntegerType::Uns8, SignedIntegerType::Int16)
-                | (UnsignedIntegerType::Uns8, SignedIntegerType::Int32)
-                | (UnsignedIntegerType::Uns8, SignedIntegerType::Int64)
-                | (UnsignedIntegerType::Uns16, SignedIntegerType::Int32)
-                | (UnsignedIntegerType::Uns16, SignedIntegerType::Int64)
+                | (UnsignedIntegerType::Uns8,  SignedIntegerType::Int16 | 
+                                               SignedIntegerType::Int32 | 
+                                               SignedIntegerType::Int64)
+            
+                | (UnsignedIntegerType::Uns16, SignedIntegerType::Int32 | 
+                                               SignedIntegerType::Int64)
+            
                 | (UnsignedIntegerType::Uns32, SignedIntegerType::Int64))
     }
 }
