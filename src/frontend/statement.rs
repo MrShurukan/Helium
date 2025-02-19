@@ -173,8 +173,8 @@ impl Display for StatementType {
                 writeln!(f, "def {{")?;
                 for declaration in declarations {
                     writeln!(f, "{} = {}.{} {:?};",
-                        declaration.identifier, declaration.port.port,
-                        declaration.port.pin_number , declaration.pin_mode)?;
+                             declaration.identifier, declaration.pin.port,
+                             declaration.pin.pin_number, declaration.pin_mode)?;
                 }
                 write!(f, "}}")
             },
@@ -214,7 +214,7 @@ impl StatementType {
 #[derive(Debug)]
 pub struct SingleDefDeclaration {
     pub identifier: String,
-    pub port: PinRef,
+    pub pin: PinRef,
     pub pin_mode: PinModeConstantType,
     pub source_location: SourceLocation,
 }
@@ -233,7 +233,7 @@ impl SingleDefDeclaration {
                 Ok(SingleDefDeclaration {
                     source_location: SourceLocation::new_from_start_end(identifier.source_location, pin_mode.source_location),
                     identifier: ident,
-                    port,
+                    pin: port,
                     pin_mode: *pin,
                 })
             } else {

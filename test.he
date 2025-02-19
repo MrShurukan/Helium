@@ -1,6 +1,20 @@
-﻿setup {
-    var a = 123;
-    var x = ((a + a) * (a + a) + ((a + a) + (a + a)));
+﻿// Simple LED + Button example
+
+def {
+    Button = PortD.2 INPUT;
+    Led    = PortC.5 OUTPUT;
 }
 
-loop {}
+setup {
+    // Led = LOW;
+}
+
+loop {
+    // Button is pressed when it's connected to GND
+    /*if Button == LOW {
+        Led = HIGH;
+    }
+    else {
+        Led = LOW;
+    }*/
+}

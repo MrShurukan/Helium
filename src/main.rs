@@ -56,7 +56,7 @@ fn main() {
         report_errors_and_exit(&[ir_error], "IR builder");
     }
 
-    println!("Setup IR:");
+    println!("IR:");
     for ir in ir_vec.unwrap() {
         println!("{ir}");
     }
@@ -135,7 +135,7 @@ impl Display for StructureError {
 fn convert_to_ir(program: Program, source: &str) -> Result<Vec<IntermediateRepresentation>, IRError> {
     // Right now we do just the setup as a test
     let ir_builder = IRBuilder::new(source);
-    ir_builder.produce_ir(program.setup_block)
+    ir_builder.produce_ir(program)
 }
 
 fn report_errors_and_exit<E: Error>(errors: &[E], error_source: &'static str) -> ! {
