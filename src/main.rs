@@ -83,21 +83,26 @@ fn structure_program(statements: Vec<Statement>) -> Result<Program, StructureErr
     let mut setup_block: Vec<Statement> = Vec::new();
     let mut loop_block: Vec<Statement> = Vec::new();
     
+    let mut loop_found = false;
+    
     for statement in statements {
         match statement.statement_type {
             StatementType::DefDeclaration(declarations) => def_declarations = declarations,
             StatementType::VariableDeclaration { .. } => global_var_declarations.push(statement),
             StatementType::SetupDeclaration(statements) => setup_block = statements,
-            StatementType::LoopDeclaration(statements) => loop_block = statements,
+            StatementType::LoopDeclaration(statements) => {
+                loop_block = statements;
+                loop_found = true;
+            },
             _ => {}
         }
     }
     
-    if loop_block.is_empty() {
-        Err(StructureError::NoLoopPresent)
+    if loop_found {
+        Ok(Program { def_declarations, global_var_declarations, setup_block, loop_block })
     }
     else {
-        Ok(Program { def_declarations, global_var_declarations, setup_block, loop_block })
+        Err(StructureError::NoLoopPresent)
     }
 }
 
