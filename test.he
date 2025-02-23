@@ -11,10 +11,10 @@ setup {
 
 loop {
     // Button is pressed when it's connected to GND
-    /*if Button == LOW {
+    if Button == LOW {
         Led = HIGH;
     }
     else {
         Led = LOW;
-    }*/
+    }
 }

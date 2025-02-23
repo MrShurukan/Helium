@@ -47,6 +47,18 @@ impl DagBuilder {
                             _ => Err(DagError::UnknownAdditionType(expression.static_type))
                         }
                     },
+                    TokenType::Punctuation(PunctuationType::EqualEqual) => {
+                        // TODO: This is a hack just to check comparison working right now
+                        // I say this block should be rewritten from scratch
+                        match (left.static_type, right.static_type) {
+                            (StaticType::Pin, StaticType::PinState) => {
+                                let right = self.process_expression(right)?;
+                                Ok(self.get_or_insert(DagNode { dag_type:
+                                    DagType::PinStateComparison("Button".to_string(), right) }))
+                            },
+                            _ => Err(DagError::CannotProcessComparisonOfTypes(left.static_type, right.static_type))
+                        }
+                    },
                     _ => Err(DagError::UnknownBinaryOperator(operator.clone()))
                 }
             },
@@ -109,6 +121,7 @@ pub enum DagType {
     Assignment(String, Rc<DagNode>),
     AssignmentPinMode(String, Rc<DagNode>),
     AssignmentPinState(String, Rc<DagNode>),
+    PinStateComparison(String, Rc<DagNode>)
 }
 
 impl PartialEq for DagNode {
@@ -128,7 +141,8 @@ pub enum DagError {
     CannotProcessLiteral(StaticType),
     UnknownAdditionType(StaticType),
     UnknownBinaryOperator(TokenType),
-    UnknownExpressionType(ExpressionType)
+    UnknownExpressionType(ExpressionType),
+    CannotProcessComparisonOfTypes(StaticType, StaticType)
 }
 
 impl Error for DagError {}
@@ -143,6 +157,8 @@ impl Display for DagError {
                 write!(f, "Dag is not ready to accept binary operator {token_type:?}"),
             DagError::UnknownExpressionType(expression_type) =>
                 write!(f, "Dag is not ready to accept {expression_type:?}"),
+            DagError::CannotProcessComparisonOfTypes(left, right) =>
+                write!(f, "Dag is not ready to process '{left}' == '{right}'")
         }
     }
 }

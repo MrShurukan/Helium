@@ -60,12 +60,21 @@ pub fn get_error_marked_line_location(location: &SourceLocation, source: &str) -
                 line.chars().take_while(char::is_ascii_whitespace).count());
 
             if line_number == location.line_end {
-                let marker = "*".repeat(location.end_offset - spaces.len() + 2).red();
+                // TODO: Weird bug. Sometimes (ends of blocks?) spaces are longer than the line itself. 
+                // TODO: In this case I'll just paint the entire line red. But it's weird and needs fixing.
+                let mut marker_len: isize = location.end_offset as isize - spaces.len() as isize + 2;
+                if marker_len < 0 { marker_len = location.end_offset as isize }
+                
+                let marker = "*".repeat(marker_len as usize).red();
                 result_string += &format!("\n{spaces}{marker}");
                 return result_string;
             }
 
-            let marker = "*".repeat(line.len() - spaces.len()).red();
+            // TODO: Weird bug. Sometimes (ends of blocks?) spaces are longer than the line itself. 
+            // TODO: In this case I'll just paint the entire line red. But it's weird and needs fixing.
+            let mut marker_len: isize = line.len() as isize - spaces.len() as isize;
+            if marker_len < 0 { marker_len = line.len() as isize }
+            let marker = "*".repeat(marker_len as usize).red();
             result_string += &format!("\n{spaces}{marker}");
         }
     }

@@ -112,7 +112,7 @@ pub struct SourceLocation {
     pub line_end: usize,
     /// Offset in grapheme count from the start of the first line
     pub start_offset: usize,
-    /// Offset in grapheme count from the start of the last file
+    /// Offset in grapheme count from the start of the last line
     pub end_offset: usize
 }
 
