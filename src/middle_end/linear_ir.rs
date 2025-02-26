@@ -94,9 +94,12 @@ impl IRBuilder<'_> {
         } = statement.statement_type {
             if let Some(init) = initializer {
                 let register = self.expression(&init)?;
+                if register.is_none() {
+                    panic!("Can't assign value of this expression to a constant");
+                }
 
                 self.ir_vec.push(IntermediateRepresentation {
-                    ir_type: IRType::Store(register, identifier)
+                    ir_type: IRType::Store(register.unwrap(), identifier)
                 });
 
                 Ok(())
@@ -118,13 +121,13 @@ impl IRBuilder<'_> {
             PinModeConstantType::InputPullDown |
             PinModeConstantType::InputPullUp => {
                 self.push_ir(
-                    IRType::ClearBitDDR(single_def_declaration.pin.port.clone(), single_def_declaration.pin.pin_number as u8)
+                    IRType::SetInputPortMode(single_def_declaration.pin.clone())
                 );
             },
 
             PinModeConstantType::Output => {
                 self.push_ir(
-                    IRType::SetBitDDR(single_def_declaration.pin.port.clone(), single_def_declaration.pin.pin_number as u8)
+                    IRType::SetOutputPortMode(single_def_declaration.pin.clone())
                 );
             }
         }
@@ -152,34 +155,39 @@ impl IRBuilder<'_> {
             StatementType::VariableDeclaration { identifier, initializer, .. } => {
                 if let Some(init_expr) = initializer {
                     let register_number = self.expression(init_expr)?;
-                    self.local_variables.insert(identifier.clone(), register_number);
+                    if register_number.is_none() {
+                        panic!("Can't assign value of this expression to a variable");
+                    }
+                    
+                    self.local_variables.insert(identifier.clone(), register_number.unwrap());
                     Ok(())
                 }
                 else { Err(IRError::new(IRErrorType::VariableDeclarationWithoutInit, &source_location, self.source)) }
             },
             StatementType::If { condition, then_body, else_body } => {
                 let condition_register_number = self.expression(condition)?;
+                if condition_register_number.is_none() {
+                    panic!("Can't use this expression as a condition - it returned no value")
+                }
 
                 let else_label = self.register_random_label("else");
                 self.push_ir(
-                    IRType::TestForZero(condition_register_number)
-                );
-                self.push_ir(
-                    IRType::BranchIfEqual(else_label.clone())
+                    IRType::JumpIfZero(condition_register_number.unwrap(), else_label.clone())
                 );
                 self.statement(then_body)?;
-                self.push_ir(
-                    IRType::Label(else_label)
-                );
+                
                 if let Some(else_body) = else_body {
                     let skip_else_label = self.register_random_label("skip_else");
                     self.push_ir(
                         IRType::Jump(skip_else_label.clone())
                     );
+                    
+                    self.push_ir(IRType::Label(else_label));
                     self.statement(else_body)?;
-                    self.push_ir(
-                        IRType::Label(skip_else_label)
-                    );
+                    self.push_ir(IRType::Label(skip_else_label));
+                }
+                else {
+                    self.push_ir(IRType::Label(else_label));
                 }
 
                 Ok(())
@@ -197,33 +205,35 @@ impl IRBuilder<'_> {
         }
     }
     
-    fn expression(&mut self, expression: &Expression) -> Result<RegisterNumber, IRError> {
+    fn expression(&mut self, expression: &Expression) -> Result<Option<RegisterNumber>, IRError> {
         // We use dag here to produce optimized expressions
         let mut dag_builder = DagBuilder::new();
         let dag = dag_builder.process_expression(expression)
             .map_err(|err| IRError::new(IRErrorType::DagError(err), &expression.source_location, self.source))?;
         
-        Ok(self.dag(&dag, expression))
+        Ok(self.dag(&dag))
     }
     
-    fn dag(&mut self, dag_node: &Rc<DagNode>, expression: &Expression) -> RegisterNumber {
+    fn dag(&mut self, dag_node: &Rc<DagNode>) -> Option<RegisterNumber> {
         let register_number = self.processed_dags.get(dag_node);
         if let Some(register_number) = register_number {
-            return *register_number;
+            return Some(*register_number);
         }
         
-        let register_number = self.calculate_register_from_dag(dag_node, expression);
-        self.processed_dags.insert(Rc::clone(dag_node), register_number);
+        let register_number = self.calculate_register_from_dag(dag_node);
+        if let Some(register_number) = &register_number {
+            self.processed_dags.insert(Rc::clone(dag_node), *register_number);
+        }
         
         register_number
     }
 
-    fn calculate_register_from_dag(&mut self, dag_node: &Rc<DagNode>, expression: &Expression) -> RegisterNumber {
+    fn calculate_register_from_dag(&mut self, dag_node: &Rc<DagNode>) -> Option<RegisterNumber> {
         match &dag_node.dag_type {
             DagType::Identifier(name) => {
                 let local_variable = self.local_variables.get(name);
                 if let Some(local_variable_register) = local_variable {
-                    *local_variable_register
+                    Some(*local_variable_register)
                 }
                 // Global variable
                 else {
@@ -233,55 +243,21 @@ impl IRBuilder<'_> {
                         IRType::Load(LoadType::Memory(name.clone()), self.last_register_number)
                     );
 
-                    self.last_register_number
+                    Some(self.last_register_number)
                 }
             }
-            DagType::IntegerValue(value) => {
-                self.last_register_number += 1;
-
-                self.push_ir(
-                    IRType::Load(LoadType::Immediate(LiteralType::Integer(*value)), self.last_register_number)
-                );
-
-                self.last_register_number
+            DagType::IntegerValue(_) => {
+                None
             },
-            DagType::PinModeValue(value) => {
-                self.last_register_number += 1;
-
-                // TODO: PullUp and PullDown
-                match value {
-                    PinModeConstantType::Input => {
-                        self.push_ir(
-                            IRType::Load(LoadType::Immediate(LiteralType::Integer(0)), self.last_register_number)
-                        );
-                    },
-                    PinModeConstantType::Output => {
-                        self.push_ir(
-                            IRType::Load(LoadType::Immediate(LiteralType::Integer(1)), self.last_register_number)
-                        );
-                    },
-                    _ => panic!("Can't work with PULLUP and PULLDOWN yet")
-                }
-
-                self.last_register_number
+            DagType::PinModeValue(_) => {
+                None
             },
-            DagType::PinStateValue(value) => {
-                self.last_register_number += 1;
-
-                let integer_type = match value {
-                    PinStateConstantType::Low => LiteralType::Integer(0),
-                    PinStateConstantType::High => LiteralType::Integer(1),
-                };
-
-                self.push_ir(
-                    IRType::Load(LoadType::Immediate(integer_type), self.last_register_number)
-                );
-
-                self.last_register_number
+            DagType::PinStateValue(_) => {
+                None
             },
             DagType::IntegerAddition(left, right) => {
-                let left_register = self.dag(left, expression);
-                let right_register = self.dag(right, expression);
+                let left_register = self.process_integer_dag(left);
+                let right_register = self.process_integer_dag(right);
 
                 self.last_register_number += 1;
 
@@ -289,105 +265,152 @@ impl IRBuilder<'_> {
                     IRType::IntegerAdd { a: left_register, b: right_register, output: self.last_register_number }
                 );
 
-                self.last_register_number
+                Some(self.last_register_number)
             },
-            DagType::Assignment(identifier, value) => {
-                let value_register = self.dag(value, expression);
-                self.assignment(identifier, value_register, expression)
+            DagType::AssignmentInteger(identifier, value) => {
+                let value_register = self.process_integer_dag(value);
+                Some(self.assignment_integer(identifier, value_register))
             },
             DagType::AssignmentPinMode(identifier, value) => {
-                let value_register = self.dag(value, expression);
-
-                // This could be assignment to a pin. In this case this is a different operation
-                if let Some(pin) = self.registered_pins.get(identifier) {
-                    self.push_ir(
-                        IRType::OutDDR(pin.port.clone(), value_register)
-                    );
-
-                    value_register
-                }
-                // This wasn't a pin, so it's an assignment to a local/global variable
-                else {
-                    self.assignment(identifier, value_register, expression)
-                }
-            },
-            DagType::AssignmentPinState(identifier, value) => {
-                let value_register = self.dag(value, expression);
-
                 // This could be assignment to a pin. In this case this is a different operation
                 if let Some(pin) = self.registered_pins.get(identifier) {
                     let pin = pin.clone();
-                    let source_location = Rc::new(expression.source_location);
+                    // Step 1. Check if it's a compiler known value
+                    let known_value = Self::try_get_end_value(value);
+                    match known_value {
+                        // Step 2. We got the constant value
+                        Some(DagType::PinModeValue(pin_mode_value)) => {
+                            if matches!(pin_mode_value, PinModeConstantType::Output) {
+                                self.push_ir(
+                                    IRType::SetOutputPortMode(pin.clone())
+                                );
+                            }
+                            else {
+                                // TODO: INPUT_PULLUP and INPUT_PULLDOWN
+                                if matches!(pin_mode_value, PinModeConstantType::InputPullDown | PinModeConstantType::InputPullUp) {
+                                    panic!("Can't work with input_pullup and pulldown yet");
+                                }
 
-                    // If value == 0 then we clear the bit
-                    // Otherwise we set it
+                                self.push_ir(
+                                    IRType::SetInputPortMode(pin.clone())
+                                );
+                            }
 
-                    // TODO: This is overkill if the value is a literal/constant.
-                    // TODO: In case of that this should just output Set or Clear directly
-                    let if_zero_label = self.register_random_label("if_zero");
-                    let if_not_zero_label = self.register_random_label("if_not_zero");
+                            None
+                        },
+                        Some(other) => panic!("Incorrect type for pin mode assignment {other:?}"),
+                        // Step 2. It's not a constant, need to runtime check it
+                        _ => {
+                            // TODO: INPUT_PULLUP and INPUT_PULLDOWN
+                            let value_register = self.process_pin_mode_dag(value);
+                            let input_label = self.register_random_label("input");
+                            let end_label = self.register_random_label("end");
 
-                    self.push_ir(IRType::TestForZero(value_register));
-                    self.push_ir(IRType::BranchIfEqual(if_zero_label.clone()));
-                    // if not zero code
-                    self.push_ir(IRType::SetBitPort(pin.port.clone(), pin.pin_number as u8));
-                    self.push_ir(IRType::Jump(if_not_zero_label.clone()));
+                            self.push_ir(IRType::JumpIfZero(value_register, input_label.clone()));
+                            self.push_ir(IRType::SetOutputPortMode(pin.clone()));
+                            self.push_ir(IRType::Jump(end_label.clone()));
 
-                    // if zero code
-                    self.push_ir(IRType::Label(if_zero_label.clone()));
-                    self.push_ir(IRType::ClearBitPort(pin.port.clone(), pin.pin_number as u8));
+                            self.push_ir(IRType::Label(input_label));
+                            self.push_ir(IRType::SetInputPortMode(pin.clone()));
 
-                    // if not zero jump
-                    self.push_ir(IRType::Label(if_not_zero_label.clone()));
+                            self.push_ir(IRType::Label(end_label));
 
-                    value_register
+                            Some(value_register)
+                        }
+                    }
                 }
                 // This wasn't a pin, so it's an assignment to a local/global variable
                 else {
-                    self.assignment(identifier, value_register, expression)
+                    let value_register = self.process_pin_mode_dag(value);
+                    Some(self.assignment_integer(identifier, value_register))
+                }
+            },
+            DagType::AssignmentPinState(identifier, value) => {
+                // This could be assignment to a pin. In this case this is a different operation
+                if let Some(pin) = self.registered_pins.get(identifier) {
+                    let pin = pin.clone();
+                    // Step 1. Check if it's a compiler known value
+                    let known_value = Self::try_get_end_value(value);
+                    match known_value {
+                        // Step 2. We got the constant value
+                        Some(DagType::PinStateValue(pin_state_value)) => {
+                            if matches!(pin_state_value, PinStateConstantType::High) {
+                                self.push_ir(
+                                    IRType::SetPortHigh(pin.clone())
+                                );
+                            }
+                            else {
+                                self.push_ir(
+                                    IRType::SetPortLow(pin.clone())
+                                );
+                            }
+
+                            None
+                        },
+                        Some(other) => panic!("Incorrect type for pin state assignment {other:?}"),
+                        // Step 2. It's not a constant, need to runtime check it
+                        _ => {
+                            let value_register = self.process_pin_state_dag(value);
+                            let low_label = self.register_random_label("low");
+                            let high_label = self.register_random_label("high");
+
+                            self.push_ir(IRType::JumpIfZero(value_register, low_label.clone()));
+                            self.push_ir(IRType::SetPortHigh(pin.clone()));
+                            self.push_ir(IRType::Jump(high_label.clone()));
+
+                            self.push_ir(IRType::Label(low_label));
+                            self.push_ir(IRType::SetPortLow(pin.clone()));
+
+                            self.push_ir(IRType::Label(high_label));
+
+                            Some(value_register)
+                        }
+                    }
+                }
+                // This wasn't a pin, so it's an assignment to a local/global variable
+                else {
+                    let value_register = self.process_pin_state_dag(value);
+                    Some(self.assignment_integer(identifier, value_register))
                 }
             },
             DagType::PinStateComparison(identifier, right) => {
                 if let Some(pin) = self.registered_pins.get(identifier) {
                     let pin = pin.clone();
-                    let right_register = self.dag(right, expression);
+                    // Step 1. Check if it's a compiler known value
+                    let known_value = Self::try_get_end_value(right);
+                    match known_value {
+                        // Step 2. We got the constant value
+                        Some(DagType::PinStateValue(pin_state_value)) => {
+                            self.last_register_number += 1;
+                            let one_label = self.register_random_label("true");
+                            let end_label = self.register_random_label("end");
+                            if matches!(pin_state_value, PinStateConstantType::Low) {
+                                self.push_ir(IRType::SkipIfPortHigh(pin.clone()));
+                            }
+                            else {
+                                self.push_ir(IRType::SkipIfPortLow(pin.clone()));
+                            }
 
-                    // Check if register contains a zero
-                    self.push_ir(IRType::TestForZero(right_register));
-                    let if_not_zero_label = self.register_random_label("if_not_zero");
-                    let if_zero_label = self.register_random_label("if_zero");
-                    let true_label = self.register_random_label("true");
-                    let false_label = self.register_random_label("false");
-                    let end_label = self.register_random_label("end");
-                    self.push_ir(IRType::BranchIfEqual(if_zero_label.clone()));
+                            self.push_ir(IRType::Jump(one_label.clone()));
+                            self.push_ir(
+                                IRType::Load(LoadType::ImmediateInt(0), self.last_register_number)
+                            );
+                            self.push_ir(IRType::Jump(end_label.clone()));
 
-                    let full_port_name = format!("Port{}", pin.port.clone());
-                    
-                    // if_not_zero:
-                    self.push_ir(IRType::Label(if_not_zero_label));
-                    self.push_ir(IRType::SkipIfBitIOSet(full_port_name.clone(), pin.pin_number as u8));
-                    self.push_ir(IRType::Jump(false_label.clone()));
-                    self.push_ir(IRType::Jump(true_label.clone()));
-                    
-                    // if_zero:
-                    self.push_ir(IRType::Label(if_zero_label));
-                    self.push_ir(IRType::SkipIfBitIOClear(full_port_name, pin.pin_number as u8));
-                    self.push_ir(IRType::Jump(false_label.clone()));
-                    self.push_ir(IRType::Jump(true_label.clone()));
-                    
-                    // true:
-                    self.last_register_number += 1;
-                    self.push_ir(IRType::Label(true_label));
-                    self.push_ir(IRType::Load(LoadType::Immediate(LiteralType::Integer(1)), self.last_register_number));
-                    self.push_ir(IRType::Jump(end_label.clone()));
+                            self.push_ir(IRType::Label(one_label));
+                            self.push_ir(
+                                IRType::Load(LoadType::ImmediateInt(1), self.last_register_number)
+                            );
 
-                    // false:
-                    self.push_ir(IRType::Label(false_label));
-                    self.push_ir(IRType::Load(LoadType::Immediate(LiteralType::Integer(0)), self.last_register_number));
-                    // end:
-                    self.push_ir(IRType::Label(end_label));
+                            self.push_ir(IRType::Label(end_label));
 
-                    self.last_register_number
+                            Some(self.last_register_number)
+                        },
+                        // Step 2. It's not a constant, need to runtime check it
+                        _ => {
+                            panic!("Can't do runtime pin state check yet");
+                        }
+                    }
                 }
                 else {
                     unreachable!("Couldn't find pin while producing IR");
@@ -396,11 +419,105 @@ impl IRBuilder<'_> {
         }
     }
 
+    fn process_integer_dag(&mut self, dag_node: &Rc<DagNode>) -> RegisterNumber {
+        match dag_node.dag_type {
+            DagType::IntegerValue(value) => {
+                self.last_register_number += 1;
+                self.push_ir(
+                    IRType::Load(LoadType::ImmediateInt(value), self.last_register_number)
+                );
+
+                self.processed_dags.insert(Rc::clone(dag_node), self.last_register_number);
+                self.last_register_number
+            },
+            _ => {
+                let processed = self.dag(dag_node);
+                if let Some(reg) = processed {
+                    reg
+                }
+                else {
+                    panic!("Can't process a dag as integer")
+                }
+            }
+        }
+    }
+
+    fn process_pin_mode_dag(&mut self, dag_node: &Rc<DagNode>) -> RegisterNumber {
+        match dag_node.dag_type {
+            DagType::PinModeValue(value) => {
+                // TODO: PULLUP PULLDOWN
+                self.last_register_number += 1;
+                let value = match value {
+                    PinModeConstantType::Input |
+                    PinModeConstantType::InputPullDown |
+                    PinModeConstantType::InputPullUp => 0,
+                    PinModeConstantType::Output => 1
+                };
+                self.push_ir(
+                    IRType::Load(LoadType::ImmediateInt(value), self.last_register_number)
+                );
+
+                self.processed_dags.insert(Rc::clone(dag_node), self.last_register_number);
+                self.last_register_number
+            },
+            _ => {
+                let processed = self.dag(dag_node);
+                if let Some(reg) = processed {
+                    reg
+                }
+                else {
+                    panic!("Can't process a dag as pin_mode")
+                }
+            }
+        }
+    }
+
+    fn process_pin_state_dag(&mut self, dag_node: &Rc<DagNode>) -> RegisterNumber {
+        match dag_node.dag_type {
+            DagType::PinStateValue(value) => {
+                self.last_register_number += 1;
+                let value = match value {
+                    PinStateConstantType::Low => 0,
+                    PinStateConstantType::High => 1
+                };
+                self.push_ir(
+                    IRType::Load(LoadType::ImmediateInt(value), self.last_register_number)
+                );
+
+                self.processed_dags.insert(Rc::clone(dag_node), self.last_register_number);
+                self.last_register_number
+            },
+            _ => {
+                let processed = self.dag(dag_node);
+                if let Some(reg) = processed {
+                    reg
+                }
+                else {
+                    panic!("Can't process a dag as pin_state")
+                }
+            }
+        }
+    }
+
+    fn try_get_end_value(dag_node: &Rc<DagNode>) -> Option<DagType> {
+        match &dag_node.dag_type {
+            DagType::IntegerValue(_) |
+            DagType::PinModeValue(_) |
+            DagType::PinStateValue(_) => Some(dag_node.dag_type.clone()),
+
+            DagType::AssignmentInteger(_, right) |
+            DagType::AssignmentPinMode(_, right) |
+            DagType::AssignmentPinState(_, right) |
+            DagType::PinStateComparison(_, right) => Self::try_get_end_value(right),
+            _ => None
+        }
+    }
+
     fn get_binary_pin_number(regular: usize) -> i32 {
         0b1 << (regular - 1)
     }
 
-    fn assignment(&mut self, identifier: &String, value_register: RegisterNumber, expression: &Expression) -> RegisterNumber {
+    fn assignment_integer(&mut self, identifier: &String, value_register: RegisterNumber) -> RegisterNumber {
         // Local variable
         if let Some(local_var) = self.local_variables.get(identifier) {
             self.push_ir(
@@ -451,8 +568,8 @@ impl Display for IntermediateRepresentation {
         match &self.ir_type {
             IRType::Load(t, reg) => {
                 match t {
-                    LoadType::Immediate(literal_type) =>
-                        write!(f, "LOAD ${literal_type:?}")?,
+                    LoadType::ImmediateInt(int) =>
+                        write!(f, "LOAD ${int}")?,
                     LoadType::Memory(name) =>
                         write!(f, "LOAD {name}")?,
                     LoadType::DDR(port) =>
@@ -472,10 +589,6 @@ impl Display for IntermediateRepresentation {
                 write!(f, "{}:", label.black().on_yellow()),
             IRType::Jump(label) =>
                 write!(f, "JMP {}", label.yellow()),
-            IRType::OutDDR(port, reg) =>
-                write!(f, "OUT %r{reg} -> DDR{port}"),
-            IRType::OutPort(port, reg) =>
-                write!(f, "OUT %r{reg} -> Port{port}"),
             IRType::AndImmediate(reg, num) =>
                 write!(f, "ANDI %r{reg}, {num:#010b} -> %r{reg}"),
             IRType::OrImmediate(reg, num) =>
@@ -484,22 +597,22 @@ impl Display for IntermediateRepresentation {
                 write!(f, "LSL %r{reg} -> %r{reg}"),
             IRType::LogicalShiftRight(reg) =>
                 write!(f, "LSR %r{reg} -> %r{reg}"),
-            IRType::SetBitDDR(port, bit_number) =>
-                write!(f, "SBI DDR{port}, {bit_number}"),
-            IRType::ClearBitDDR(port, bit_number) =>
-                write!(f, "CBI DDR{port}, {bit_number}"),
-            IRType::SetBitPort(port, bit_number) =>
-                write!(f, "SBI Port{port}, {bit_number}"),
-            IRType::ClearBitPort(port, bit_number) =>
-                write!(f, "CBI Port{port}, {bit_number}"),
-            IRType::TestForZero(reg) =>
-                write!(f, "TST %r{reg} -> Z"),
+            IRType::JumpIfZero(reg, label) =>
+                write!(f, "JMPZero %r{reg}, {}", label.yellow()),
             IRType::BranchIfEqual(label) =>
                 write!(f, "BREQ {}", label.yellow()),
-            IRType::SkipIfBitIOClear(io, bit_number) =>
-                write!(f, "SBIS {io}, {bit_number}"),
-            IRType::SkipIfBitIOSet(io, bit_number) =>
-                write!(f, "SBIC {io}, {bit_number}"),
+            IRType::SkipIfPortLow(pin_ref) =>
+                write!(f, "SkipIfPortBitClear {pin_ref}"),
+            IRType::SkipIfPortHigh(pin_ref) =>
+                write!(f, "SkipIfPortBitSet {pin_ref}"),
+            IRType::SetPortLow(pin_ref) =>
+                write!(f, "SetPortLow {pin_ref}"),
+            IRType::SetPortHigh(pin_ref) =>
+                write!(f, "SetPortHigh {pin_ref}"),
+            IRType::SetInputPortMode(pin_ref) =>
+                write!(f, "SetInputPortMode {pin_ref}"),
+            IRType::SetOutputPortMode(pin_ref) =>
+                write!(f, "SetOutputPortMode {pin_ref}"),
         }
     }
 }
@@ -513,22 +626,20 @@ pub enum IRType {
     IntegerAdd { a: RegisterNumber, b: RegisterNumber, output: RegisterNumber },
     LogicalShiftLeft(RegisterNumber),
     LogicalShiftRight(RegisterNumber),
-    OutDDR(String, RegisterNumber),
-    OutPort(String, RegisterNumber),
-    SetBitDDR(String, u8),
-    ClearBitDDR(String, u8),
-    SetBitPort(String, u8),
-    ClearBitPort(String, u8),
+    SetPortLow(PinRef),
+    SetPortHigh(PinRef),
+    SetInputPortMode(PinRef),
+    SetOutputPortMode(PinRef),
     AndImmediate(RegisterNumber, i8),
     OrImmediate(RegisterNumber, i8),
-    TestForZero(RegisterNumber),
+    JumpIfZero(RegisterNumber, String),
     BranchIfEqual(String),
-    SkipIfBitIOClear(String, u8),
-    SkipIfBitIOSet(String, u8)
+    SkipIfPortLow(PinRef),
+    SkipIfPortHigh(PinRef)
 }
 
 pub enum LoadType {
-    Immediate(LiteralType),
+    ImmediateInt(u64),
     Memory(String),
     DDR(String),
     Port(String)

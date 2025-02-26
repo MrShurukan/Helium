@@ -182,6 +182,12 @@ pub struct PinRef {
     pub pin_number: usize
 }
 
+impl Display for PinRef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Port{}{}", self.port, self.pin_number)
+    }
+}
+
 impl PinRef {
     pub fn new(port: Token, pin_number: Token) -> Result<PinRef, PinRefError> {
         if let TokenType::Port(port_name) = port.token_type {

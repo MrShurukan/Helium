@@ -76,7 +76,8 @@ impl DagBuilder {
                 let dag_type = match expression.static_type {
                     StaticType::PinState => DagType::AssignmentPinState(identifier.clone(), expr_dag),
                     StaticType::PinMode => DagType::AssignmentPinMode(identifier.clone(), expr_dag),
-                    _ => DagType::Assignment(identifier.clone(), expr_dag),
+                    StaticType::Integer(_) => DagType::AssignmentInteger(identifier.clone(), expr_dag),
+                    _ => return Err(DagError::UnknownAssignmentType(expression.static_type)),
                 };
 
                 Ok(self.get_or_insert(DagNode { dag_type }))
@@ -118,7 +119,7 @@ pub enum DagType {
     PinModeValue(PinModeConstantType),
     PinStateValue(PinStateConstantType),
     IntegerAddition(Rc<DagNode>, Rc<DagNode>),
-    Assignment(String, Rc<DagNode>),
+    AssignmentInteger(String, Rc<DagNode>),
     AssignmentPinMode(String, Rc<DagNode>),
     AssignmentPinState(String, Rc<DagNode>),
     PinStateComparison(String, Rc<DagNode>)
@@ -142,7 +143,8 @@ pub enum DagError {
     UnknownAdditionType(StaticType),
     UnknownBinaryOperator(TokenType),
     UnknownExpressionType(ExpressionType),
-    CannotProcessComparisonOfTypes(StaticType, StaticType)
+    CannotProcessComparisonOfTypes(StaticType, StaticType),
+    UnknownAssignmentType(StaticType)
 }
 
 impl Error for DagError {}
@@ -158,7 +160,9 @@ impl Display for DagError {
             DagError::UnknownExpressionType(expression_type) =>
                 write!(f, "Dag is not ready to accept {expression_type:?}"),
             DagError::CannotProcessComparisonOfTypes(left, right) =>
-                write!(f, "Dag is not ready to process '{left}' == '{right}'")
+                write!(f, "Dag is not ready to process '{left}' == '{right}'"),
+            DagError::UnknownAssignmentType(static_type) =>
+                write!(f, "Dag is not ready to accept assigment type of {static_type}"),
         }
     }
 }
