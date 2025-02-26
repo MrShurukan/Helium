@@ -6,7 +6,6 @@ def {
 }
 
 setup {
-    // TODO: This is a bug, it doesn't produce a second port low
     Led = Led = LOW;
 }
 

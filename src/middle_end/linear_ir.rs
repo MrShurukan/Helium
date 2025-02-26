@@ -158,7 +158,7 @@ impl IRBuilder<'_> {
                     if register_number.is_none() {
                         panic!("Can't assign value of this expression to a variable");
                     }
-                    
+
                     self.local_variables.insert(identifier.clone(), register_number.unwrap());
                     Ok(())
                 }
@@ -175,13 +175,13 @@ impl IRBuilder<'_> {
                     IRType::JumpIfZero(condition_register_number.unwrap(), else_label.clone())
                 );
                 self.statement(then_body)?;
-                
+
                 if let Some(else_body) = else_body {
                     let skip_else_label = self.register_random_label("skip_else");
                     self.push_ir(
                         IRType::Jump(skip_else_label.clone())
                     );
-                    
+
                     self.push_ir(IRType::Label(else_label));
                     self.statement(else_body)?;
                     self.push_ir(IRType::Label(skip_else_label));
@@ -334,6 +334,11 @@ impl IRBuilder<'_> {
                     match known_value {
                         // Step 2. We got the constant value
                         Some(DagType::PinStateValue(pin_state_value)) => {
+                            // Before that, right expression still needs to evaluate
+                            // For example, it could be a chained assignment, like
+                            // Pin1 = Pin2 = HIGH
+                            _ = self.dag(value);
+                            
                             if matches!(pin_state_value, PinStateConstantType::High) {
                                 self.push_ir(
                                     IRType::SetPortHigh(pin.clone())
