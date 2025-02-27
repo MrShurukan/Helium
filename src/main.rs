@@ -8,18 +8,35 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::process::exit;
 use std::{env, fs};
+use crate::backend::{AssemblyError, AssemblyProducer};
+use crate::backend::microcontroller::{Microcontroller, MICROCONTROLLERS};
 
 mod frontend;
 mod middle_end;
+mod backend;
 
 // TODO: Read up on exit codes. Maybe use something that already makes sense
 // TODO: Remove all the explicit panic! from the code, handle errors gracefully
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: helium [main source file path]");
+    if args.len() != 3 {
+        eprintln!("{}", "Usage: helium [main source file path] [microcontroller name]".red());
         exit(1);
     }
+    
+    let microcontroller_name = args[2].to_lowercase();
+    let microcontroller = MICROCONTROLLERS.get(microcontroller_name.as_str());
+    if microcontroller.is_none() {
+        let output = format!("'{microcontroller_name}' is not a currently supported \
+                                    microcontroller. List of supported:").red();
+        eprintln!("{}", output);
+        for key in MICROCONTROLLERS.keys() {
+            eprintln!("{}", key.red());
+        }
+        
+        exit(2);
+    }
+    let microcontroller = microcontroller.unwrap();
 
     let file_path = &args[1];
     let contents = match read_source_file(file_path) {
@@ -55,11 +72,21 @@ fn main() {
     if let Err(ir_error) = ir_vec {
         report_errors_and_exit(&[ir_error], "IR builder");
     }
+    let ir_vec = ir_vec.unwrap();
 
     println!("IR:");
-    for ir in ir_vec.unwrap() {
+    for ir in &ir_vec {
         println!("{ir}");
     }
+    
+    let assembly_language = convert_to_assembly(ir_vec, microcontroller, &contents);
+    if let Err(assembly_producer_error) = assembly_language {
+        report_errors_and_exit(&[assembly_producer_error], "assembly producer");
+    }
+    let assembly_language = assembly_language.unwrap().join("\n");
+    
+    println!("Assembly:");
+    println!("{assembly_language}");
 }
 
 fn read_source_file(file_path: &str) -> Result<String, std::io::Error> {
@@ -110,6 +137,16 @@ fn structure_program(statements: Vec<Statement>) -> Result<Program, StructureErr
     }
 }
 
+fn convert_to_ir(program: Program, source: &str) -> Result<Vec<IntermediateRepresentation>, IRError> {
+    let ir_builder = IRBuilder::new(source);
+    ir_builder.produce_ir(program)
+}
+
+fn convert_to_assembly(ir_vec: Vec<IntermediateRepresentation>, microcontroller: &Microcontroller, source: &str) -> Result<Vec<String>, AssemblyError> {
+    let mut assembly_producer = AssemblyProducer::new(source);
+    assembly_producer.produce(ir_vec, microcontroller)
+}
+
 struct Program {
     def_declarations: Vec<SingleDefDeclaration>,
     global_var_declarations: Vec<Statement>,
@@ -130,12 +167,6 @@ impl Display for StructureError {
             StructureError::NoLoopPresent => write!(f, "There was no loop block present in the source file")
         }
     }
-}
-
-fn convert_to_ir(program: Program, source: &str) -> Result<Vec<IntermediateRepresentation>, IRError> {
-    // Right now we do just the setup as a test
-    let ir_builder = IRBuilder::new(source);
-    ir_builder.produce_ir(program)
 }
 
 fn report_errors_and_exit<E: Error>(errors: &[E], error_source: &'static str) -> ! {

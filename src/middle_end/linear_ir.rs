@@ -1,20 +1,17 @@
-﻿use crate::frontend::expression::{Expression, ExpressionType, PinRef};
+﻿use crate::frontend::expression::{Expression, PinRef};
 use crate::frontend::statement::{SingleDefDeclaration, Statement, StatementType};
-use crate::frontend::token_type::{LiteralType, PinModeConstantType, PinStateConstantType};
-use crate::frontend::utils::{LocatableInSource, SourceLocation};
+use crate::frontend::token_type::{PinModeConstantType, PinStateConstantType};
+use crate::frontend::utils::SourceLocation;
 use crate::middle_end::dag_builder::{DagBuilder, DagError, DagNode, DagType};
+use crate::middle_end::error_printer::get_error_marked_line_location;
+use crate::Program;
+use colored::Colorize;
+use rand::rngs::ThreadRng;
+use rand::Rng;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use std::fmt::{write, Display, Formatter};
-use std::pin::Pin;
-use std::process::id;
+use std::fmt::{Display, Formatter};
 use std::rc::Rc;
-use colored::Colorize;
-use rand::Rng;
-use crate::middle_end::AnalyzerErrorType;
-use crate::middle_end::error_printer::{get_error_marked_line, get_error_marked_line_location};
-use crate::Program;
-use rand::rngs::ThreadRng;
 
 // TODO: Comments
 // TODO: Proper errors, not panics
@@ -121,13 +118,13 @@ impl IRBuilder<'_> {
             PinModeConstantType::InputPullDown |
             PinModeConstantType::InputPullUp => {
                 self.push_ir(
-                    IRType::SetInputPortMode(single_def_declaration.pin.clone())
+                    IRType::SetInputPinMode(single_def_declaration.pin.clone())
                 );
             },
 
             PinModeConstantType::Output => {
                 self.push_ir(
-                    IRType::SetOutputPortMode(single_def_declaration.pin.clone())
+                    IRType::SetOutputPinMode(single_def_declaration.pin.clone())
                 );
             }
         }
@@ -282,7 +279,7 @@ impl IRBuilder<'_> {
                         Some(DagType::PinModeValue(pin_mode_value)) => {
                             if matches!(pin_mode_value, PinModeConstantType::Output) {
                                 self.push_ir(
-                                    IRType::SetOutputPortMode(pin.clone())
+                                    IRType::SetOutputPinMode(pin.clone())
                                 );
                             }
                             else {
@@ -292,7 +289,7 @@ impl IRBuilder<'_> {
                                 }
 
                                 self.push_ir(
-                                    IRType::SetInputPortMode(pin.clone())
+                                    IRType::SetInputPinMode(pin.clone())
                                 );
                             }
 
@@ -307,11 +304,11 @@ impl IRBuilder<'_> {
                             let end_label = self.register_random_label("end");
 
                             self.push_ir(IRType::JumpIfZero(value_register, input_label.clone()));
-                            self.push_ir(IRType::SetOutputPortMode(pin.clone()));
+                            self.push_ir(IRType::SetOutputPinMode(pin.clone()));
                             self.push_ir(IRType::Jump(end_label.clone()));
 
                             self.push_ir(IRType::Label(input_label));
-                            self.push_ir(IRType::SetInputPortMode(pin.clone()));
+                            self.push_ir(IRType::SetInputPinMode(pin.clone()));
 
                             self.push_ir(IRType::Label(end_label));
 
@@ -341,12 +338,12 @@ impl IRBuilder<'_> {
                             
                             if matches!(pin_state_value, PinStateConstantType::High) {
                                 self.push_ir(
-                                    IRType::SetPortHigh(pin.clone())
+                                    IRType::SetPinHigh(pin.clone())
                                 );
                             }
                             else {
                                 self.push_ir(
-                                    IRType::SetPortLow(pin.clone())
+                                    IRType::SetPinLow(pin.clone())
                                 );
                             }
 
@@ -360,11 +357,11 @@ impl IRBuilder<'_> {
                             let high_label = self.register_random_label("high");
 
                             self.push_ir(IRType::JumpIfZero(value_register, low_label.clone()));
-                            self.push_ir(IRType::SetPortHigh(pin.clone()));
+                            self.push_ir(IRType::SetPinHigh(pin.clone()));
                             self.push_ir(IRType::Jump(high_label.clone()));
 
                             self.push_ir(IRType::Label(low_label));
-                            self.push_ir(IRType::SetPortLow(pin.clone()));
+                            self.push_ir(IRType::SetPinLow(pin.clone()));
 
                             self.push_ir(IRType::Label(high_label));
 
@@ -390,10 +387,10 @@ impl IRBuilder<'_> {
                             let one_label = self.register_random_label("true");
                             let end_label = self.register_random_label("end");
                             if matches!(pin_state_value, PinStateConstantType::Low) {
-                                self.push_ir(IRType::SkipIfPortHigh(pin.clone()));
+                                self.push_ir(IRType::SkipIfPinHigh(pin.clone()));
                             }
                             else {
-                                self.push_ir(IRType::SkipIfPortLow(pin.clone()));
+                                self.push_ir(IRType::SkipIfPinLow(pin.clone()));
                             }
 
                             self.push_ir(IRType::Jump(one_label.clone()));
@@ -565,7 +562,7 @@ impl IRBuilder<'_> {
 }
 
 pub struct IntermediateRepresentation {
-    ir_type: IRType
+    pub ir_type: IRType
 }
 
 impl Display for IntermediateRepresentation {
@@ -606,17 +603,17 @@ impl Display for IntermediateRepresentation {
                 write!(f, "JMPZero %r{reg}, {}", label.yellow()),
             IRType::BranchIfEqual(label) =>
                 write!(f, "BREQ {}", label.yellow()),
-            IRType::SkipIfPortLow(pin_ref) =>
+            IRType::SkipIfPinLow(pin_ref) =>
                 write!(f, "SkipIfPortBitClear {pin_ref}"),
-            IRType::SkipIfPortHigh(pin_ref) =>
+            IRType::SkipIfPinHigh(pin_ref) =>
                 write!(f, "SkipIfPortBitSet {pin_ref}"),
-            IRType::SetPortLow(pin_ref) =>
+            IRType::SetPinLow(pin_ref) =>
                 write!(f, "SetPortLow {pin_ref}"),
-            IRType::SetPortHigh(pin_ref) =>
+            IRType::SetPinHigh(pin_ref) =>
                 write!(f, "SetPortHigh {pin_ref}"),
-            IRType::SetInputPortMode(pin_ref) =>
+            IRType::SetInputPinMode(pin_ref) =>
                 write!(f, "SetInputPortMode {pin_ref}"),
-            IRType::SetOutputPortMode(pin_ref) =>
+            IRType::SetOutputPinMode(pin_ref) =>
                 write!(f, "SetOutputPortMode {pin_ref}"),
         }
     }
@@ -631,16 +628,16 @@ pub enum IRType {
     IntegerAdd { a: RegisterNumber, b: RegisterNumber, output: RegisterNumber },
     LogicalShiftLeft(RegisterNumber),
     LogicalShiftRight(RegisterNumber),
-    SetPortLow(PinRef),
-    SetPortHigh(PinRef),
-    SetInputPortMode(PinRef),
-    SetOutputPortMode(PinRef),
+    SetPinLow(PinRef),
+    SetPinHigh(PinRef),
+    SetInputPinMode(PinRef),
+    SetOutputPinMode(PinRef),
     AndImmediate(RegisterNumber, i8),
     OrImmediate(RegisterNumber, i8),
     JumpIfZero(RegisterNumber, String),
     BranchIfEqual(String),
-    SkipIfPortLow(PinRef),
-    SkipIfPortHigh(PinRef)
+    SkipIfPinLow(PinRef),
+    SkipIfPinHigh(PinRef)
 }
 
 pub enum LoadType {

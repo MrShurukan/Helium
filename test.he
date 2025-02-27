@@ -6,7 +6,7 @@ def {
 }
 
 setup {
-    Led = Led = LOW;
+    Led = LOW;
 }
 
 loop {
