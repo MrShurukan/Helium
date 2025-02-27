@@ -1,7 +1,9 @@
 ﻿pub mod microcontroller;
+pub mod assembler;
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::path;
 use crate::backend::microcontroller::Microcontroller;
 use crate::middle_end::linear_ir::{IRType, IntermediateRepresentation, LoadType};
 
@@ -17,7 +19,8 @@ impl AssemblyProducer<'_> {
     pub fn produce(&mut self, ir_vec: Vec<IntermediateRepresentation>, microcontroller: &Microcontroller) -> Result<Vec<String>, AssemblyError> {
         let mut vec: Vec<String> = Vec::with_capacity(ir_vec.len());
 
-        vec.push(format!(".nolist\n.include \"./includes/{}\"\n.list", microcontroller.include_file_name));
+        // TODO: Figure out a way to include these files in the final binary?
+        vec.push(format!(".nolist\n.include \"./assembly_includes/{}\"\n.list", microcontroller.include_file_name));
         vec.push("jmp setup".to_string());
 
         for ir in ir_vec {

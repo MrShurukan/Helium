@@ -9,6 +9,7 @@ use std::fmt::{Display, Formatter};
 use std::process::exit;
 use std::{env, fs};
 use crate::backend::{AssemblyError, AssemblyProducer};
+use crate::backend::assembler::assemble_and_load;
 use crate::backend::microcontroller::{Microcontroller, MICROCONTROLLERS};
 
 mod frontend;
@@ -87,6 +88,8 @@ fn main() {
     
     println!("Assembly:");
     println!("{assembly_language}");
+    
+    assemble_and_load(assembly_language, microcontroller);
 }
 
 fn read_source_file(file_path: &str) -> Result<String, std::io::Error> {
