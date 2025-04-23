@@ -287,7 +287,13 @@ impl Analyzer<'_> {
             },
             ExpressionType::Unary { operator, right } => {
                 match operator {
-                    PunctuationType::Bang => Some(StaticType::Boolean),
+                    PunctuationType::Bang => {
+                        let right_type = self.analyze_expression(right)?;
+                        match right_type {
+                            StaticType::PinState | StaticType::Pin => Some(StaticType::PinState),
+                            _ => Some(StaticType::Boolean)
+                        }
+                    },
                     PunctuationType::Minus => {
                         let right_type = self.analyze_expression(right)?;
                         match right_type {

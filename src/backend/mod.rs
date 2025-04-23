@@ -6,6 +6,7 @@ use std::fmt::{Display, Formatter};
 use std::path;
 use crate::backend::microcontroller::Microcontroller;
 use crate::middle_end::linear_ir::{IRType, IntermediateRepresentation, LoadType};
+use crate::middle_end::utils::EnvironmentStack;
 
 pub struct AssemblyProducer<'a> {
     source: &'a str
@@ -16,11 +17,16 @@ impl AssemblyProducer<'_> {
         AssemblyProducer { source }
     }
 
-    pub fn produce(&mut self, ir_vec: Vec<IntermediateRepresentation>, microcontroller: &Microcontroller) -> Result<Vec<String>, AssemblyError> {
+    pub fn produce(&mut self, environment: EnvironmentStack, ir_vec: Vec<IntermediateRepresentation>, 
+                   microcontroller: &Microcontroller) -> Result<Vec<String>, AssemblyError> {
         let mut vec: Vec<String> = Vec::with_capacity(ir_vec.len());
 
         // TODO: Figure out a way to include these files in the final binary?
         vec.push(format!(".nolist\n.include \"./assembly_includes/{}\"\n.list", microcontroller.include_file_name));
+        
+        // Working with global variables
+        environment.
+        
         vec.push("jmp setup".to_string());
 
         for ir in ir_vec {
@@ -38,6 +44,7 @@ impl AssemblyProducer<'_> {
                         LoadType::Port(_) => todo!("load port"),
                     }
                 },
+                // TODO: Optimize for not requiring SRAM when registers are abundant
                 IRType::Store(_, _) => todo!("store"),
                 IRType::Move { .. } => todo!("move"),
                 IRType::IntegerAdd { .. } => todo!("integer add"),

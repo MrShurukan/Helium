@@ -28,6 +28,9 @@ impl DagBuilder {
                     },
                     LiteralType::PinMode(pin_mode) => {
                         Ok(self.get_or_insert(DagNode { dag_type: DagType::PinModeValue(pin_mode.clone()) }))
+                    },
+                    LiteralType::Boolean(bool) => {
+                        Ok(self.get_or_insert(DagNode { dag_type: DagType::BooleanValue(*bool) }))
                     }
                     _ => Err(DagError::CannotProcessLiteral(expression.static_type))
                 }
@@ -116,6 +119,7 @@ pub struct DagNode {
 pub enum DagType {
     Identifier(String),
     IntegerValue(u64),
+    BooleanValue(bool),
     PinModeValue(PinModeConstantType),
     PinStateValue(PinStateConstantType),
     IntegerAddition(Rc<DagNode>, Rc<DagNode>),

@@ -252,6 +252,13 @@ impl IRBuilder<'_> {
             DagType::PinStateValue(_) => {
                 None
             },
+            DagType::BooleanValue(bool) => {
+                self.last_register_number += 1;
+                self.push_ir(
+                    IRType::Load(LoadType::ImmediateInt(if *bool { 1 } else { 0 }), self.last_register_number)
+                );
+                Some(self.last_register_number)
+            },
             DagType::IntegerAddition(left, right) => {
                 let left_register = self.process_integer_dag(left);
                 let right_register = self.process_integer_dag(right);

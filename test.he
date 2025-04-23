@@ -1,9 +1,11 @@
-﻿// Simple LED + Button example
+﻿// Simple LED latch example
 
 def {
     Button = PortD.2 INPUT;
     Led    = PortC.5 OUTPUT;
 }
+
+var button_pressed = false;
 
 setup {
     Led = LOW;
@@ -11,30 +13,12 @@ setup {
 
 loop {
     // Button is pressed when it's connected to GND
-    if Button == LOW {
-        Led = HIGH;
+    if Button == LOW and !button_pressed {
+        Led = !Led;
+        button_pressed = true;
     }
-    else {
-        Led = LOW;
+
+    if Button == HIGH {
+        button_pressed = false;
     }
 }
-
-/*
-    Expected IR:
-
-    SetInputPortMode PortD2;
-    SetOutputPortMode PortC5;
-
-    setup:
-        SetLow PortC5;
-    loop:
-        SkipIfPortBitClear PortD2;
-        jmp else_label
-        then_label:
-        SetHigh PortC5;
-        jmp end_if_label:
-        else_label:
-        SetLow PortC5;
-        end_if_label:
-        jmp loop
-*/

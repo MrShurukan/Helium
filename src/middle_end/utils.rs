@@ -57,4 +57,9 @@ impl EnvironmentStack {
             Ok(())
         }
     }
+    
+    pub fn get_global_vars(&self) {
+        // At 
+        self.environments.first().unwrap().values
+    }
 }
