@@ -72,6 +72,9 @@ pub enum StaticType {
     /// Actual pin, like PortB.2
     Pin,
 
+    /// Resolved procedure-call statement, not a value or a source-language type.
+    NoValue,
+
     /// Internal type for expressions that are not yet resolved or failed to resolve.
     /// This is useful, for instance, in variable definitions.
     /// ```text
@@ -147,6 +150,7 @@ impl Display for StaticType {
             StaticType::Array(array_type) => write!(f, "Arr<{array_type}>"),
             StaticType::Function => write!(f, "Func"),
             StaticType::Pin => write!(f, "Pin"),
+            StaticType::NoValue => write!(f, "<no value>"),
             StaticType::Unknown => write!(f, "<unknown>"),
         }
     }

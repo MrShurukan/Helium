@@ -12,6 +12,9 @@ use unicode_segmentation::UnicodeSegmentation;
 /// Stable public identifiers, independent of wording and presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticCode {
+    Call,
+    Return,
+    Recursion,
     Duplicate,
     Initializer,
     ForType,
@@ -36,6 +39,9 @@ pub enum DiagnosticCode {
 impl DiagnosticCode {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Call => "E_CALL",
+            Self::Return => "E_RETURN",
+            Self::Recursion => "E_RECURSION",
             Self::Duplicate => "E_DUPLICATE",
             Self::Initializer => "E_INITIALIZER",
             Self::ForType => "E_FOR_TYPE",
@@ -68,6 +74,36 @@ impl fmt::Display for DiagnosticCode {
 /// Structured facts about an error. Add translations at the presentation layer.
 #[derive(Debug, Clone)]
 pub enum DiagnosticKind {
+    NotCallable {
+        name: String,
+    },
+    ArgumentCount {
+        name: String,
+        expected: usize,
+        actual: usize,
+    },
+    ProcedureValue {
+        name: String,
+    },
+    FunctionValue {
+        name: String,
+    },
+    GlobalInitializerCall,
+    ReturnOutsideFunction,
+    MissingReturn {
+        name: String,
+    },
+    ReturnValueRequired {
+        target: StaticType,
+    },
+    UnexpectedReturnValue,
+    RecursiveCalls {
+        chain: Vec<String>,
+    },
+    FunctionSignatureType {
+        ty: StaticType,
+    },
+    FunctionsLowering,
     LlvmUnsupported {
         detail: String,
     },
@@ -146,6 +182,19 @@ pub enum DiagnosticKind {
 impl DiagnosticKind {
     pub fn code(&self) -> DiagnosticCode {
         match self {
+            Self::NotCallable { .. }
+            | Self::ArgumentCount { .. }
+            | Self::ProcedureValue { .. }
+            | Self::FunctionValue { .. }
+            | Self::GlobalInitializerCall => DiagnosticCode::Call,
+            Self::ReturnOutsideFunction
+            | Self::MissingReturn { .. }
+            | Self::ReturnValueRequired { .. }
+            | Self::UnexpectedReturnValue => DiagnosticCode::Return,
+            Self::RecursiveCalls { .. } => DiagnosticCode::Recursion,
+            Self::FunctionSignatureType { .. } | Self::FunctionsLowering => {
+                DiagnosticCode::Unsupported
+            }
             Self::TypedIrUnsupported { .. } | Self::LlvmUnsupported { .. } => {
                 DiagnosticCode::Unsupported
             }

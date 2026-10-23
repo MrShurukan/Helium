@@ -1,7 +1,7 @@
 use crate::frontend::expression::{Expression, ExpressionType, PinRef, PinRefError};
 use crate::frontend::scanner::{Scanner, ScannerError};
 use crate::frontend::statement::{
-    DefDeclarationError, SingleDefDeclaration, Statement, StatementType,
+    DefDeclarationError, Parameter, SingleDefDeclaration, Statement, StatementType,
 };
 use crate::frontend::token::Token;
 use crate::frontend::token_type::{
@@ -184,6 +184,7 @@ impl Parser<'_> {
 
             let result =
                 match token.token_type {
+                    TT::Keyword(KT::Fn) => self.function_declaration(tokens),
                     TT::Keyword(KT::Var) if !already_read_setup && !already_read_loop => {
                         self.var_declaration(tokens)
                     }
@@ -275,6 +276,119 @@ impl Parser<'_> {
         } else {
             Err(self.errors)
         }
+    }
+
+    fn function_declaration(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
+        let start = tokens.previous()?.source_location;
+        let name =
+            check_and_consume!(self, tokens, TT::Identifier(_), "Expected function name").clone();
+        let TT::Identifier(identifier) = name.token_type else {
+            unreachable!()
+        };
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::LeftParen),
+            "Expected '(' after function name"
+        );
+
+        let mut parameters = Vec::new();
+        if !matches!(
+            self.peek(tokens)?.token_type,
+            TT::Punctuation(PT::RightParen)
+        ) {
+            loop {
+                let name =
+                    check_and_consume!(self, tokens, TT::Identifier(_), "Expected parameter name")
+                        .clone();
+                let TT::Identifier(identifier) = name.token_type else {
+                    unreachable!()
+                };
+                check_and_consume!(
+                    self,
+                    tokens,
+                    TT::Punctuation(PT::Colon),
+                    "Expected ':' after parameter name"
+                );
+                let kind = check_and_consume!(self, tokens, TT::Type(_), "Expected parameter type")
+                    .clone();
+                let TT::Type(static_type) = kind.token_type else {
+                    unreachable!()
+                };
+                parameters.push(Parameter {
+                    identifier,
+                    static_type: *static_type,
+                    source_location: name.source_location,
+                });
+                if !matches!(self.peek(tokens)?.token_type, TT::Punctuation(PT::Comma)) {
+                    break;
+                }
+                tokens.advance();
+            }
+        }
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::RightParen),
+            "Expected ')' after parameters"
+        );
+
+        let return_type = if matches!(self.peek(tokens)?.token_type, TT::Punctuation(PT::Colon)) {
+            tokens.advance();
+            let kind =
+                check_and_consume!(self, tokens, TT::Type(_), "Expected return type").clone();
+            let TT::Type(kind) = kind.token_type else {
+                unreachable!()
+            };
+            Some(*kind)
+        } else {
+            None
+        };
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::LeftBrace),
+            "Expected function body"
+        );
+        let block = self.block_statement(tokens)?;
+        let StatementType::Block(body) = block.statement_type else {
+            unreachable!()
+        };
+        Some(Statement {
+            source_location: crate::frontend::utils::SourceLocation::new_from_start_end(
+                start,
+                block.source_location,
+            ),
+            statement_type: StatementType::FunctionDeclaration {
+                identifier,
+                parameters,
+                return_type,
+                body,
+            },
+        })
+    }
+
+    fn return_statement(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
+        let start = self.advance(tokens)?.source_location;
+        let value = if matches!(
+            self.peek(tokens)?.token_type,
+            TT::Punctuation(PT::Semicolon)
+        ) {
+            None
+        } else {
+            Some(self.expression(tokens)?)
+        };
+        let end = check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::Semicolon),
+            "Expected ';' after return"
+        )
+        .source_location;
+        Some(Statement {
+            source_location: crate::frontend::utils::SourceLocation::new_from_start_end(start, end),
+            statement_type: StatementType::Return(value),
+        })
     }
 
     fn declaration(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
@@ -520,6 +634,7 @@ impl Parser<'_> {
     fn statement(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         let token = self.peek(tokens)?;
         match token.token_type {
+            TT::Keyword(KT::Return) => self.return_statement(tokens),
             TT::Keyword(KT::For) => {
                 self.advance(tokens)?;
                 self.for_statement(tokens)
@@ -815,7 +930,54 @@ impl Parser<'_> {
             return Some(Expression::new_unary(&token, right));
         }
 
-        self.primary(tokens)
+        self.call(tokens)
+    }
+
+    fn call(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
+        let callee = self.primary(tokens)?;
+        if !matches!(
+            self.peek(tokens)?.token_type,
+            TT::Punctuation(PT::LeftParen)
+        ) {
+            return Some(callee);
+        }
+        let ExpressionType::Identifier(identifier) = callee.expression_type else {
+            self.errors
+                .push(self.missing_token_error("Only named functions can be called", tokens));
+            return None;
+        };
+        tokens.advance();
+        let mut arguments = Vec::new();
+        if !matches!(
+            self.peek(tokens)?.token_type,
+            TT::Punctuation(PT::RightParen)
+        ) {
+            loop {
+                arguments.push(self.expression(tokens)?);
+                if !matches!(self.peek(tokens)?.token_type, TT::Punctuation(PT::Comma)) {
+                    break;
+                }
+                tokens.advance();
+            }
+        }
+        let end = check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::RightParen),
+            "Expected ')' after arguments"
+        )
+        .source_location;
+        Some(Expression {
+            expression_type: ExpressionType::Call {
+                identifier,
+                arguments,
+            },
+            source_location: crate::frontend::utils::SourceLocation::new_from_start_end(
+                callee.source_location,
+                end,
+            ),
+            static_type: crate::frontend::static_type::StaticType::Unknown,
+        })
     }
 
     // Literals, groupings
@@ -1091,7 +1253,7 @@ impl Display for ParserErrorType {
             ParserErrorType::SetupAfterLoop => "Declare 'setup' before 'loop'",
             ParserErrorType::DuplicateLoop => "Can't declare 'loop' more than once",
             ParserErrorType::IncorrectGlobalToken => {
-                "This token is invalid here (expected 'def', 'var', 'setup', 'loop')"
+                "This token is invalid here (expected 'fn', 'def', 'var', 'setup', 'loop')"
             }
             ParserErrorType::MissingLoopDeclaration => "'loop' must be defined",
             ParserErrorType::InfiniteLoopDetected => {

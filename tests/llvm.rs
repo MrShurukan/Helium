@@ -169,13 +169,18 @@ fn compare_machine(
         .join("build/llvm-tests")
         .join(format!("{name}-{level:?}.hex"));
     let mut text = llvm::emit(module, export).unwrap();
-    if name == "calls" {
+    if name == "calls" || name.starts_with("source-") {
         // Keep a real mixed-width call even under O2; otherwise constant folding
         // would test the optimizer rather than the AVR calling convention.
         text = text
             .lines()
             .map(|line| {
-                if line.starts_with("define ") && line.contains("@helium_f3(") {
+                if line.starts_with("define ")
+                    && module
+                        .functions
+                        .iter()
+                        .any(|f| f.id.0 >= 3 && line.contains(&format!("@helium_f{}(", f.id.0)))
+                {
                     line.replace("addrspace(1) {", "addrspace(1) noinline {")
                 } else {
                     line.to_owned()
@@ -185,7 +190,14 @@ fn compare_machine(
             .join("\n");
     }
     let build = llvm_toolchain::build(&text, &destination, "hex", level).unwrap();
-    if name == "calls" {
+    if matches!(level, Optimization::Size) {
+        let raw = fs::read_to_string(build.directory.join("module.ll")).unwrap();
+        assert!(raw
+            .lines()
+            .filter(|line| line.starts_with("define "))
+            .all(|line| line.contains("minsize optsize")));
+    }
+    if name == "calls" || name.starts_with("source-") {
         let disassembly = fs::read_to_string(build.directory.join("disassembly.txt")).unwrap();
         assert!(
             disassembly
@@ -224,6 +236,52 @@ fn compare_machine(
     );
     fs::write(build.directory.join("simulation.json"), &actual).unwrap();
     println!("{name} {level:?}: {} ms; {actual}", build.elapsed_ms);
+}
+
+#[test]
+#[ignore = "requires LLVM AVR, AVR GCC/binutils, Node and AVR8js"]
+fn source_functions_execute_on_avr_with_register_and_stack_arguments() {
+    let mut latch = finite(compile(include_str!("../examples/functions-latch.he")));
+    let loop_call = latch.functions[0].blocks[1].instructions[0].clone();
+    latch.functions[0].blocks[1]
+        .instructions
+        .extend(std::iter::repeat_n(loop_call, 4));
+    let thermostat = finite(compile(include_str!("../examples/functions-thermostat.he")));
+    let stack = finite(compile(
+        "var result:i16=0;
+        fn sum(a:i16,b:i16,c:i16,d:i16,e:i16,f:i16,g:i16,h:i16,i:i16,j:i16,k:i16,l:i16):i16 {
+            return a+b+c+d+e+f+g+h+i+j+k+l;
+        }
+        fn nested(value:i16):i16 { return value+sum(1,2,3,4,5,6,7,8,9,10,11,12); }
+        loop { result=nested(-100); }",
+    ));
+    let effects = finite(compile(
+        "def Led=PortB.5 OUTPUT; var count:u8=0; var result:u16=0;
+        fn next():u8 { count=count+1; return count; }
+        fn pair(a:u8,b:u8):u16 { var first:u16=a; return first*10+b; }
+        fn invert(state:PinState):PinState { return !state; }
+        fn drive() { Led=invert(HIGH); if count==4 { return; } Led=HIGH; }
+        loop { result=pair(next(),next())+pair(next(),next()); drive(); }",
+    ));
+    let returns = finite(compile("var a:i16=0; var b:i16=0; var sign:i16=0;
+        fn choose(x:i16):i16 { if x<0 { return -1; } else { if x==0 { return 0; } else { return x; } } }
+        fn find(x:i16):i16 { while x>0 { if x==2 { return x; } x=x-1; } return -1; }
+        fn widen(x:i8):i16 { return x; }
+        loop { a=choose(-5); b=find(5); sign=widen(-2); }"));
+
+    for level in [Optimization::None, Optimization::Speed, Optimization::Size] {
+        compare_machine(
+            &latch,
+            &[true, false, false, true, false],
+            "source-latch",
+            level,
+            true,
+        );
+        compare_machine(&thermostat, &[], "source-thermostat", level, true);
+        compare_machine(&stack, &[], "source-stack", level, true);
+        compare_machine(&effects, &[], "source-effects", level, true);
+        compare_machine(&returns, &[], "source-returns", level, true);
+    }
 }
 
 fn call_fixture() -> Module {

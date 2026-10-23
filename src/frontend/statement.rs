@@ -24,6 +24,13 @@ impl LocatableInSource for Statement {
 
 #[derive(Debug)]
 pub enum StatementType {
+    FunctionDeclaration {
+        identifier: String,
+        parameters: Vec<Parameter>,
+        return_type: Option<StaticType>,
+        body: Vec<Statement>,
+    },
+    Return(Option<Expression>),
     Expression(Expression),
     /// Static type will always be filled later during semantic analysis
     /// Same with initializer. If it's missing it will be filled with a default init value
@@ -219,6 +226,28 @@ impl Display for Statement {
 impl Display for StatementType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::FunctionDeclaration {
+                identifier,
+                parameters,
+                return_type,
+                body,
+            } => {
+                write!(f, "fn {identifier}(")?;
+                for (index, parameter) in parameters.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", parameter.identifier, parameter.static_type)?;
+                }
+                write!(f, ")")?;
+                if let Some(ty) = return_type {
+                    write!(f, ": {ty}")?;
+                }
+                write!(f, " ")?;
+                Self::write_block(f, body)
+            }
+            Self::Return(Some(value)) => write!(f, "return {value};"),
+            Self::Return(None) => write!(f, "return;"),
             StatementType::Expression(exp) => write!(f, "{exp};"),
             StatementType::VariableDeclaration {
                 identifier,
@@ -290,6 +319,13 @@ impl StatementType {
         }
         write!(f, "}}")
     }
+}
+
+#[derive(Debug)]
+pub struct Parameter {
+    pub identifier: String,
+    pub static_type: StaticType,
+    pub source_location: SourceLocation,
 }
 
 #[derive(Debug)]

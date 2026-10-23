@@ -1,3 +1,4 @@
+mod functions;
 pub mod linear_ir;
 
 use crate::diagnostic::{Diagnostic, DiagnosticKind};
@@ -11,12 +12,18 @@ use crate::frontend::{
     token_type::{KeywordType as K, LiteralType as L, PunctuationType as P, TokenType as Token},
     utils::SourceLocation,
 };
-use std::collections::HashMap;
+use functions::Signature;
+use std::collections::{BTreeMap, HashMap};
 
 /// Resolves names and types. A declaration may not shadow any visible name.
 pub struct Analyzer {
     scopes: Vec<HashMap<String, T>>,
     errors: Vec<Diagnostic>,
+    functions: BTreeMap<String, Signature>,
+    calls: BTreeMap<String, Vec<(String, SourceLocation)>>,
+    current_function: Option<String>,
+    return_type: Option<Option<T>>,
+    global_initializer: bool,
 }
 
 impl Analyzer {
@@ -24,13 +31,39 @@ impl Analyzer {
         Self {
             scopes: vec![HashMap::new()],
             errors: vec![],
+            functions: BTreeMap::new(),
+            calls: BTreeMap::new(),
+            current_function: None,
+            return_type: None,
+            global_initializer: false,
         }
     }
 
     pub fn analyze(mut self, statements: &mut [Statement]) -> Result<(), Vec<Diagnostic>> {
-        for statement in statements {
-            self.statement(statement);
+        self.collect_signatures(statements);
+
+        // Global initialization keeps source order. Function bodies see all globals,
+        // but calls in global initializers are deferred until setup is available.
+        self.global_initializer = true;
+        for statement in statements.iter_mut() {
+            if matches!(
+                statement.statement_type,
+                S::VariableDeclaration { .. } | S::DefDeclaration(_)
+            ) {
+                self.statement(statement);
+            }
         }
+        self.global_initializer = false;
+
+        for statement in statements.iter_mut() {
+            if !matches!(
+                statement.statement_type,
+                S::VariableDeclaration { .. } | S::DefDeclaration(_)
+            ) {
+                self.statement(statement);
+            }
+        }
+        self.check_recursion();
 
         if self.errors.is_empty() {
             Ok(())
@@ -51,7 +84,7 @@ impl Analyzer {
     }
 
     fn declare(&mut self, name: &str, ty: T, span: SourceLocation) {
-        if self.lookup(name).is_some() {
+        if self.lookup(name).is_some() || self.functions.contains_key(name) {
             self.error(
                 DiagnosticKind::DuplicateName {
                     name: name.to_owned(),
@@ -80,6 +113,51 @@ impl Analyzer {
         let span = statement.source_location;
 
         match &mut statement.statement_type {
+            S::FunctionDeclaration {
+                identifier,
+                parameters,
+                return_type,
+                body,
+            } => {
+                self.current_function = Some(identifier.clone());
+                self.return_type = Some(*return_type);
+                self.scopes.push(HashMap::new());
+                for parameter in parameters {
+                    self.declare(
+                        &parameter.identifier,
+                        parameter.static_type,
+                        parameter.source_location,
+                    );
+                }
+                self.block(body);
+                self.scopes.pop();
+                if return_type.is_some() && !functions::body_returns(body) {
+                    self.error(
+                        DiagnosticKind::MissingReturn {
+                            name: identifier.clone(),
+                        },
+                        span,
+                    );
+                }
+                self.current_function = None;
+                self.return_type = None;
+            }
+            S::Return(value) => {
+                if let Some(value) = value {
+                    self.expression(value);
+                }
+                match (self.return_type, value) {
+                    (None, _) => self.error(DiagnosticKind::ReturnOutsideFunction, span),
+                    (Some(Some(target)), Some(value)) => self.coerce(value, target),
+                    (Some(Some(target)), None) => {
+                        self.error(DiagnosticKind::ReturnValueRequired { target }, span)
+                    }
+                    (Some(None), Some(_)) => {
+                        self.error(DiagnosticKind::UnexpectedReturnValue, span)
+                    }
+                    (Some(None), None) => {}
+                }
+            }
             S::VariableDeclaration {
                 identifier,
                 static_type,
@@ -128,7 +206,17 @@ impl Analyzer {
                 self.block(body)
             }
             S::Expression(expr) => {
-                self.expression(expr);
+                if let E::Call {
+                    identifier,
+                    arguments,
+                } = &mut expr.expression_type
+                {
+                    expr.static_type = self
+                        .call(identifier, arguments, expr.source_location)
+                        .unwrap_or(T::NoValue);
+                } else {
+                    self.expression(expr);
+                }
             }
             S::If {
                 condition,
@@ -185,6 +273,18 @@ impl Analyzer {
         let span = expr.source_location;
 
         let ty = match &mut expr.expression_type {
+            E::Call {
+                identifier,
+                arguments,
+            } => self.call(identifier, arguments, span).unwrap_or_else(|| {
+                self.error(
+                    DiagnosticKind::ProcedureValue {
+                        name: identifier.clone(),
+                    },
+                    span,
+                );
+                T::Unknown
+            }),
             E::Literal { value } => match value {
                 L::Integer(_) => T::Integer(I::Literal),
                 L::Float(_) => T::Float(F::Literal),
@@ -193,6 +293,10 @@ impl Analyzer {
                 L::PinState(_) => T::PinState,
                 L::PinMode(_) => T::PinMode,
             },
+            E::Identifier(name) if self.functions.contains_key(name) => {
+                self.error(DiagnosticKind::FunctionValue { name: name.clone() }, span);
+                T::Unknown
+            }
             E::Identifier(name) => self.lookup(name).unwrap_or_else(|| {
                 self.error(
                     DiagnosticKind::UndefinedName {

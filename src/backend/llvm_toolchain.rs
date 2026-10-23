@@ -126,7 +126,16 @@ pub fn build(
     let hex = directory.join("program.hex");
 
     let ir = if matches!(optimization, Optimization::Size) {
-        ir.replace("addrspace(1) {", "addrspace(1) minsize optsize {")
+        ir.lines()
+            .map(|line| {
+                if line.starts_with("define ") {
+                    line.replace("addrspace(1)", "addrspace(1) minsize optsize")
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     } else {
         ir.to_owned()
     };

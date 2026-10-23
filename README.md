@@ -52,6 +52,11 @@ Use `--backend llvm --opt none|speed|size`; `--emit llvm` produces textual LLVM 
 See [LLVM setup, tests and measured results](docs/LLVM_PROTOTYPE.md) for the pinned Windows toolchain.
 See [the IR v1 contract](docs/IR_V1.md) for semantics, coverage and the test interpreter.
 
+Source-level functions use `fn name(parameter:type):return_type { return value; }`.
+Omit the result type for a procedure. Calls may precede declarations; parameters are passed by value.
+Recursion and shadowing remain forbidden. Functions require typed IR or the LLVM backend.
+See [the function contract and examples](docs/FUNCTIONS.md).
+
 Compiler diagnostics share one format across scanning, parsing, type checking and AVR support
 checks. Use `--color auto|always|never` (default `auto`) to control coloring; automatic color
 is disabled when stderr is redirected or `NO_COLOR` is set. Library diagnostics are plain
@@ -90,6 +95,7 @@ physical hardware behavior has not been validated.
 - [Architecture and iteration-one review](docs/ITERATION_1.md)
 - [Typed IR v1 contract and implementation](docs/IR_V1.md)
 - [LLVM AVR prototype, installation and measurements](docs/LLVM_PROTOTYPE.md)
+- [Functions, returns and call semantics](docs/FUNCTIONS.md)
 - [Grammar](grammar.txt)
 
 The next end-to-end application is temperature control for one or two brewing tanks:

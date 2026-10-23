@@ -1,0 +1,27 @@
+// Hardware-independent thermostat logic. Temperatures are tenths of a degree.
+// Setup runs a fixed sequence; the four globals expose its results in IR tests.
+var below:bool = false;
+var hot:bool = false;
+var holding:bool = false;
+var cooled:bool = false;
+
+setup {
+    below = cooling_required(190, 200, 220, false);
+    hot = cooling_required(230, 200, 220, below);
+    holding = cooling_required(210, 200, 220, hot);
+    cooled = cooling_required(190, 200, 220, holding);
+}
+
+loop {}
+
+fn cooling_required(temperature:i16, minimum:i16, maximum:i16, active:bool):bool {
+    if temperature > maximum {
+        return true;
+    }
+
+    if temperature < minimum {
+        return false;
+    }
+
+    return active;
+}

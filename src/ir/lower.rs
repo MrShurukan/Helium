@@ -115,6 +115,22 @@ pub(crate) fn lower(statements: &[Statement], target: &str) -> Result<Module, Di
     let mut pins = HashMap::new();
     let mut setup = &[][..];
     let mut loop_body = &[][..];
+    let mut functions = HashMap::new();
+
+    for statement in statements {
+        if let S::FunctionDeclaration {
+            identifier,
+            return_type,
+            ..
+        } = &statement.statement_type
+        {
+            let id = FunctionId(functions.len() + 3);
+            let result = return_type
+                .map(|t| ty(t, statement.source_location))
+                .transpose()?;
+            functions.insert(identifier.clone(), (id, result));
+        }
+    }
 
     for statement in statements {
         match &statement.statement_type {
@@ -150,7 +166,7 @@ pub(crate) fn lower(statements: &[Statement], target: &str) -> Result<Module, Di
         }
     }
 
-    let mut entry = Builder::new(FunctionId(0), "$entry", &globals, &pins);
+    let mut entry = Builder::new(FunctionId(0), "$entry", &globals, &pins, &functions);
     for statement in statements {
         if let S::VariableDeclaration {
             identifier,
@@ -197,10 +213,58 @@ pub(crate) fn lower(statements: &[Statement], target: &str) -> Result<Module, Di
         (FunctionId(1), "$setup", setup),
         (FunctionId(2), "$loop", loop_body),
     ] {
-        let mut builder = Builder::new(id, name, &globals, &pins);
+        let mut builder = Builder::new(id, name, &globals, &pins, &functions);
         builder.body(body)?;
         builder.terminate(Terminator::Return(None));
         module.functions.push(builder.finish()?);
+    }
+
+    for statement in statements {
+        let S::FunctionDeclaration {
+            identifier,
+            parameters,
+            body,
+            ..
+        } = &statement.statement_type
+        else {
+            continue;
+        };
+        let (id, result) = functions[identifier];
+        let mut builder = Builder::new(id, identifier, &globals, &pins, &functions);
+        builder.return_type = result;
+        builder.scopes.push(HashMap::new());
+        for parameter in parameters {
+            let kind = ty(parameter.static_type, parameter.source_location)?;
+            let value = ValueId {
+                function: id,
+                index: builder.next_value,
+            };
+            builder.next_value += 1;
+            builder.parameters.push((value, kind));
+            builder.value_types.insert(value, kind);
+
+            let origin = Origin::Source(parameter.source_location);
+            let local = builder.local(&parameter.identifier, kind, origin.clone());
+            builder
+                .scopes
+                .last_mut()
+                .unwrap()
+                .insert(parameter.identifier.clone(), local);
+            builder.effect(Op::StoreLocal(local, value), origin);
+        }
+        builder.body(body)?;
+        if !builder.terminated() {
+            if result.is_some() {
+                return Err(unsupported(
+                    "function falling through without a return",
+                    statement.source_location,
+                ));
+            }
+            builder.terminate(Terminator::Return(None));
+        }
+        let mut function = builder.finish()?;
+        function.origin = Origin::Source(statement.source_location);
+        module.functions.push(function);
     }
     Ok(module)
 }
@@ -222,6 +286,9 @@ struct Builder<'a> {
     scopes: Vec<HashMap<String, LocalId>>,
     globals: &'a HashMap<String, (GlobalId, Type)>,
     pins: &'a HashMap<String, PinId>,
+    functions: &'a HashMap<String, (FunctionId, Option<Type>)>,
+    parameters: Vec<(ValueId, Type)>,
+    return_type: Option<Type>,
 }
 
 impl<'a> Builder<'a> {
@@ -230,6 +297,7 @@ impl<'a> Builder<'a> {
         name: &str,
         globals: &'a HashMap<String, (GlobalId, Type)>,
         pins: &'a HashMap<String, PinId>,
+        functions: &'a HashMap<String, (FunctionId, Option<Type>)>,
     ) -> Self {
         Self {
             id,
@@ -246,6 +314,9 @@ impl<'a> Builder<'a> {
             scopes: vec![],
             globals,
             pins,
+            functions,
+            parameters: vec![],
+            return_type: None,
         }
     }
 
@@ -275,8 +346,8 @@ impl<'a> Builder<'a> {
         Ok(Function {
             id: self.id,
             name: self.name,
-            parameters: vec![],
-            return_type: None,
+            parameters: self.parameters,
+            return_type: self.return_type,
             locals: self.locals,
             blocks,
             entry: BlockId {
@@ -303,6 +374,10 @@ impl<'a> Builder<'a> {
     fn terminate(&mut self, term: Terminator) {
         debug_assert!(self.blocks[self.current].terminator.is_none());
         self.blocks[self.current].terminator = Some(term);
+    }
+
+    fn terminated(&self) -> bool {
+        self.blocks[self.current].terminator.is_some()
     }
 
     fn emit(&mut self, op: Op, ty: Type, origin: Origin) -> ValueId {
@@ -351,6 +426,9 @@ impl<'a> Builder<'a> {
     fn body(&mut self, statements: &[Statement]) -> Result<(), Diagnostic> {
         self.scopes.push(HashMap::new());
         for statement in statements {
+            if self.terminated() {
+                break;
+            }
             self.statement(statement)?;
         }
         self.scopes.pop();
@@ -360,6 +438,20 @@ impl<'a> Builder<'a> {
     fn statement(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
         let origin = Origin::Source(statement.source_location);
         match &statement.statement_type {
+            S::Return(value) => {
+                let value = value.as_ref().map(|v| self.value(v)).transpose()?;
+                self.terminate(Terminator::Return(value));
+            }
+            S::Expression(Expression {
+                expression_type:
+                    E::Call {
+                        identifier,
+                        arguments,
+                    },
+                ..
+            }) => {
+                self.call(identifier, arguments, origin)?;
+            }
             S::Expression(expr) if expr.static_type == T::PinMode => {
                 self.mode_expression(expr)?;
             }
@@ -395,19 +487,31 @@ impl<'a> Builder<'a> {
                 let condition = self.value(condition)?;
                 let yes = self.new_block(origin.clone());
                 let no = self.new_block(origin.clone());
-                let end = self.new_block(origin);
                 self.terminate(Terminator::Branch { condition, yes, no });
 
                 self.current = yes.index;
                 self.statement(then_body)?;
-                self.terminate(Terminator::Jump(end));
+                let yes_end = self.current;
+                let yes_closed = self.terminated();
 
                 self.current = no.index;
                 if let Some(body) = else_body {
                     self.statement(body)?;
                 }
-                self.terminate(Terminator::Jump(end));
-                self.current = end.index;
+                let no_end = self.current;
+                let no_closed = self.terminated();
+                if !yes_closed || !no_closed {
+                    let end = self.new_block(origin);
+                    if !yes_closed {
+                        self.current = yes_end;
+                        self.terminate(Terminator::Jump(end));
+                    }
+                    if !no_closed {
+                        self.current = no_end;
+                        self.terminate(Terminator::Jump(end));
+                    }
+                    self.current = end.index;
+                }
             }
             S::While { condition, body } => {
                 let test = self.new_block(origin.clone());
@@ -424,7 +528,9 @@ impl<'a> Builder<'a> {
                 });
                 self.current = yes.index;
                 self.statement(body)?;
-                self.terminate(Terminator::Jump(test));
+                if !self.terminated() {
+                    self.terminate(Terminator::Jump(test));
+                }
                 self.current = end.index;
             }
             S::For { .. } => {
@@ -467,6 +573,27 @@ impl<'a> Builder<'a> {
         }
     }
 
+    fn call(
+        &mut self,
+        name: &str,
+        arguments: &[Expression],
+        origin: Origin,
+    ) -> Result<Option<ValueId>, Diagnostic> {
+        let (id, result) = self.functions[name];
+        // Evaluate and snapshot each argument before evaluating the next one.
+        let arguments = arguments
+            .iter()
+            .map(|arg| self.value(arg))
+            .collect::<Result<Vec<_>, _>>()?;
+        let operation = Op::Call(id, arguments);
+        if let Some(kind) = result {
+            Ok(Some(self.emit(operation, kind, origin)))
+        } else {
+            self.effect(operation, origin);
+            Ok(None)
+        }
+    }
+
     fn value(&mut self, expr: &Expression) -> Result<ValueId, Diagnostic> {
         let origin = Origin::Source(expr.source_location);
         let expected = if expr.static_type == T::Pin {
@@ -485,6 +612,12 @@ impl<'a> Builder<'a> {
         }
 
         let value = match &expr.expression_type {
+            E::Call {
+                identifier,
+                arguments,
+            } => self
+                .call(identifier, arguments, origin.clone())?
+                .ok_or_else(|| unsupported("procedure used as a value", expr.source_location))?,
             E::Literal { value } => {
                 let bits = match value {
                     L::Integer(value) => *value,

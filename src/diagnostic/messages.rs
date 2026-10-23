@@ -4,6 +4,38 @@ use super::DiagnosticKind;
 impl DiagnosticKind {
     pub fn message(&self) -> String {
         match self {
+            Self::NotCallable { name } => format!("'{name}' is not a function"),
+            Self::ArgumentCount { name, expected, actual } => {
+                format!("Function '{name}' expects {expected} arguments, but received {actual}")
+            }
+            Self::ProcedureValue { name } => {
+                format!("Function '{name}' has no return value; call it as a statement")
+            }
+            Self::FunctionValue { name } => {
+                format!("Function '{name}' cannot be used as a value; call it with parentheses")
+            }
+            Self::GlobalInitializerCall => {
+                "Function calls are not allowed in global initializers; move the call to setup".into()
+            }
+            Self::ReturnOutsideFunction => "'return' is only allowed inside a function".into(),
+            Self::MissingReturn { name } => {
+                format!("Function '{name}' must return a value on every path; add an explicit return")
+            }
+            Self::ReturnValueRequired { target } => {
+                format!("This function must return a value of type {target}")
+            }
+            Self::UnexpectedReturnValue => {
+                "This function has no return type; use 'return;' without a value".into()
+            }
+            Self::RecursiveCalls { chain } => {
+                format!("Recursion is not supported: {}", chain.join(" -> "))
+            }
+            Self::FunctionSignatureType { ty } => {
+                format!("Function signatures currently support integers, bool and PinState, not {ty}")
+            }
+            Self::FunctionsLowering => {
+                "Functions and calls require the LLVM backend or typed IR; the legacy backend does not support them".into()
+            }
             Self::LlvmUnsupported { detail } => format!("LLVM backend: {detail}"),
             Self::TypedIrUnsupported { feature } => {
                 format!("Typed IR v1 does not support {feature}")

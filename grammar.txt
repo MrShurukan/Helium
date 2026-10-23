@@ -1,6 +1,9 @@
 // Current implemented syntax. Semantic and backend support are documented in docs/SUPPORT.md.
-program         -> topLevelDecl* setupDecl? loopDecl EOF ;
-topLevelDecl    -> defDecl | varDecl ;
+program         -> topLevelDecl* ( setupDecl functionDecl* )? loopDecl functionDecl* EOF ;
+topLevelDecl    -> defDecl | varDecl | functionDecl ;
+functionDecl    -> "fn" IDENTIFIER "(" parameters? ")" ( ":" TYPE )? block ;
+parameters      -> parameter ( "," parameter )* ;
+parameter       -> IDENTIFIER ":" TYPE ;
 declaration     -> varDecl | statement ;
 varDecl         -> "var" IDENTIFIER ( ":" TYPE ( "=" expression )? | "=" expression ) ";" ;
 defDecl         -> "def" ( alias | "{" alias+ "}" ) ;
@@ -8,7 +11,8 @@ alias           -> IDENTIFIER "=" pin_ref PINMODE ";" ;
 pin_ref         -> PORT "." INTEGER ;
 setupDecl       -> "setup" block ;
 loopDecl        -> "loop" block ;
-statement       -> exprStmt | forStmt | ifStmt | whileStmt | block ;
+statement       -> exprStmt | returnStmt | forStmt | ifStmt | whileStmt | block ;
+returnStmt      -> "return" expression? ";" ;
 exprStmt        -> expression ";" ;
 forStmt         -> "for" IDENTIFIER "=" expression "to" expression block ;
 ifStmt          -> "if" expression block ( "else" ( ifStmt | block ) )? ;
@@ -25,9 +29,15 @@ equality        -> comparison ( ( "!=" | "==" ) comparison )* ;
 comparison      -> term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
 term            -> factor ( ( "-" | "+" ) factor )* ;
 factor          -> unary ( ( "*" | "/" ) unary )* ;
-unary           -> ( "!" | "-" ) unary | primary ;
+unary           -> ( "!" | "-" ) unary | call ;
+call            -> IDENTIFIER "(" arguments? ")" | primary ;
+arguments       -> expression ( "," expression )* ;
 primary         -> INTEGER | FLOAT | STRING | BOOLEAN | PINSTATE | PINMODE
                  | IDENTIFIER | "(" expression ")" ;
 
-// fun, return, alias and not remain reserved, but have no implemented productions.
-// Functions, calls and modules will be specified in a later iteration.
+// fun, alias and not remain reserved, but have no implemented productions.
+// Only top-level named functions; no nested functions, function values or trailing commas.
+// Signature types: integers, bool, PinState. Omitted result type means no value.
+// return is legal only inside fn. Every value-returning function must have an explicit
+// return on every structural path; loops alone do not establish this guarantee.
+// Global initializers cannot call functions. See docs/FUNCTIONS.md for the full contract.

@@ -1,0 +1,34 @@
+// Classic Arduino Nano: button between D2 and GND, built-in LED on D13.
+// No debounce yet: physical contact bounce may cause repeated transitions.
+def {
+    Button = PortD.2 INPUT_PULLUP;
+    Led = PortB.5 OUTPUT;
+}
+
+var button_pressed:bool = false;
+
+setup {
+    Led = LOW;
+}
+
+loop {
+    update_button(Button == LOW);
+}
+
+fn update_button(pressed:bool) {
+    if !pressed {
+        button_pressed = false;
+        return;
+    }
+
+    if button_pressed {
+        return;
+    }
+
+    toggle_led();
+    button_pressed = true;
+}
+
+fn toggle_led() {
+    Led = !Led;
+}

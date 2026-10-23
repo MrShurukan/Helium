@@ -42,6 +42,15 @@ pub fn compile_ir(
     mcu: &str,
 ) -> Result<Vec<IntermediateRepresentation>, Vec<Diagnostic>> {
     let statements = analyze(source)?;
+    if let Some(function) = statements
+        .iter()
+        .find(|s| matches!(s.statement_type, StatementType::FunctionDeclaration { .. }))
+    {
+        return Err(vec![Diagnostic::new(
+            diagnostic::DiagnosticKind::FunctionsLowering,
+            Some(function.source_location),
+        )]);
+    }
     support::validate_pins(&statements, mcu)?;
 
     IRBuilder::new(source)

@@ -12,12 +12,12 @@ There are five distinct boundaries:
 The table below describes the older language/legacy/AVR boundaries. Typed IR v1 adds executable
 integer/bool storage, add/subtract/multiply/negate, comparisons, ternary, while, short-circuit logic,
 pin inversion and INPUT_PULLUP. Integer widths 8/16/32/64 are modeled and interpreted.
-Function signatures/calls/returns exist in the IR, but not yet in source syntax.
+Function signatures/calls/returns are supported in source syntax and typed IR.
 For ranges, division, shifts, float, strings and computed PinMode values remain unsupported.
 See [IR_V1.md](IR_V1.md) for the complete contract and verifier policy.
 The optional LLVM backend implements this subset through machine code for 8/16-bit integers,
 bool and PinState, including storage, while, short-circuit logic, ternary, inversion and INPUT_PULLUP.
-IR-level calls/results are covered by machine tests; source-level functions are still absent.
+Source-level functions and IR calls/results are covered by machine tests; see [FUNCTIONS.md](FUNCTIONS.md).
 See [LLVM_PROTOTYPE.md](LLVM_PROTOTYPE.md) for exact boundaries and validation.
 
 | Feature | Language analysis | Legacy IR inspection | Legacy AVR assembly / HEX |
@@ -36,7 +36,8 @@ See [LLVM_PROTOTYPE.md](LLVM_PROTOTYPE.md) for exact boundaries and validation.
 | Other numeric operations/comparisons, ternary | Yes, with type checks | Explicit unsupported error | Explicit unsupported error |
 | `while` / `for` | Yes | Explicit unsupported error | Explicit unsupported error |
 | Floating-point values and strings | Basic analysis only | Explicit unsupported error | Explicit unsupported error |
-| Functions, calls, modules, arrays, structures | Not implemented | Not implemented | Not implemented |
+| `fn`, calls, explicit return | Yes; scalar signatures | Explicit unsupported error | Explicit unsupported error |
+| Modules, arrays, structures | Not implemented | Not implemented | Not implemented |
 | Timers, interrupts, UART and device libraries | Not implemented | Not implemented | Not implemented |
 
 `check` is not a substitute for the assembler: AVRA still checks instruction encoding and branch ranges.

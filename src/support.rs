@@ -84,6 +84,9 @@ fn validate_statement(statement: &Statement, errors: &mut Vec<Diagnostic>) {
     let unsupported = |kind| Diagnostic::new(kind, Some(statement.source_location));
 
     match &statement.statement_type {
+        S::FunctionDeclaration { .. } | S::Return(_) => {
+            errors.push(unsupported(DiagnosticKind::FunctionsLowering))
+        }
         S::DefDeclaration(declarations) => {
             for pin in declarations {
                 if pin.pin_mode == M::InputPullUp {

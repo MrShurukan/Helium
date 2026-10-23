@@ -23,6 +23,10 @@ impl LocatableInSource for Expression {
 
 #[derive(Debug, Clone)]
 pub enum ExpressionType {
+    Call {
+        identifier: String,
+        arguments: Vec<Expression>,
+    },
     Identifier(String),
     Binary {
         left: Box<Expression>,
@@ -190,6 +194,19 @@ impl Display for Expression {
         }
 
         match &self.expression_type {
+            ExpressionType::Call {
+                identifier,
+                arguments,
+            } => {
+                write!(f, "{identifier}(")?;
+                for (index, argument) in arguments.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{argument}")?;
+                }
+                write!(f, ")")
+            }
             ExpressionType::Binary {
                 left,
                 operator,
