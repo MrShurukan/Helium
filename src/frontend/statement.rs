@@ -339,7 +339,7 @@ impl SingleDefDeclaration {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DefDeclarationError {
     pub token: Token,
     message: &'static str,
@@ -348,6 +348,6 @@ pub struct DefDeclarationError {
 impl Error for DefDeclarationError {}
 impl Display for DefDeclarationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message.red())
+        write!(f, "{}", self.message)
     }
 }

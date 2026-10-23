@@ -2,7 +2,6 @@ use crate::frontend::position_info::PositionInfo;
 use crate::frontend::token::Token;
 use crate::frontend::token_type::{LiteralType, TokenType, CONSTANTS, KEYWORDS};
 use crate::frontend::utils::{ReadOnlyGraphemeSlice, SourceLocation};
-use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::iter::Peekable;
@@ -492,66 +491,33 @@ impl Scanner<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScannerError {
     error_type: ScannerErrorType,
-    location: Option<String>,
+    pub(crate) location: SourceLocation,
 }
 
 impl ScannerError {
     fn new(
         error_type: ScannerErrorType,
         position_info: &PositionInfo,
-        source: &ReadOnlyGraphemeSlice,
+        _source: &ReadOnlyGraphemeSlice,
     ) -> Self {
-        let location = ScannerError::get_line_with_marker(
-            source,
-            position_info.line,
-            position_info.current_from_line_start,
-        );
-
-        // Something went horribly wrong if we didn't get the line, not supposed to happen
-        assert!(
-            location.is_some(),
-            "Couldn't get the line #{}",
-            position_info.line
-        );
+        let offset = position_info.current_from_line_start.saturating_sub(1);
 
         ScannerError {
             error_type,
-            location: Some(location.unwrap()),
+            location: SourceLocation {
+                line_start: position_info.line,
+                line_end: position_info.line,
+                start_offset: offset,
+                end_offset: offset + 1,
+            },
         }
-    }
-
-    /// Gets a helper string for error displaying with a marker on the second line.
-    /// ### Example
-    /// This function is used to create a string that looks something like this:
-    /// ```text
-    /// 14. var test = (hello + 1
-    ///                ^
-    /// ```
-    /// Resulting string consists of two lines and has a marker denoted by
-    /// `^` on the second line. The line is automatically inferred by the `marker_position` from
-    /// the `self.source` string. See "Arguments" below.
-    ///
-    /// ### Arguments
-    /// * `line_number` - Line number (counting from 1) where the error is located
-    /// * `marker_position` - Index from a start of a line (`line_number`) into the `source.grapheme_peekable` string.
-    fn get_line_with_marker(
-        source: &ReadOnlyGraphemeSlice,
-        line_number: usize,
-        marker_position: usize,
-    ) -> Option<String> {
-        let line = source.get_line(line_number)?;
-
-        let line_number_string = format!("{line_number}. ");
-        let spaces = " ".repeat(line_number_string.len() + marker_position - 1);
-
-        Some(format!("{line_number_string}{line}\n{spaces}{}", "^".red()))
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ScannerErrorType {
     UnknownToken(String),
     UnterminatedString,
@@ -581,26 +547,6 @@ impl Display for ScannerError {
             ScannerErrorType::MissingPortName => "Port name was not specified",
         };
 
-        write!(f, "Scanner Error: {}", output.red())?;
-        // TODO: Move common error logic somewhere
-        if let Some(location) = &self.location {
-            // Add tabs to each line of the location so it shifts to the right
-            let location: String = location
-                .split('\n')
-                .fold(String::new(), |mut output, line| {
-                    output += "\t";
-                    output += line;
-                    output += "\n";
-                    output
-                });
-            write!(
-                f,
-                "\n\t{}\n{}\n",
-                "Happened here:".green(),
-                location.trim_end()
-            )?;
-        }
-
-        Ok(())
+        f.write_str(output)
     }
 }

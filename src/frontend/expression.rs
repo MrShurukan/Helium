@@ -254,7 +254,7 @@ impl PinRef {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PinRefError {
     pub token: Token,
     message: &'static str,
@@ -263,6 +263,6 @@ pub struct PinRefError {
 impl Error for PinRefError {}
 impl Display for PinRefError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message.red())
+        write!(f, "{}", self.message)
     }
 }

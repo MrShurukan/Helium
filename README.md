@@ -40,6 +40,12 @@ cargo run --locked -- build goal.he --mcu atmega328p --emit ast
 AST output includes the inferred types. IR output is the legacy inspection representation,
 not a guarantee that the program can be compiled into AVR instructions.
 
+Compiler diagnostics share one format across scanning, parsing, type checking and AVR support
+checks. Use `--color auto|always|never` (default `auto`) to control coloring; automatic color
+is disabled when stderr is redirected or `NO_COLOR` is set. Library diagnostics are plain
+unless the caller explicitly requests color. Messages are English for now; Russian translation
+and language selection are planned, with structured error kinds prepared for that work.
+
 By default outputs go into `build/` beside the source file, regardless of the current working directory.
 Use `-o path/to/result.asm` (or `.hex`, `.ir`, `.ast`) to choose a file explicitly.
 ATmega328P definitions are embedded in the compiler and assembly output, so neither execution

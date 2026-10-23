@@ -1,3 +1,4 @@
+use helium::diagnostic::DiagnosticCode;
 use helium::frontend::{
     expression::ExpressionType as E, statement::StatementType as S, static_type::StaticType as T,
 };
@@ -5,11 +6,11 @@ use helium::middle_end::linear_ir::{IRType as I, LoadType};
 use helium::{analyze, check, compile_assembly, compile_ir};
 use std::collections::HashMap;
 
-fn errors(source: &str) -> Vec<&'static str> {
+fn errors(source: &str) -> Vec<DiagnosticCode> {
     analyze(source)
         .unwrap_err()
         .iter()
-        .map(|d| d.code)
+        .map(|d| d.code())
         .collect()
 }
 fn body(program: &str) -> String {
@@ -25,7 +26,10 @@ fn duplicate_and_shadowed_names_are_rejected() {
         "def Led=PortC.5 OUTPUT; loop { var Led=1; }",
         "loop { var x=1; {var x=2;} }",
     ] {
-        assert!(errors(source).contains(&"E_DUPLICATE"), "{source}");
+        assert!(
+            errors(source).contains(&DiagnosticCode::Duplicate),
+            "{source}"
+        );
     }
     analyze("loop { {var x=1;} {var x=2;} }").unwrap();
 }
@@ -37,7 +41,10 @@ fn scope_and_self_initialization() {
         "loop { {var x=1;} x=2; }",
         "loop { for i=0 to 3 {} i=2; }",
     ] {
-        assert!(errors(source).contains(&"E_UNDEFINED"), "{source}");
+        assert!(
+            errors(source).contains(&DiagnosticCode::Undefined),
+            "{source}"
+        );
     }
 }
 #[test]
@@ -60,24 +67,24 @@ fn literal_ranges_include_signed_minimum_and_unsigned_maximum() {
         "var x:u8=300+1;",
     ] {
         assert!(
-            errors(&body(declaration)).contains(&"E_LITERAL_RANGE"),
+            errors(&body(declaration)).contains(&DiagnosticCode::LiteralRange),
             "{declaration}"
         );
     }
 }
 #[test]
 fn assignments_check_range_and_only_widen_losslessly() {
-    assert!(errors(&body("var x:u8=0; x=256;")).contains(&"E_LITERAL_RANGE"));
-    assert!(errors(&body("var x:u16=0; var y:u8=x;")).contains(&"E_TYPE"));
+    assert!(errors(&body("var x:u8=0; x=256;")).contains(&DiagnosticCode::LiteralRange));
+    assert!(errors(&body("var x:u16=0; var y:u8=x;")).contains(&DiagnosticCode::Type));
     analyze(&body("var x:u8=0; var y:u16=x;")).unwrap();
-    assert!(errors(&body("var x:i64=0; var y:f32=x;")).contains(&"E_TYPE"));
+    assert!(errors(&body("var x:i64=0; var y:f32=x;")).contains(&DiagnosticCode::Type));
 }
 #[test]
 fn boolean_operators_and_pin_inversion_have_explicit_types() {
     for expression in ["!1;", "true and 1;", "HIGH < LOW;", "true == 1;"] {
         assert!(analyze(&body(expression)).is_err(), "{expression}");
     }
-    assert!(errors(&body("!missing;")).contains(&"E_UNDEFINED"));
+    assert!(errors(&body("!missing;")).contains(&DiagnosticCode::Undefined));
     let ast =
         analyze("def Led=PortC.5 OUTPUT; loop { Led=!Led; var state=!HIGH; var flag=!false; }")
             .unwrap();
@@ -97,7 +104,7 @@ fn boolean_operators_and_pin_inversion_have_explicit_types() {
     };
     assert_eq!(*ty, T::Boolean);
     let error = check("def Led=PortC.5 OUTPUT; loop { Led=!Led; }", "atmega328p").unwrap_err();
-    assert_eq!(error[0].code, "E_UNSUPPORTED");
+    assert_eq!(error[0].code(), DiagnosticCode::Unsupported);
     assert!(error[0].location.is_some());
 }
 #[test]
@@ -171,11 +178,14 @@ fn malformed_input_returns_errors_without_panicking() {
 }
 #[test]
 fn target_and_support_errors_are_explicit() {
-    assert_eq!(check(GPIO, "unknown").unwrap_err()[0].code, "E_TARGET");
+    assert_eq!(
+        check(GPIO, "unknown").unwrap_err()[0].code(),
+        DiagnosticCode::Target
+    );
     for pin in ["PortA.0", "PortB.8", "PortC.7"] {
         assert_eq!(
-            check(&format!("def Led={pin} OUTPUT; loop {{}}"), "atmega328p").unwrap_err()[0].code,
-            "E_PIN"
+            check(&format!("def Led={pin} OUTPUT; loop {{}}"), "atmega328p").unwrap_err()[0].code(),
+            DiagnosticCode::Pin
         );
     }
     assert_eq!(
@@ -184,8 +194,8 @@ fn target_and_support_errors_are_explicit() {
             "atmega328p"
         )
         .unwrap_err()[0]
-            .code,
-        "E_PIN_DUPLICATE"
+            .code(),
+        DiagnosticCode::PinDuplicate
     );
     for source in [
         "loop {var x=1;}",
@@ -286,7 +296,7 @@ fn chained_pin_assignments_keep_both_effects() {
 fn integer_to_float_literals_must_be_exact() {
     analyze(&body("var x:f32=16777216; var y:f64=9007199254740992;")).unwrap();
     for declaration in ["var x:f32=16777217;", "var y:f64=9007199254740993;"] {
-        assert!(errors(&body(declaration)).contains(&"E_LITERAL_RANGE"));
+        assert!(errors(&body(declaration)).contains(&DiagnosticCode::LiteralRange));
     }
 }
 #[test]
@@ -301,7 +311,7 @@ fn planned_latch_has_valid_types_but_is_not_claimed_as_supported() {
     assert!(check(source, "atmega328p")
         .unwrap_err()
         .iter()
-        .any(|d| d.code == "E_UNSUPPORTED"));
+        .any(|d| d.code() == DiagnosticCode::Unsupported));
 }
 #[test]
 fn malformed_token_combinations_do_not_panic() {
@@ -363,7 +373,7 @@ fn reserved_keywords_do_not_trigger_error_recovery_loops() {
         );
         assert!(!errors
             .iter()
-            .any(|error| error.message.to_lowercase().contains("infinite loop")));
+            .any(|error| error.message().to_lowercase().contains("infinite loop")));
     }
 }
 #[test]

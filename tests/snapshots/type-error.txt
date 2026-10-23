@@ -1,0 +1,3 @@
+error[E_LITERAL_RANGE]: Integer literal 300 is outside u8 range 0..=255
+   2 |     var температура:u8=300;
+     |                        ^^^

@@ -1,6 +1,6 @@
 pub mod linear_ir;
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, DiagnosticKind};
 use crate::frontend::{
     expression::{Expression, ExpressionType as E},
     statement::{Statement, StatementType as S},
@@ -26,30 +26,36 @@ impl Analyzer {
             errors: vec![],
         }
     }
+
     pub fn analyze(mut self, statements: &mut [Statement]) -> Result<(), Vec<Diagnostic>> {
         for statement in statements {
             self.statement(statement);
         }
+
         if self.errors.is_empty() {
             Ok(())
         } else {
             Err(self.errors)
         }
     }
-    fn error(&mut self, code: &'static str, message: impl Into<String>, span: SourceLocation) {
-        self.errors.push(Diagnostic::new(code, message, Some(span)));
+
+    fn error(&mut self, kind: DiagnosticKind, span: SourceLocation) {
+        self.errors.push(Diagnostic::new(kind, Some(span)));
     }
+
     fn lookup(&self, name: &str) -> Option<T> {
         self.scopes
             .iter()
             .rev()
             .find_map(|scope| scope.get(name).copied())
     }
+
     fn declare(&mut self, name: &str, ty: T, span: SourceLocation) {
         if self.lookup(name).is_some() {
             self.error(
-                "E_DUPLICATE",
-                format!("'{name}' is already defined; shadowing is not allowed"),
+                DiagnosticKind::DuplicateName {
+                    name: name.to_owned(),
+                },
                 span,
             );
         } else {
@@ -59,15 +65,20 @@ impl Analyzer {
                 .insert(name.to_owned(), ty);
         }
     }
+
     fn block(&mut self, body: &mut [Statement]) {
         self.scopes.push(HashMap::new());
+
         for statement in body {
             self.statement(statement);
         }
+
         self.scopes.pop();
     }
+
     fn statement(&mut self, statement: &mut Statement) {
         let span = statement.source_location;
+
         match &mut statement.statement_type {
             S::VariableDeclaration {
                 identifier,
@@ -89,22 +100,22 @@ impl Analyzer {
                             static_type: T::Unknown,
                         });
                     } else {
-                        self.error(
-                            "E_INITIALIZER",
-                            "Provide a type with a default value or an initializer",
-                            span,
-                        );
+                        self.error(DiagnosticKind::MissingInitializer, span);
                     }
                 }
+
                 // Analyze before declaration: an initializer cannot read its own variable.
                 let inferred = initializer
                     .as_mut()
                     .map(|expr| self.expression(expr))
                     .unwrap_or(T::Unknown);
+
                 let target = static_type.unwrap_or_else(|| default_type(inferred));
+
                 if let Some(expr) = initializer {
                     self.coerce(expr, target);
                 }
+
                 *static_type = Some(target);
                 self.declare(identifier, target, span);
             }
@@ -126,6 +137,7 @@ impl Analyzer {
             } => {
                 self.condition(condition);
                 self.statement(then_body);
+
                 if let Some(body) = else_body {
                     self.statement(body);
                 }
@@ -145,12 +157,14 @@ impl Analyzer {
                 let ty = if matches!((a, b), (T::Integer(_), T::Integer(_))) {
                     self.common_numeric(from, to)
                 } else {
-                    self.error("E_FOR_TYPE", "For bounds must be integers", span);
+                    self.error(DiagnosticKind::ForBounds, span);
                     T::Unknown
                 };
+
                 let ty = default_type(ty);
                 self.coerce(from, ty);
                 self.coerce(to, ty);
+
                 self.scopes.push(HashMap::new());
                 self.declare(identifier, ty, span);
                 self.statement(body);
@@ -158,18 +172,18 @@ impl Analyzer {
             }
         }
     }
+
     fn condition(&mut self, expr: &mut Expression) {
         let ty = self.expression(expr);
+
         if ty != T::Boolean && ty != T::Unknown {
-            self.error(
-                "E_CONDITION",
-                format!("Expected bool condition, found {ty}"),
-                expr.source_location,
-            );
+            self.error(DiagnosticKind::ConditionType { ty }, expr.source_location);
         }
     }
+
     fn expression(&mut self, expr: &mut Expression) -> T {
         let span = expr.source_location;
+
         let ty = match &mut expr.expression_type {
             E::Literal { value } => match value {
                 L::Integer(_) => T::Integer(I::Literal),
@@ -181,8 +195,9 @@ impl Analyzer {
             },
             E::Identifier(name) => self.lookup(name).unwrap_or_else(|| {
                 self.error(
-                    "E_UNDEFINED",
-                    format!("'{name}' is undefined in this scope"),
+                    DiagnosticKind::UndefinedName {
+                        name: name.to_owned(),
+                    },
                     span,
                 );
                 T::Unknown
@@ -190,6 +205,7 @@ impl Analyzer {
             E::Grouping { expression } => self.expression(expression),
             E::Unary { operator, right } => {
                 let operand = self.expression(right);
+
                 match (operator, operand) {
                     (P::Bang, T::Boolean) => T::Boolean,
                     (P::Bang, T::Pin | T::PinState) => T::PinState,
@@ -197,8 +213,10 @@ impl Analyzer {
                     (_, T::Unknown) => T::Unknown,
                     (operator, _) => {
                         self.error(
-                            "E_UNARY_TYPE",
-                            format!("Unary {operator} cannot be used with {operand}"),
+                            DiagnosticKind::UnaryType {
+                                operator: operator.clone(),
+                                operand,
+                            },
                             span,
                         );
                         T::Unknown
@@ -247,8 +265,11 @@ impl Analyzer {
                         }
                         _ => {
                             self.error(
-                                "E_BINARY_TYPE",
-                                format!("Operator {operator:?} does not accept {a} and {b}"),
+                                DiagnosticKind::BinaryType {
+                                    operator: operator.clone(),
+                                    a,
+                                    b,
+                                },
                                 span,
                             );
                             T::Unknown
@@ -264,16 +285,13 @@ impl Analyzer {
                 self.condition(first);
                 let a = self.expression(second);
                 let b = self.expression(third);
+
                 if numeric(a) && numeric(b) {
                     self.common_numeric(second, third)
                 } else if a == b {
                     a
                 } else {
-                    self.error(
-                        "E_TERNARY_TYPE",
-                        format!("Branches have incompatible types {a} and {b}"),
-                        span,
-                    );
+                    self.error(DiagnosticKind::BranchTypes { a, b }, span);
                     T::Unknown
                 }
             }
@@ -282,6 +300,7 @@ impl Analyzer {
                 expression,
             } => {
                 let value = self.expression(expression);
+
                 match self.lookup(identifier) {
                     Some(T::Pin) if matches!(value, T::PinState | T::PinMode) => value,
                     Some(target) => {
@@ -290,8 +309,9 @@ impl Analyzer {
                     }
                     None => {
                         self.error(
-                            "E_UNDEFINED",
-                            format!("'{identifier}' is undefined in this scope"),
+                            DiagnosticKind::UndefinedName {
+                                name: identifier.clone(),
+                            },
                             span,
                         );
                         T::Unknown
@@ -299,12 +319,16 @@ impl Analyzer {
                 }
             }
         };
+
         expr.static_type = ty;
+
         ty
     }
+
     fn common_numeric(&mut self, left: &mut Expression, right: &mut Expression) -> T {
         let a = left.static_type;
         let b = right.static_type;
+
         let target = if a == b {
             a
         } else if literal_type(a) && !literal_type(b) {
@@ -316,22 +340,23 @@ impl Analyzer {
         } else if widening(b, a) {
             a
         } else {
-            self.error(
-                "E_NUMERIC_TYPE",
-                format!("No lossless common type for {a} and {b}"),
-                left.source_location,
-            );
+            self.error(DiagnosticKind::NumericTypes { a, b }, left.source_location);
             return T::Unknown;
         };
+
         self.coerce(left, target);
         self.coerce(right, target);
+
         target
     }
+
     fn coerce(&mut self, expr: &mut Expression, target: T) {
         let from = expr.static_type;
+
         if from == T::Unknown || target == T::Unknown {
             return;
         }
+
         if matches!(target, T::Float(F::Float32 | F::Float64)) {
             if let Some(value) = integer_literal(expr) {
                 let restored = if target == T::Float(F::Float32) {
@@ -339,45 +364,52 @@ impl Analyzer {
                 } else {
                     (value as f64) as i128
                 };
+
                 if restored != value {
                     self.error(
-                        "E_LITERAL_RANGE",
-                        format!(
-                            "Integer literal {value} cannot be represented exactly as {target}"
-                        ),
+                        DiagnosticKind::InexactInteger { value, target },
                         expr.source_location,
                     );
                 } else {
                     expr.static_type = target;
                 }
+
                 return;
             }
         }
+
         if let Some((min, max)) = integer_bounds(target) {
             if let Some(value) = integer_literal(expr) {
                 if !(min..=max).contains(&value) {
                     self.error(
-                        "E_LITERAL_RANGE",
-                        format!("Integer literal {value} is outside {target} range {min}..={max}"),
+                        DiagnosticKind::IntegerRange {
+                            value,
+                            target,
+                            min,
+                            max,
+                        },
                         expr.source_location,
                     );
                     return;
                 }
+
                 expr.static_type = target;
+
                 return;
             }
         }
+
         if from != target
             && !widening(from, target)
             && !(from == T::Integer(I::Literal) && matches!(target, T::Integer(_)))
         {
             self.error(
-                "E_TYPE",
-                format!("Cannot implicitly convert {from} to {target} without loss"),
+                DiagnosticKind::LossyConversion { from, target },
                 expr.source_location,
             );
             return;
         }
+
         if literal_type(from) && !literal_type(target) {
             match &mut expr.expression_type {
                 E::Grouping { expression } => self.coerce(expression, target),
@@ -386,11 +418,7 @@ impl Analyzer {
                     right,
                 } => {
                     if matches!(target, T::Integer(I::Unsigned(_))) {
-                        self.error(
-                            "E_TYPE",
-                            "A negated expression cannot implicitly become unsigned",
-                            expr.source_location,
-                        );
+                        self.error(DiagnosticKind::NegatedUnsigned, expr.source_location);
                     } else {
                         self.coerce(right, target);
                     }
@@ -406,24 +434,24 @@ impl Analyzer {
                 E::Literal {
                     value: L::Float(value),
                 } if target == T::Float(F::Float32) && !(*value as f32).is_finite() => {
-                    self.error(
-                        "E_LITERAL_RANGE",
-                        "Floating-point literal is outside f32 range",
-                        expr.source_location,
-                    );
+                    self.error(DiagnosticKind::FloatRange, expr.source_location);
                 }
                 _ => {}
             }
         }
+
         expr.static_type = target;
     }
 }
+
 fn numeric(ty: T) -> bool {
     matches!(ty, T::Integer(_) | T::Float(_))
 }
+
 fn literal_type(ty: T) -> bool {
     matches!(ty, T::Integer(I::Literal) | T::Float(F::Literal))
 }
+
 fn default_type(ty: T) -> T {
     match ty {
         T::Integer(I::Literal) => T::Integer(I::Signed(SI::Int32)),
@@ -431,6 +459,7 @@ fn default_type(ty: T) -> T {
         _ => ty,
     }
 }
+
 fn integer_literal(expr: &Expression) -> Option<i128> {
     match &expr.expression_type {
         E::Literal {
@@ -444,6 +473,7 @@ fn integer_literal(expr: &Expression) -> Option<i128> {
         _ => None,
     }
 }
+
 fn integer_bounds(ty: T) -> Option<(i128, i128)> {
     let (signed, bits) = match ty {
         T::Integer(I::Signed(s)) => (
@@ -466,19 +496,23 @@ fn integer_bounds(ty: T) -> Option<(i128, i128)> {
         ),
         _ => return None,
     };
+
     Some(if signed {
         (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
     } else {
         (0, (1i128 << bits) - 1)
     })
 }
+
 fn widening(from: T, to: T) -> bool {
     if from == to {
         return true;
     }
+
     if let (Some((a, b)), Some((c, d))) = (integer_bounds(from), integer_bounds(to)) {
         return c <= a && b <= d;
     }
+
     match (from, to) {
         (T::Float(F::Literal), T::Float(_)) | (T::Float(F::Float32), T::Float(F::Float64)) => true,
         (T::Integer(_), T::Float(F::Float32 | F::Float64)) => {

@@ -21,13 +21,12 @@ pub(crate) struct Program {
 
 /// Parse and type-check the language, including constructs not yet lowered to AVR.
 pub fn analyze(source: &str) -> Result<Vec<Statement>, Vec<Diagnostic>> {
-    let mut statements = Parser::new(source).parse().map_err(|errors| {
-        errors
-            .into_iter()
-            .map(|error| Diagnostic::new("E_PARSE", error.to_string(), None))
-            .collect::<Vec<_>>()
-    })?;
+    let mut statements = Parser::new(source)
+        .parse()
+        .map_err(|errors| errors.into_iter().map(Diagnostic::from).collect::<Vec<_>>())?;
+
     middle_end::Analyzer::new(source).analyze(&mut statements)?;
+
     Ok(statements)
 }
 
@@ -43,6 +42,7 @@ pub fn compile_ir(
 ) -> Result<Vec<IntermediateRepresentation>, Vec<Diagnostic>> {
     let statements = analyze(source)?;
     support::validate_pins(&statements, mcu)?;
+
     IRBuilder::new(source)
         .produce_ir(structure(statements))
         .map_err(|e| vec![e])
@@ -51,9 +51,11 @@ pub fn compile_ir(
 pub fn compile_assembly(source: &str, mcu: &str) -> Result<String, Vec<Diagnostic>> {
     let statements = analyze(source)?;
     support::validate(&statements, mcu)?;
+
     let ir = IRBuilder::new(source)
         .produce_ir(structure(statements))
         .map_err(|e| vec![e])?;
+
     backend::produce(&ir).map_err(|e| vec![e])
 }
 
@@ -64,6 +66,7 @@ fn structure(statements: Vec<Statement>) -> Program {
         setup_block: vec![],
         loop_block: vec![],
     };
+
     for statement in statements {
         match statement.statement_type {
             StatementType::DefDeclaration(mut declarations) => {
@@ -77,5 +80,6 @@ fn structure(statements: Vec<Statement>) -> Program {
             _ => unreachable!("parser only produces top-level declarations"),
         }
     }
+
     program
 }

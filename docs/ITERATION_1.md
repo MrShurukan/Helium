@@ -65,6 +65,16 @@ those features. No physical flashing was performed during this iteration.
 
 ## Next iteration
 
+Review follow-up: compiler errors now carry `DiagnosticKind` data and enum codes,
+and scanner/parser spans use the same renderer as semantic and backend diagnostics.
+The CLI offers automatic/forced/disabled color. `tests/diagnostics.rs` and the error
+snapshots cover this contract, including Cyrillic source text, CRLF and tab alignment.
+Russian translation remains a separate task; current messages are English.
+
+New code has been separated into logical blocks. Compact enum aliases in nested
+parser/analyzer patterns are intentional: expanding them often makes those patterns
+harder to read. Formatting checks do not replace a manual readability review.
+
 Agree on typed values and basic blocks, explicit local/global storage and hardware effects. Then implement
 an executable integer/bool subset and startup/storage/register handling for ATmega328P. Add `!Pin` lowering
 with single-read semantics. Only then introduce optimizations over verified representations.

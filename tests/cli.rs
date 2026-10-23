@@ -50,6 +50,41 @@ impl Drop for Fixture {
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
+
+#[test]
+fn diagnostic_color_policy_is_explicit_and_auto_is_plain_when_captured() {
+    let fixture = Fixture::new();
+    fs::write(&fixture.source, "loop { @ }").unwrap();
+
+    for (options, expect_color) in [
+        (vec![], false),
+        (vec!["--color", "auto"], false),
+        (vec!["--color", "never"], false),
+        (vec!["--color", "always"], true),
+    ] {
+        let output = fixture.run("check", &options, false);
+        assert!(!output.status.success());
+        assert_eq!(stderr(&output).contains('\x1b'), expect_color);
+        assert!(stderr(&output).contains("error[E_PARSE]"));
+    }
+
+    let output = fixture
+        .command()
+        .arg("check")
+        .arg(&fixture.source)
+        .args(["--mcu", "atmega328p", "--color", "always"])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert!(
+        stderr(&output).contains('\x1b'),
+        "explicit flag overrides NO_COLOR"
+    );
+
+    let invalid = fixture.run("check", &["--color", "sometimes"], false);
+    assert!(!invalid.status.success());
+    assert!(stderr(&invalid).contains("Unknown color mode"));
+}
 #[test]
 fn check_and_emit_need_no_external_tools_and_are_quiet() {
     let fixture = Fixture::new();

@@ -7,11 +7,15 @@ use crate::frontend::{
         PunctuationType as P, TokenType as Token,
     },
 };
-use crate::{diagnostic::Diagnostic, Program};
+use crate::{
+    diagnostic::{Diagnostic, DiagnosticKind},
+    Program,
+};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
 type RegisterNumber = u32;
+
 #[derive(Clone, Copy)]
 enum Value {
     Constant(u64),
@@ -27,6 +31,7 @@ pub(crate) struct IRBuilder {
     next_register: u32,
     next_label: u32,
 }
+
 impl IRBuilder {
     pub fn new(_source: &str) -> Self {
         Self {
@@ -37,18 +42,22 @@ impl IRBuilder {
             next_label: 0,
         }
     }
+
     fn push(&mut self, ir_type: IRType) {
         self.instructions
             .push(IntermediateRepresentation { ir_type });
     }
+
     fn register(&mut self) -> u32 {
         self.next_register += 1;
         self.next_register
     }
+
     fn label(&mut self, prefix: &str) -> String {
         self.next_label += 1;
         format!("{prefix}_{}", self.next_label)
     }
+
     fn materialize(&mut self, value: Value) -> u32 {
         match value {
             Value::Register(reg) => reg,
@@ -59,19 +68,20 @@ impl IRBuilder {
             }
         }
     }
+
     pub fn produce_ir(
         mut self,
         program: Program,
     ) -> Result<Vec<IntermediateRepresentation>, Diagnostic> {
         self.push(IRType::Label("setup".into()));
+
         for declaration in program.def_declarations {
             let instruction = match declaration.pin_mode {
                 Mode::Input => IRType::SetInputPinMode(declaration.pin.clone()),
                 Mode::Output => IRType::SetOutputPinMode(declaration.pin.clone()),
                 _ => {
                     return Err(Diagnostic::new(
-                        "E_UNSUPPORTED",
-                        "Pull resistor configuration is not implemented",
+                        DiagnosticKind::PullResistorLowering,
                         Some(declaration.source_location),
                     ))
                 }
@@ -79,6 +89,7 @@ impl IRBuilder {
             self.push(instruction);
             self.pins.insert(declaration.identifier, declaration.pin);
         }
+
         for statement in program.global_var_declarations {
             if let S::VariableDeclaration {
                 identifier,
@@ -91,20 +102,28 @@ impl IRBuilder {
                 self.push(IRType::Store(reg, identifier));
             }
         }
+
         self.block(&program.setup_block)?;
+
         self.push(IRType::Label("loop".into()));
         self.block(&program.loop_block)?;
         self.push(IRType::Jump("loop".into()));
+
         Ok(self.instructions)
     }
+
     fn block(&mut self, body: &[Statement]) -> Result<(), Diagnostic> {
         self.locals.push(HashMap::new());
+
         for statement in body {
             self.statement(statement)?;
         }
+
         self.locals.pop();
+
         Ok(())
     }
+
     fn statement(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
         match &statement.statement_type {
             S::Expression(expr) => {
@@ -130,9 +149,12 @@ impl IRBuilder {
             } => {
                 let value = self.value(condition)?;
                 let reg = self.materialize(value);
+
                 let otherwise = self.label("else");
                 self.push(IRType::JumpIfZero(reg, otherwise.clone()));
+
                 self.statement(then_body)?;
+
                 if let Some(body) = else_body {
                     let end = self.label("end_if");
                     self.push(IRType::Jump(end.clone()));
@@ -145,22 +167,23 @@ impl IRBuilder {
             }
             _ => {
                 return Err(Diagnostic::new(
-                    "E_UNSUPPORTED",
-                    "This statement is not supported by the legacy IR yet",
+                    DiagnosticKind::StatementLowering,
                     Some(statement.source_location),
                 ))
             }
         }
+
         Ok(())
     }
+
     fn value(&mut self, expr: &Expression) -> Result<Value, Diagnostic> {
         let unsupported = || {
             Diagnostic::new(
-                "E_UNSUPPORTED",
-                "This expression is not supported by the legacy IR yet",
+                DiagnosticKind::ExpressionLowering,
                 Some(expr.source_location),
             )
         };
+
         Ok(match &expr.expression_type {
             E::Literal { value } => Value::Constant(match value {
                 L::Integer(value) => *value,
@@ -172,6 +195,7 @@ impl IRBuilder {
             E::Grouping { expression } => return self.value(expression),
             E::Identifier(name) if expr.static_type != T::Pin => {
                 let reg = self.register();
+
                 if let Some(previous) = self
                     .locals
                     .iter()
@@ -278,12 +302,14 @@ impl IRBuilder {
         })
     }
 }
+
 fn ungroup(mut expression: &Expression) -> &Expression {
     while let E::Grouping { expression: inner } = &expression.expression_type {
         expression = inner;
     }
     expression
 }
+
 fn pin_name(expression: &Expression) -> Option<&str> {
     match &ungroup(expression).expression_type {
         E::Identifier(name) => Some(name),

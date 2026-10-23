@@ -9,7 +9,6 @@ use crate::frontend::token_type::{
     PunctuationType as PT, TokenType as TT,
 };
 use crate::frontend::utils::TokenIterator;
-use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -981,37 +980,10 @@ impl Parser<'_> {
         self.get_error_marked_line(ParserErrorType::InvalidPinRef(error), token)
     }
 
-    /// Gets a helper string for error displaying with a marker on the second line.
-    /// ### Example
-    /// This function is used to create a string that looks something like this:
-    /// ```text
-    /// 14. var stuff = (1 + class) * 3
-    ///                      ^^^^^
-    /// ```
-    /// Resulting string consists of two lines and has a marker denoted by a sequence of
-    /// `^` on the second line. The line is parsed from `token` by the `token.line_offset` and
-    /// the `token.lexeme_size` string. Line is fetched from `source` string.
+    /// Retain the token span; source excerpts are rendered by the diagnostic layer.
     fn get_error_marked_line(&self, error_type: ParserErrorType, token: Token) -> ParserError {
-        let line = self
-            .source
-            .split('\n')
-            .nth(token.source_location.line_start - 1);
-        if line.is_none() {
-            unreachable!("Incorrect line provided to get_error_marked_line");
-        }
-
-        let line = line.unwrap();
-        let line_number_string = format!("{}. ", token.source_location.line_start);
-        let spaces = " ".repeat(line_number_string.len() + token.source_location.start_offset);
-        let lexeme_size = token
-            .source_location
-            .end_offset
-            .saturating_sub(token.source_location.start_offset);
-        let marker = "^".repeat(lexeme_size).red();
-
-        let location = format!("{line_number_string}{line}\n{spaces}{marker}");
         ParserError {
-            location: Some(location),
+            location: Some(token.source_location),
             error_type,
             token: Some(token),
         }
@@ -1059,11 +1031,11 @@ impl Parser<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParserError {
     error_type: ParserErrorType,
     pub token: Option<Token>,
-    location: Option<String>,
+    location: Option<crate::frontend::utils::SourceLocation>,
 }
 
 impl ParserError {
@@ -1079,14 +1051,28 @@ impl ParserError {
 impl Error for ParserError {}
 impl Display for ParserError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut is_scanner_error = false;
-        let output = match &self.error_type {
-            ParserErrorType::ScannerError(scanner_error) => {
-                is_scanner_error = true;
-                &format!("{scanner_error}")
-            }
+        write!(f, "{}", self.error_type)
+    }
+}
+
+impl From<ParserError> for crate::diagnostic::Diagnostic {
+    fn from(error: ParserError) -> Self {
+        Self::new(
+            crate::diagnostic::DiagnosticKind::Parse(error.error_type),
+            error.location,
+        )
+    }
+}
+
+impl Display for ParserErrorType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let output = match self {
+            ParserErrorType::ScannerError(scanner_error) => &format!("{scanner_error}"),
             ParserErrorType::UnclosedParenthesis => "Unclosed parenthesis",
             ParserErrorType::RanOutOfTokens => "No more tokens to parse",
+            ParserErrorType::IncorrectToken(message) if message.is_empty() => {
+                "Incorrect token in this place."
+            }
             ParserErrorType::IncorrectToken(message) => {
                 &format!("Incorrect token in this place. {message}")
             }
@@ -1113,36 +1099,11 @@ impl Display for ParserError {
             }
         };
 
-        if is_scanner_error {
-            write!(f, "{output}")?;
-        } else {
-            write!(f, "{}", output.red())?;
-        }
-
-        // TODO: Move common error logic somewhere
-        if let Some(location) = &self.location {
-            // Add tabs to each line of the location so it shifts to the right
-            let location: String = location
-                .split('\n')
-                .fold(String::new(), |mut output, line| {
-                    output += "\t";
-                    output += line;
-                    output += "\n";
-                    output
-                });
-            write!(
-                f,
-                "\n\t{}\n{}\n",
-                "Happened here:".green(),
-                location.trim_end()
-            )?;
-        }
-
-        Ok(())
+        f.write_str(output)
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ParserErrorType {
     ScannerError(ScannerError),
     UnclosedParenthesis,
@@ -1168,9 +1129,9 @@ pub enum ParserErrorType {
 impl From<ScannerError> for ParserError {
     fn from(value: ScannerError) -> Self {
         Self {
+            location: Some(value.location),
             error_type: ParserErrorType::ScannerError(value),
             token: None,
-            location: None,
         }
     }
 }

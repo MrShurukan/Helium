@@ -51,6 +51,19 @@ belong to the next IR/backend iteration. Legacy IR arithmetic must not be treate
 - `setup` must precede `loop`; global variables and pins precede both. Exactly one loop is required.
 - Pin checks describe chip register capabilities, not board wiring, fuse settings or electrical suitability.
 
-Diagnostics from semantic analysis and target support have stable codes and source spans.
-Parser/scanner diagnostics retain their original source excerpts under the E_PARSE code;
-their migration to fully structured labels is deferred.
+All compiler stages use the same diagnostic renderer and structured source spans.
+`DiagnosticKind` carries the error and its parameters; `DiagnosticCode` is an enum
+whose `as_str()` preserves public identifiers such as `E_PARSE` and `E_LITERAL_RANGE`.
+Library callers can inspect kinds, codes and spans without matching translated text.
+
+`Diagnostic::render()` produces plain text. `render_with()` accepts explicit rendering
+options, without reading environment variables or changing global color settings.
+The CLI supports `--color auto|always|never`; auto enables color only on a terminal
+and respects `NO_COLOR`. An explicit `always` or `never` overrides automatic policy.
+Tabs in excerpts use four-column tab stops; offsets continue to count graphemes.
+
+Messages are currently English. Russian/English selection and a default-language
+setting are deferred. Semantic/backend messages are centralized in
+`src/diagnostic/messages.rs`; parser/scanner errors retain their typed variants and
+plain English details. Those legacy detail strings also need cataloguing when the
+translation is implemented. No language option is advertised until both locales work.
