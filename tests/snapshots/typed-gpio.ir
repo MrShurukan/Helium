@@ -1,0 +1,22 @@
+helium-ir v1 target=atmega328p entry=f0
+pin p0: Led = PortC.5
+fn f0 $entry() -> void entry=b0 {
+  b0:
+    set_pin_mode p0, OUTPUT
+    call f1()
+    jump b1
+  b1:
+    call f2()
+    jump b1
+}
+fn f1 $setup() -> void entry=b0 {
+  b0:
+    return
+}
+fn f2 $loop() -> void entry=b0 {
+  b0:
+    v0: PinState = read_pin p0
+    v1: PinState = not v0
+    write_pin p0, v1
+    return
+}

@@ -1,0 +1,18 @@
+// Demonstrates the executable IR subset; the legacy AVR backend is still narrower.
+def {
+    Button = PortD.2 INPUT;
+    Led = PortC.5 OUTPUT;
+}
+
+var count:u8 = 0;
+
+setup {
+    Led = LOW;
+}
+
+loop {
+    if Button == LOW and count < 3 {
+        count = count + 1;
+        Led = !Led;
+    }
+}

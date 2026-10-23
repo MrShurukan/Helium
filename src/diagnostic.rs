@@ -30,6 +30,7 @@ pub enum DiagnosticCode {
     Unsupported,
     Backend,
     Parse,
+    Internal,
 }
 
 impl DiagnosticCode {
@@ -53,6 +54,7 @@ impl DiagnosticCode {
             Self::Unsupported => "E_UNSUPPORTED",
             Self::Backend => "E_BACKEND",
             Self::Parse => "E_PARSE",
+            Self::Internal => "E_INTERNAL_IR",
         }
     }
 }
@@ -66,6 +68,13 @@ impl fmt::Display for DiagnosticCode {
 /// Structured facts about an error. Add translations at the presentation layer.
 #[derive(Debug, Clone)]
 pub enum DiagnosticKind {
+    TypedIrUnsupported {
+        feature: String,
+    },
+    InvalidIr {
+        stage: &'static str,
+        detail: String,
+    },
     Parse(ParserErrorType),
     DuplicateName {
         name: String,
@@ -134,6 +143,8 @@ pub enum DiagnosticKind {
 impl DiagnosticKind {
     pub fn code(&self) -> DiagnosticCode {
         match self {
+            Self::TypedIrUnsupported { .. } => DiagnosticCode::Unsupported,
+            Self::InvalidIr { .. } => DiagnosticCode::Internal,
             Self::Parse(_) => DiagnosticCode::Parse,
             Self::DuplicateName { .. } => DiagnosticCode::Duplicate,
             Self::MissingInitializer => DiagnosticCode::Initializer,
@@ -194,7 +205,12 @@ impl Diagnostic {
     }
 
     pub fn render_with(&self, source: &str, options: RenderOptions) -> String {
-        let heading = paint(&format!("error[{}]", self.code()), "1;31", options.color);
+        let label = if self.code() == DiagnosticCode::Internal {
+            "internal compiler error"
+        } else {
+            "error"
+        };
+        let heading = paint(&format!("{label}[{}]", self.code()), "1;31", options.color);
         let mut result = format!("{heading}: {}", self.message());
 
         if let Some(span) = self.location {

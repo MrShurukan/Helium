@@ -65,6 +65,9 @@ those features. No physical flashing was performed during this iteration.
 
 ## Next iteration
 
+Update: the typed IR foundation described below is now implemented; see [IR_V1.md](IR_V1.md).
+The AVR generator remains unchanged. LLVM evaluation and machine lowering are the next boundary.
+
 Review follow-up: compiler errors now carry `DiagnosticKind` data and enum codes,
 and scanner/parser spans use the same renderer as semantic and backend diagnostics.
 The CLI offers automatic/forced/disabled color. `tests/diagnostics.rs` and the error

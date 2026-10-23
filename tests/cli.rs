@@ -85,6 +85,51 @@ fn diagnostic_color_policy_is_explicit_and_auto_is_plain_when_captured() {
     assert!(!invalid.status.success());
     assert!(stderr(&invalid).contains("Unknown color mode"));
 }
+
+#[test]
+fn typed_ir_flags_and_legacy_output_are_distinct() {
+    let fixture = Fixture::new();
+    fs::write(&fixture.source, "def Led=PortC.5 OUTPUT; loop {Led=!Led;}").unwrap();
+
+    let output = fixture.run(
+        "build",
+        &["--emit", "ir", "--verify-ir", "--optimize-ir"],
+        false,
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let ir = fs::read_to_string(fixture.source.parent().unwrap().join("build/goal.ir")).unwrap();
+    assert!(ir.starts_with("helium-ir v1"));
+    assert!(ir.contains("read_pin p0"));
+    assert!(ir.contains("not v"));
+
+    // Typed execution support does not falsely advertise machine-code support.
+    let output = fixture.run("build", &["--emit", "asm", "--verify-ir"], false);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("E_UNSUPPORTED"));
+
+    for args in [
+        vec!["--emit", "asm", "--optimize-ir"],
+        vec!["--emit", "ast", "--verify-ir"],
+        vec!["--emit", "ir", "--verify-ir", "--verify-ir"],
+    ] {
+        assert!(!fixture.run("build", &args, false).status.success());
+    }
+
+    fs::write(&fixture.source, include_str!("../goal.he")).unwrap();
+    assert!(fixture
+        .run("build", &["--emit", "legacy-ir"], false)
+        .status
+        .success());
+    let legacy = fs::read_to_string(
+        fixture
+            .source
+            .parent()
+            .unwrap()
+            .join("build/goal.legacy-ir"),
+    )
+    .unwrap();
+    assert!(!legacy.starts_with("helium-ir v1"));
+}
 #[test]
 fn check_and_emit_need_no_external_tools_and_are_quiet() {
     let fixture = Fixture::new();

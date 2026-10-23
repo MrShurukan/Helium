@@ -31,14 +31,23 @@ cargo run --locked -- check goal.he --mcu atmega328p
 cargo run --locked -- build goal.he --mcu atmega328p
 cargo run --locked -- build goal.he --mcu atmega328p --emit asm
 cargo run --locked -- build goal.he --mcu atmega328p --emit ir
+cargo run --locked -- build examples/typed-ir.he --mcu atmega328p --emit ir --verify-ir --optimize-ir
+cargo run --locked -- build goal.he --mcu atmega328p --emit legacy-ir
 cargo run --locked -- build goal.he --mcu atmega328p --emit ast
 ```
 
 `check` checks syntax, types and the implemented AVR subset without invoking an external tool.
 `build` defaults to HEX and invokes AVRA; it **does not flash**.
-`--emit asm`, `ir` and `ast` stop at the requested stage and require only Helium.
-AST output includes the inferred types. IR output is the legacy inspection representation,
-not a guarantee that the program can be compiled into AVR instructions.
+`--emit asm`, `ir`, `legacy-ir` and `ast` require only Helium.
+AST output includes inferred types. `ir` is the new typed, block-based Helium IR v1;
+`legacy-ir` retains the old inspection representation. Neither promises AVR support for the source.
+The library API `compile_typed_ir` emits v1; `compile_ir` remains the legacy API for compatibility.
+
+`--verify-ir` enables the full IR verifier. Verification defaults to on in debug builds and off
+in release builds; source-language checks remain active in both. `--optimize-ir` applies three
+conservative passes to typed IR output only and requires `--emit ir`. It does not change AVR code.
+The existing AVR generator remains in place while a separate LLVM backend experiment is pending.
+See [the IR v1 contract](docs/IR_V1.md) for semantics, coverage and the test interpreter.
 
 Compiler diagnostics share one format across scanning, parsing, type checking and AVR support
 checks. Use `--color auto|always|never` (default `auto`) to control coloring; automatic color
@@ -75,6 +84,7 @@ rejected by the current AVR support check. It is not a working firmware example 
 
 - [Language and backend support](docs/SUPPORT.md)
 - [Architecture and iteration-one review](docs/ITERATION_1.md)
+- [Typed IR v1 contract and implementation](docs/IR_V1.md)
 - [Grammar](grammar.txt)
 
 The next end-to-end application is temperature control for one or two brewing tanks:

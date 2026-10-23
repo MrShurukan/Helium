@@ -2,6 +2,7 @@
 pub mod backend;
 pub mod diagnostic;
 pub mod frontend;
+pub mod ir;
 pub mod middle_end;
 mod support;
 
@@ -49,8 +50,68 @@ pub fn compile_ir(
 }
 
 pub fn compile_assembly(source: &str, mcu: &str) -> Result<String, Vec<Diagnostic>> {
+    compile_assembly_with_options(source, mcu, ir::Options::default())
+}
+
+/// Typed IR inspection/execution is independent of the narrower legacy AVR backend.
+pub fn compile_typed_ir(
+    source: &str,
+    mcu: &str,
+    options: ir::Options,
+) -> Result<ir::Module, Vec<Diagnostic>> {
+    let statements = analyze(source)?;
+    typed_ir_from_ast(&statements, mcu, options)
+}
+
+fn typed_ir_from_ast(
+    statements: &[Statement],
+    mcu: &str,
+    options: ir::Options,
+) -> Result<ir::Module, Vec<Diagnostic>> {
+    support::validate_pins(statements, mcu)?;
+    let mut module = ir::lower(statements, mcu).map_err(|error| vec![error])?;
+    let internal_error = |stage, error: ir::verify::Error| {
+        vec![Diagnostic::new(
+            diagnostic::DiagnosticKind::InvalidIr {
+                stage,
+                detail: error.to_string(),
+            },
+            None,
+        )]
+    };
+
+    if options.verify {
+        ir::verify::verify(&module).map_err(|error| internal_error("construction", error))?;
+    }
+    if options.optimize {
+        ir::optimize::optimize(&mut module, options.verify)
+            .map_err(|error| internal_error("optimization", error))?;
+    }
+    Ok(module)
+}
+
+pub fn compile_assembly_with_options(
+    source: &str,
+    mcu: &str,
+    options: ir::Options,
+) -> Result<String, Vec<Diagnostic>> {
+    if options.optimize {
+        return Err(vec![Diagnostic::new(
+            diagnostic::DiagnosticKind::TypedIrUnsupported {
+                feature: "optimizing the legacy AVR backend; use typed IR output".into(),
+            },
+            None,
+        )]);
+    }
+
     let statements = analyze(source)?;
     support::validate(&statements, mcu)?;
+
+    // During the transition, verify typed lowering alongside the legacy generator
+    // only when requested. Release AVR builds do not construct a throwaway IR.
+    if options.verify {
+        typed_ir_from_ast(&statements, mcu, options)?;
+    }
 
     let ir = IRBuilder::new(source)
         .produce_ir(structure(statements))

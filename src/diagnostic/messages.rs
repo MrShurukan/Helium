@@ -4,6 +4,12 @@ use super::DiagnosticKind;
 impl DiagnosticKind {
     pub fn message(&self) -> String {
         match self {
+            Self::TypedIrUnsupported { feature } => {
+                format!("Typed IR v1 does not support {feature}")
+            }
+            Self::InvalidIr { stage, detail } => {
+                format!("IR validation failed after {stage}: {detail}")
+            }
             Self::Parse(error) => error.to_string(),
             Self::DuplicateName { name } => {
                 format!("'{name}' is already defined; shadowing is not allowed")
@@ -62,7 +68,7 @@ impl DiagnosticKind {
                     .into()
             }
             Self::StorageLowering => "Variable storage is not implemented by the AVR backend yet; \
-                 use --emit ir to inspect supported legacy IR"
+                 use --emit ir to inspect typed IR"
                 .into(),
             Self::LoopLowering => "Loop code generation is not implemented yet \
                  (the top-level loop block is supported)"

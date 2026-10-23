@@ -1,10 +1,19 @@
 # Language and backend support
 
-There are three distinct boundaries:
+There are four distinct boundaries:
 
 1. `analyze(source)` parses and checks the language, producing typed AST or diagnostics.
-2. `compile_ir(source, mcu)` also checks device pins and emits the supported **legacy untyped** IR subset.
-3. `check` / `compile_assembly` require the implemented AVR subset. `build` additionally runs AVRA for HEX output.
+2. `compile_typed_ir(source, mcu, options)` constructs **Helium IR v1** for inspection and interpreted tests.
+3. `compile_ir(source, mcu)` preserves the narrower **legacy untyped** inspection API.
+4. `check` / `compile_assembly` require the implemented AVR subset. HEX builds additionally run AVRA.
+
+`--emit ir` selects typed IR; `--emit legacy-ir` selects legacy inspection output.
+The table below describes the older language/legacy/AVR boundaries. Typed IR v1 adds executable
+integer/bool storage, add/subtract/multiply/negate, comparisons, ternary, while, short-circuit logic,
+pin inversion and INPUT_PULLUP. Integer widths 8/16/32/64 are modeled and interpreted.
+Function signatures/calls/returns exist in the IR, but not yet in source syntax.
+For ranges, division, shifts, float, strings and computed PinMode values remain unsupported.
+See [IR_V1.md](IR_V1.md) for the complete contract and verifier policy.
 
 | Feature | Language analysis | Legacy IR inspection | AVR assembly / HEX |
 | --- | --- | --- | --- |
@@ -27,8 +36,8 @@ There are three distinct boundaries:
 
 `check` is not a substitute for the assembler: AVRA still checks instruction encoding and branch ranges.
 In particular, very large branch bodies may exceed the current short conditional-branch range.
-Register allocation, general memory layout, arithmetic widths, overflow semantics and branch relaxation
-belong to the next IR/backend iteration. Legacy IR arithmetic must not be treated as executable AVR support.
+Register allocation, general memory layout, integer machine lowering and branch relaxation remain
+backend work. Typed-IR interpretation does not prove AVR timing, ABI or physical behavior.
 
 ## Agreed language rules
 
@@ -41,11 +50,13 @@ belong to the next IR/backend iteration. Legacy IR arithmetic must not be treate
 - Implicit conversions between concrete numeric types must preserve all values of the source type.
   Integer literals converted to a float must be exactly representable. Decimal floating-point literals
   use normal floating-point rounding; this is not a promise of decimal exactness.
-- Arithmetic overflow behavior is not yet finalized; arithmetic is not exposed by the AVR backend.
+- Integer addition, subtraction, multiplication and signed negation wrap to the operation's width,
+  including signed overflow. Invalid source literals remain errors. Division and shift rules are pending.
+  Arithmetic is executable in the typed IR interpreter, not yet in generated AVR code.
 - `!bool` returns bool. `!PinState` swaps HIGH and LOW. `!Pin` returns PinState by reading the
   actual input level exactly once and inverting it. Negation itself never writes a pin.
   Thus `Led = !Led` is valid language syntax/types, but not generated AVR code in this iteration.
-- `and` and `or` have short-circuit semantics. Code generation rejects them until it can preserve that behavior.
+- `and` and `or` have short-circuit semantics, implemented in typed IR; the legacy AVR backend rejects them.
 - For loops introduce their own scoped loop variable, which cannot shadow an existing name.
   Executable range/overflow behavior will be specified with their lowering.
 - `setup` must precede `loop`; global variables and pins precede both. Exactly one loop is required.
