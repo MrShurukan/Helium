@@ -68,6 +68,9 @@ impl fmt::Display for DiagnosticCode {
 /// Structured facts about an error. Add translations at the presentation layer.
 #[derive(Debug, Clone)]
 pub enum DiagnosticKind {
+    LlvmUnsupported {
+        detail: String,
+    },
     TypedIrUnsupported {
         feature: String,
     },
@@ -143,7 +146,9 @@ pub enum DiagnosticKind {
 impl DiagnosticKind {
     pub fn code(&self) -> DiagnosticCode {
         match self {
-            Self::TypedIrUnsupported { .. } => DiagnosticCode::Unsupported,
+            Self::TypedIrUnsupported { .. } | Self::LlvmUnsupported { .. } => {
+                DiagnosticCode::Unsupported
+            }
             Self::InvalidIr { .. } => DiagnosticCode::Internal,
             Self::Parse(_) => DiagnosticCode::Parse,
             Self::DuplicateName { .. } => DiagnosticCode::Duplicate,

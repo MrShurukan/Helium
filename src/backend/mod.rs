@@ -1,4 +1,6 @@
 pub mod assembler;
+pub mod llvm;
+pub mod llvm_toolchain;
 pub mod microcontroller;
 use crate::{
     diagnostic::{Diagnostic, DiagnosticKind},

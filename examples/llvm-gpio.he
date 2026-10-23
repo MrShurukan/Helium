@@ -1,0 +1,17 @@
+// Stable comparison fixture shared by the legacy and LLVM backends.
+def {
+    Button = PortD.2 INPUT;
+    Led = PortC.5 OUTPUT;
+}
+
+setup {
+    Led = LOW;
+}
+
+loop {
+    if Button == LOW {
+        Led = HIGH;
+    } else {
+        Led = LOW;
+    }
+}

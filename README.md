@@ -9,7 +9,7 @@ See [the support matrix](docs/SUPPORT.md) before using a feature.
 
 Install a stable Rust toolchain using rustup. On Windows, the GNU toolchain is sufficient for
 this project; the MSVC toolchain additionally requires the Microsoft linker/SDK.
-AVRA 1.4.2 is required only for producing HEX files. AVRDUDE is required only for explicit flashing.
+AVRA 1.4.2 is required for legacy HEX files. AVRDUDE is required only for explicit flashing.
 Both external executables must be on PATH.
 
 ```text
@@ -46,7 +46,10 @@ The library API `compile_typed_ir` emits v1; `compile_ir` remains the legacy API
 `--verify-ir` enables the full IR verifier. Verification defaults to on in debug builds and off
 in release builds; source-language checks remain active in both. `--optimize-ir` applies three
 conservative passes to typed IR output only and requires `--emit ir`. It does not change AVR code.
-The existing AVR generator remains in place while a separate LLVM backend experiment is pending.
+The existing AVR generator remains the default. An optional LLVM AVR backend now supports
+8/16-bit integer storage, arithmetic, control flow and GPIO through to ELF/HEX.
+Use `--backend llvm --opt none|speed|size`; `--emit llvm` produces textual LLVM IR without tools.
+See [LLVM setup, tests and measured results](docs/LLVM_PROTOTYPE.md) for the pinned Windows toolchain.
 See [the IR v1 contract](docs/IR_V1.md) for semantics, coverage and the test interpreter.
 
 Compiler diagnostics share one format across scanning, parsing, type checking and AVR support
@@ -78,13 +81,15 @@ This is a regression baseline for this example, not a general size comparison wi
 
 The unfinished latch example from the old WIP commit is retained in
 [examples/planned/latch.he](examples/planned/latch.he). It passes language analysis but is deliberately
-rejected by the current AVR support check. It is not a working firmware example yet.
+rejected by the legacy AVR support check. Its constructs are supported by the LLVM prototype;
+physical hardware behavior has not been validated.
 
 ## Development
 
 - [Language and backend support](docs/SUPPORT.md)
 - [Architecture and iteration-one review](docs/ITERATION_1.md)
 - [Typed IR v1 contract and implementation](docs/IR_V1.md)
+- [LLVM AVR prototype, installation and measurements](docs/LLVM_PROTOTYPE.md)
 - [Grammar](grammar.txt)
 
 The next end-to-end application is temperature control for one or two brewing tanks:

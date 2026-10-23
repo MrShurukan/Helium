@@ -1,0 +1,19 @@
+// Persistent state and physical input keep this workload observable.
+def {
+    Button = PortD.2 INPUT_PULLUP;
+    Led = PortC.5 OUTPUT;
+}
+
+var count:u16 = 0;
+var balance:i16 = 0;
+
+loop {
+    var increment:u8 = Button == LOW ? 3 : 1;
+    count = count + increment;
+    balance = balance - 7;
+
+    if count > 1000 and balance < 0 {
+        Led = !Led;
+        count = 0;
+    }
+}

@@ -1,11 +1,12 @@
 # Language and backend support
 
-There are four distinct boundaries:
+There are five distinct boundaries:
 
 1. `analyze(source)` parses and checks the language, producing typed AST or diagnostics.
 2. `compile_typed_ir(source, mcu, options)` constructs **Helium IR v1** for inspection and interpreted tests.
 3. `compile_ir(source, mcu)` preserves the narrower **legacy untyped** inspection API.
 4. `check` / `compile_assembly` require the implemented AVR subset. HEX builds additionally run AVRA.
+5. `--backend llvm` checks/emits the LLVM AVR subset; ELF/HEX use LLVM and AVR GNU tools.
 
 `--emit ir` selects typed IR; `--emit legacy-ir` selects legacy inspection output.
 The table below describes the older language/legacy/AVR boundaries. Typed IR v1 adds executable
@@ -14,8 +15,12 @@ pin inversion and INPUT_PULLUP. Integer widths 8/16/32/64 are modeled and interp
 Function signatures/calls/returns exist in the IR, but not yet in source syntax.
 For ranges, division, shifts, float, strings and computed PinMode values remain unsupported.
 See [IR_V1.md](IR_V1.md) for the complete contract and verifier policy.
+The optional LLVM backend implements this subset through machine code for 8/16-bit integers,
+bool and PinState, including storage, while, short-circuit logic, ternary, inversion and INPUT_PULLUP.
+IR-level calls/results are covered by machine tests; source-level functions are still absent.
+See [LLVM_PROTOTYPE.md](LLVM_PROTOTYPE.md) for exact boundaries and validation.
 
-| Feature | Language analysis | Legacy IR inspection | AVR assembly / HEX |
+| Feature | Language analysis | Legacy IR inspection | Legacy AVR assembly / HEX |
 | --- | --- | --- | --- |
 | Multiple `def` declarations | Yes | Yes | Yes |
 | INPUT / OUTPUT | Yes | Yes | Yes |
@@ -52,10 +57,10 @@ backend work. Typed-IR interpretation does not prove AVR timing, ABI or physical
   use normal floating-point rounding; this is not a promise of decimal exactness.
 - Integer addition, subtraction, multiplication and signed negation wrap to the operation's width,
   including signed overflow. Invalid source literals remain errors. Division and shift rules are pending.
-  Arithmetic is executable in the typed IR interpreter, not yet in generated AVR code.
+  Arithmetic is executable in the typed IR interpreter and in LLVM AVR code for 8/16-bit values.
 - `!bool` returns bool. `!PinState` swaps HIGH and LOW. `!Pin` returns PinState by reading the
   actual input level exactly once and inverting it. Negation itself never writes a pin.
-  Thus `Led = !Led` is valid language syntax/types, but not generated AVR code in this iteration.
+  Thus `Led = !Led` works in LLVM AVR code; legacy AVR still rejects it.
 - `and` and `or` have short-circuit semantics, implemented in typed IR; the legacy AVR backend rejects them.
 - For loops introduce their own scoped loop variable, which cannot shadow an existing name.
   Executable range/overflow behavior will be specified with their lowering.

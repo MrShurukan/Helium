@@ -12,6 +12,8 @@ const USAGE: &str = concat!(
     "  helium flash <file.hex> --mcu atmega328p --programmer <name>\n",
     "Options: --color auto|always|never (default: auto; NO_COLOR disables automatic color)\n",
     "  --verify-ir (check/build; default enabled in debug, disabled in release)\n",
+    "  --backend legacy|llvm (default: legacy); LLVM build supports --emit llvm|asm|elf|hex\n",
+    "  --opt none|speed|size (LLVM only; default: none)\n",
     "  --optimize-ir (build --emit ir only; constant folding, CFG cleanup and dead values)"
 );
 
@@ -47,6 +49,8 @@ fn run(args: Vec<String>) -> Result<String, String> {
     let mut output = None;
     let mut programmer = None;
     let mut color = None;
+    let mut backend = None;
+    let mut optimization = None;
     let mut ir_options = ir::Options::default();
     let mut explicit_verify = false;
 
@@ -76,6 +80,8 @@ fn run(args: Vec<String>) -> Result<String, String> {
             "-o" | "--output" if command == "build" => &mut output,
             "--programmer" if command == "flash" => &mut programmer,
             "--color" => &mut color,
+            "--backend" if command != "flash" => &mut backend,
+            "--opt" if command == "build" => &mut optimization,
             _ => return Err(format!("Unknown or inapplicable option {option}\n{USAGE}")),
         };
 
@@ -133,6 +139,76 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 .join("\n")
         )
     };
+
+    let backend = backend.as_deref().unwrap_or("legacy");
+    if !matches!(backend, "legacy" | "llvm") {
+        return Err(format!(
+            "Unknown backend '{backend}'; expected legacy or llvm"
+        ));
+    }
+    if backend != "llvm" && optimization.is_some() {
+        return Err("--opt requires --backend llvm".into());
+    }
+
+    if backend == "llvm" {
+        use helium::backend::{llvm, llvm_toolchain};
+
+        if ir_options.optimize {
+            return Err("--optimize-ir is not used by the LLVM backend; use --opt".into());
+        }
+        let level = llvm_toolchain::Optimization::parse(optimization.as_deref().unwrap_or("none"))?;
+        let emit = emit.as_deref().unwrap_or("hex");
+        if !matches!(emit, "llvm" | "asm" | "elf" | "hex") {
+            return Err("LLVM backend supports --emit llvm, asm, elf or hex".into());
+        }
+        let module = compile_typed_ir(&source, &mcu, ir_options).map_err(diagnostics)?;
+        let text = llvm::emit(&module, false).map_err(|detail| {
+            diagnostics(vec![Diagnostic::new(
+                DiagnosticKind::LlvmUnsupported { detail },
+                None,
+            )])
+        })?;
+        if command == "check" {
+            return Ok(format!("Checked {} for LLVM", input.display()));
+        }
+
+        let extension = if emit == "llvm" { "ll" } else { emit };
+        let destination = output.map(PathBuf::from).unwrap_or_else(|| {
+            input
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("build")
+                .join(format!(
+                    "{}.{extension}",
+                    input.file_stem().unwrap_or_default().to_string_lossy()
+                ))
+        });
+        if destination.canonicalize().ok() == Some(input.canonicalize().map_err(|e| e.to_string())?)
+        {
+            return Err("Output must not overwrite the source file".into());
+        }
+        if emit == "llvm" {
+            if optimization.is_some() {
+                return Err(
+                    "--emit llvm emits unoptimized IR; --opt applies to machine output".into(),
+                );
+            }
+            if let Some(parent) = destination.parent().filter(|p| !p.as_os_str().is_empty()) {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            fs::write(&destination, text).map_err(|e| e.to_string())?;
+            return Ok(format!("Built {}", destination.display()));
+        }
+
+        let result = llvm_toolchain::build(&text, &destination, emit, level)?;
+        return Ok(format!(
+            "Built {} (external stages: {} ms)\nIntermediates: {}\n{}",
+            destination.display(),
+            result.elapsed_ms,
+            result.directory.display(),
+            result.sections
+        ));
+    }
 
     if command == "check" {
         compile_assembly_with_options(&source, &mcu, ir_options).map_err(diagnostics)?;

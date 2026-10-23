@@ -4,6 +4,7 @@ use super::DiagnosticKind;
 impl DiagnosticKind {
     pub fn message(&self) -> String {
         match self {
+            Self::LlvmUnsupported { detail } => format!("LLVM backend: {detail}"),
             Self::TypedIrUnsupported { feature } => {
                 format!("Typed IR v1 does not support {feature}")
             }
