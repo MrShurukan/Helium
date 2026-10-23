@@ -1,622 +1,491 @@
-﻿pub mod utils;
-mod environment;
-pub mod dag_builder;
 pub mod linear_ir;
-mod error_printer;
 
-use crate::frontend::expression::{Expression, ExpressionType};
-use crate::frontend::statement::{SingleDefDeclaration, Statement, StatementType};
-use crate::frontend::static_type::{FloatType, IntegerType, SignedIntegerType, StaticType, UnsignedIntegerType};
-use crate::frontend::token_type::{KeywordType, LiteralType, PunctuationType, TokenType};
-use crate::frontend::utils::{LocatableInSource, SourceLocation};
-use crate::middle_end::utils::EnvironmentStack;
-use colored::Colorize;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
-use crate::middle_end::error_printer::get_error_marked_line_location;
+use crate::diagnostic::Diagnostic;
+use crate::frontend::{
+    expression::{Expression, ExpressionType as E},
+    statement::{Statement, StatementType as S},
+    static_type::{
+        FloatType as F, IntegerType as I, SignedIntegerType as SI, StaticType as T,
+        UnsignedIntegerType as UI,
+    },
+    token_type::{KeywordType as K, LiteralType as L, PunctuationType as P, TokenType as Token},
+    utils::SourceLocation,
+};
+use std::collections::HashMap;
 
-/// Semantic Analyzer is responsible for statically checking the language and figuring out
-/// incorrect operations, like type mismatches, incorrect assignments, variable scopes, etc.
-pub struct Analyzer<'a> {
-    /// Source file, used to print errors
-    pub source: &'a str,
-    /// Environment stack. The latest environment on the stack represents the
-    /// latest code block. You can access outer environments by moving back from
-    /// the end
-    environment: &'a mut EnvironmentStack,
-    /// List of errors that will be accumulated during the call of `analyze`
-    errors: Vec<AnalyzerError>
+/// Resolves names and types. A declaration may not shadow any visible name.
+pub struct Analyzer {
+    scopes: Vec<HashMap<String, T>>,
+    errors: Vec<Diagnostic>,
 }
 
-impl Analyzer<'_> {
-    pub fn new_with_environment<'a>(source: &'a str, environment_stack: &'a mut EnvironmentStack) -> Analyzer<'a> {
-        Analyzer { source, environment: environment_stack, errors: Vec::new() }
-    }
-
-    pub fn analyze(mut self, statements: &mut [Statement]) -> Result<(), Vec<AnalyzerError>> {
-        for statement in statements {
-            self.analyze_statement(statement);
+impl Analyzer {
+    pub fn new(_source: &str) -> Self {
+        Self {
+            scopes: vec![HashMap::new()],
+            errors: vec![],
         }
-
+    }
+    pub fn analyze(mut self, statements: &mut [Statement]) -> Result<(), Vec<Diagnostic>> {
+        for statement in statements {
+            self.statement(statement);
+        }
         if self.errors.is_empty() {
             Ok(())
-        }
-        else {
+        } else {
             Err(self.errors)
         }
     }
-
-    fn analyze_statement(&mut self, statement: &mut Statement) {
+    fn error(&mut self, code: &'static str, message: impl Into<String>, span: SourceLocation) {
+        self.errors.push(Diagnostic::new(code, message, Some(span)));
+    }
+    fn lookup(&self, name: &str) -> Option<T> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name).copied())
+    }
+    fn declare(&mut self, name: &str, ty: T, span: SourceLocation) {
+        if self.lookup(name).is_some() {
+            self.error(
+                "E_DUPLICATE",
+                format!("'{name}' is already defined; shadowing is not allowed"),
+                span,
+            );
+        } else {
+            self.scopes
+                .last_mut()
+                .expect("root scope exists")
+                .insert(name.to_owned(), ty);
+        }
+    }
+    fn block(&mut self, body: &mut [Statement]) {
+        self.scopes.push(HashMap::new());
+        for statement in body {
+            self.statement(statement);
+        }
+        self.scopes.pop();
+    }
+    fn statement(&mut self, statement: &mut Statement) {
+        let span = statement.source_location;
         match &mut statement.statement_type {
-            StatementType::Expression(expr) => {
-                self.analyze_expression(expr);
-            },
-            StatementType::VariableDeclaration { identifier, static_type, initializer } => {
-                match (static_type.as_mut(), initializer.as_mut()) {
-                    (Some(static_type), Some(initializer)) => {
-                        self.environment.define(identifier.clone(), *static_type);
-                        if let Some(expression_type) = self.analyze_expression(initializer) {
-                            if !Self::can_implicitly_cast(expression_type, *static_type) {
-                                self.errors.push(self.produce_error(
-                                    AnalyzerErrorType::VarDeclarationTypeMismatch(*static_type, expression_type),
-                                    initializer
-                                ));
-                            }
-                        }
-                    },
-                    (Some(static_type), None) => {
-                        self.environment.define(identifier.clone(), *static_type);
-                        // If there is no explicit initializer - create a default one
-                        let literal = match static_type {
-                            StaticType::Integer(_) => Some(LiteralType::Integer(0)),
-                            StaticType::Float(_) => Some(LiteralType::Float(0.0)),
-                            StaticType::Boolean => Some(LiteralType::Boolean(false)),
-                            StaticType::String => Some(LiteralType::String(String::new())),
-                            _ => {
-                                self.errors.push(self.produce_error_location(
-                                    AnalyzerErrorType::NoDefaultInitializer(*static_type),
-                                    &statement.source_location
-                                ));
-                                None
-                            }
-                        };
-
-                        if let Some(literal) = literal {
-                            *initializer = Some(Expression::new_literal_tokenless(literal));
-                        }
-                    },
-                    (None, Some(initializer)) => {
-                        if let Some(mut expression_type) = self.analyze_expression(initializer) {
-                            // If there is no explicit type - literals are counted as i32 and f32.
-                            match expression_type {
-                                StaticType::Integer(IntegerType::Literal) =>
-                                    expression_type = StaticType::Integer(IntegerType::Signed(SignedIntegerType::Int32)),
-                                StaticType::Float(FloatType::Literal) =>
-                                    expression_type = StaticType::Float(FloatType::Float32),
-                                _ => {}
-                            };
-                            *static_type = Some(expression_type);
-                            self.environment.define(identifier.clone(), expression_type);
-                        }
-                        else {
-                            self.environment.define(identifier.clone(), StaticType::Unknown);
-                        }
-                    },
-                    (None, None) => {
-                        self.environment.define(identifier.clone(), StaticType::Unknown);
-                        self.errors.push(self.produce_error_all_line(
-                            AnalyzerErrorType::VarDeclarationMissingTypeAndInit,
-                            statement.source_location.line_start
-                        ));
-                    },
-                }
-            },
-            StatementType::DefDeclaration(declarations) => {
-                for declaration in declarations.iter() {
-                    self.analyze_def_declaration(declaration);
-                }
-            },
-            StatementType::SetupDeclaration(statements) |
-            StatementType::LoopDeclaration(statements) |
-            StatementType::Block(statements) => self.analyze_block(statements),
-            StatementType::If { condition, then_body, else_body } => {
-                self.check_condition_boolean(condition);
-
-                self.analyze_statement(then_body);
-                if let Some(else_body) = else_body {
-                    self.analyze_statement(else_body);
-                }
-            },
-            StatementType::While { condition, body } => {
-                self.check_condition_boolean(condition);
-
-                self.analyze_statement(body);
-            },
-            StatementType::For { identifier, from, to, body } => {
-                let from_type = self.analyze_expression(from);
-                let to_type = self.analyze_expression(to);
-
-                let mut error_happened = false;
-                let mut identifier_type = None;
-
-                if let Some(from_type) = from_type {
-                    if !matches!(from_type, StaticType::Integer(_)) {
-                        self.errors.push(self.produce_error(
-                            AnalyzerErrorType::NonIntegerInFor(from_type),
-                            from
-                        ));
-
-                        error_happened = true;
-                    }
-                }
-
-                if let Some(to_type) = to_type {
-                    if !matches!(to_type, StaticType::Integer(_)) {
-                        self.errors.push(self.produce_error(
-                            AnalyzerErrorType::NonIntegerInFor(to_type),
-                            from
-                        ));
-
-                        error_happened = true;
-                    }
-                    else if !error_happened {
-                        identifier_type = Some(to_type);
-                    }
-                }
-
-                if let Some(identifier_type) = identifier_type {
-                    self.environment.define(identifier.clone(), identifier_type);
-                }
-
-                self.analyze_statement(body);
-            },
-        }
-    }
-
-    fn analyze_block(&mut self, statements: &mut Vec<Statement>) {
-        self.environment.push_new();
-        for statement in statements {
-            self.analyze_statement(statement);
-        }
-        self.environment.remove_last().expect("last environment popped");
-    }
-
-    fn check_condition_boolean(&mut self, condition: &mut Expression) {
-        if let Some(condition_type) = self.analyze_expression(condition) {
-            if !matches!(condition_type, StaticType::Boolean) {
-                self.errors.push(self.produce_error(
-                    AnalyzerErrorType::NonBooleanInCondition(condition_type),
-                    condition
-                ));
-            }
-        }
-    }
-
-    fn analyze_expression(&mut self, expression: &mut Expression) -> Option<StaticType> {
-        let static_type = match &mut expression.expression_type {
-            ExpressionType::Binary { left, operator, right } => {
-                let types = (self.analyze_expression(left)?, self.analyze_expression(right)?);
-                match operator {
-                    TokenType::Punctuation(PunctuationType::Plus) => {
-                        // Concat
-                        // TODO: This assumes everything can be converted to string. Which isn't true
-                        if matches!(types.0, StaticType::String) || matches!(types.1, StaticType::String) {
-                            Some(StaticType::String)
-                        }
-                        else {
-                            let res1 = self.ensure_number_for_arithmetic(left, types.0);
-                            let res2 = self.ensure_number_for_arithmetic(right, types.1);
-
-                            if !res1 || !res2 {
-                                None
-                            }
-                            else {
-                                Self::larger_numeric(types.0, types.1)
-                            }
-                        }
-                    },
-                    TokenType::Punctuation(PunctuationType::Minus | 
-                                           PunctuationType::Slash | 
-                                           PunctuationType::Star) => {
-                        let res1 = self.ensure_number_for_arithmetic(left, types.0);
-                        let res2 = self.ensure_number_for_arithmetic(right, types.1);
-
-                        if !res1 || !res2 {
-                            None
-                        }
-                        else {
-                            Self::larger_numeric(types.0, types.1)
-                        }
-                    },
-                    // TODO: This isn't right, but this will have to do for now
-                    TokenType::Keyword(KeywordType::Or | KeywordType::And) |
-                    TokenType::Punctuation(PunctuationType::EqualEqual | 
-                                           PunctuationType::BangEqual  |
-                                           PunctuationType::Greater |
-                                           PunctuationType::GreaterEqual |
-                                           PunctuationType::Less |
-                                           PunctuationType::LessEqual) => Some(StaticType::Boolean),
-                    _ => {
-                        self.errors.push(self.produce_error(
-                            AnalyzerErrorType::InvalidBinaryOperator(operator.clone()),
-                            expression
-                        ));
-                        None
-                    }
-                }
-            },
-            ExpressionType::Ternary { first, second, third } => {
-                let first_type = self.analyze_expression(first);
-                if let Some(first_type) = first_type {
-                    if !matches!(first_type, StaticType::Boolean) {
-                        self.errors.push(self.produce_error(
-                            AnalyzerErrorType::NonBooleanInCondition(first_type),
-                            first.as_ref()
-                        ));
-                    }
-                }
-
-                let second_type = self.analyze_expression(second);
-                let third_type = self.analyze_expression(third);
-
-                if let (Some(second_type), Some(third_type)) = (second_type, third_type) {
-                    return if second_type == third_type {
-                        Some(second_type)
+            S::VariableDeclaration {
+                identifier,
+                static_type,
+                initializer,
+            } => {
+                if initializer.is_none() {
+                    let value = match static_type {
+                        Some(T::Integer(_)) => Some(L::Integer(0)),
+                        Some(T::Boolean) => Some(L::Boolean(false)),
+                        Some(T::Float(_)) => Some(L::Float(0.0)),
+                        Some(T::String) => Some(L::String(String::new())),
+                        _ => None,
+                    };
+                    if let Some(value) = value {
+                        *initializer = Some(Expression {
+                            expression_type: E::Literal { value },
+                            source_location: span,
+                            static_type: T::Unknown,
+                        });
                     } else {
-                        self.errors.push(self.produce_error(
-                            AnalyzerErrorType::MismatchTernary(second_type, third_type),
-                            expression
-                        ));
-                        None
+                        self.error(
+                            "E_INITIALIZER",
+                            "Provide a type with a default value or an initializer",
+                            span,
+                        );
                     }
                 }
-
-                None
-            },
-            ExpressionType::Grouping { expression } => self.analyze_expression(expression),
-            ExpressionType::Identifier(name) => self.try_get_identifier_type(name, &expression.source_location),
-            ExpressionType::Literal { value } => {
-                match value {
-                    LiteralType::String(_) => { Some(StaticType::String) }
-                    LiteralType::Integer(_) => { Some(StaticType::Integer(IntegerType::Literal)) }
-                    LiteralType::Float(_) => { Some(StaticType::Float(FloatType::Literal)) }
-                    LiteralType::Boolean(_) => { Some(StaticType::Boolean) }
-                    LiteralType::PinMode(_) => { Some(StaticType::PinMode) }
-                    LiteralType::PinState(_) => { Some(StaticType::PinState) }
+                // Analyze before declaration: an initializer cannot read its own variable.
+                let inferred = initializer
+                    .as_mut()
+                    .map(|expr| self.expression(expr))
+                    .unwrap_or(T::Unknown);
+                let target = static_type.unwrap_or_else(|| default_type(inferred));
+                if let Some(expr) = initializer {
+                    self.coerce(expr, target);
                 }
+                *static_type = Some(target);
+                self.declare(identifier, target, span);
+            }
+            S::DefDeclaration(declarations) => {
+                for pin in declarations {
+                    self.declare(&pin.identifier, T::Pin, pin.source_location);
+                }
+            }
+            S::SetupDeclaration(body) | S::LoopDeclaration(body) | S::Block(body) => {
+                self.block(body)
+            }
+            S::Expression(expr) => {
+                self.expression(expr);
+            }
+            S::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                self.condition(condition);
+                self.statement(then_body);
+                if let Some(body) = else_body {
+                    self.statement(body);
+                }
+            }
+            S::While { condition, body } => {
+                self.condition(condition);
+                self.statement(body);
+            }
+            S::For {
+                identifier,
+                from,
+                to,
+                body,
+            } => {
+                let a = self.expression(from);
+                let b = self.expression(to);
+                let ty = if matches!((a, b), (T::Integer(_), T::Integer(_))) {
+                    self.common_numeric(from, to)
+                } else {
+                    self.error("E_FOR_TYPE", "For bounds must be integers", span);
+                    T::Unknown
+                };
+                let ty = default_type(ty);
+                self.coerce(from, ty);
+                self.coerce(to, ty);
+                self.scopes.push(HashMap::new());
+                self.declare(identifier, ty, span);
+                self.statement(body);
+                self.scopes.pop();
+            }
+        }
+    }
+    fn condition(&mut self, expr: &mut Expression) {
+        let ty = self.expression(expr);
+        if ty != T::Boolean && ty != T::Unknown {
+            self.error(
+                "E_CONDITION",
+                format!("Expected bool condition, found {ty}"),
+                expr.source_location,
+            );
+        }
+    }
+    fn expression(&mut self, expr: &mut Expression) -> T {
+        let span = expr.source_location;
+        let ty = match &mut expr.expression_type {
+            E::Literal { value } => match value {
+                L::Integer(_) => T::Integer(I::Literal),
+                L::Float(_) => T::Float(F::Literal),
+                L::Boolean(_) => T::Boolean,
+                L::String(_) => T::String,
+                L::PinState(_) => T::PinState,
+                L::PinMode(_) => T::PinMode,
             },
-            ExpressionType::Unary { operator, right } => {
-                match operator {
-                    PunctuationType::Bang => Some(StaticType::Boolean),
-                    PunctuationType::Minus => {
-                        let right_type = self.analyze_expression(right)?;
-                        match right_type {
-                            StaticType::Integer(_) | StaticType::Float(_) => Some(right_type),
-                            t => {
-                                self.errors.push(self.produce_error(
-                                    AnalyzerErrorType::WrongTypeUnaryOperator(operator.clone(), t),
-                                    right.as_ref()
-                                ));
-
-                                None
-                            }
+            E::Identifier(name) => self.lookup(name).unwrap_or_else(|| {
+                self.error(
+                    "E_UNDEFINED",
+                    format!("'{name}' is undefined in this scope"),
+                    span,
+                );
+                T::Unknown
+            }),
+            E::Grouping { expression } => self.expression(expression),
+            E::Unary { operator, right } => {
+                let operand = self.expression(right);
+                match (operator, operand) {
+                    (P::Bang, T::Boolean) => T::Boolean,
+                    (P::Bang, T::Pin | T::PinState) => T::PinState,
+                    (P::Minus, T::Integer(I::Signed(_) | I::Literal) | T::Float(_)) => operand,
+                    (_, T::Unknown) => T::Unknown,
+                    (operator, _) => {
+                        self.error(
+                            "E_UNARY_TYPE",
+                            format!("Unary {operator} cannot be used with {operand}"),
+                            span,
+                        );
+                        T::Unknown
+                    }
+                }
+            }
+            E::Binary {
+                left,
+                operator,
+                right,
+            } => {
+                let a = self.expression(left);
+                let b = self.expression(right);
+                if a == T::Unknown || b == T::Unknown {
+                    T::Unknown
+                } else {
+                    match operator {
+                        Token::Keyword(K::And | K::Or) if a == T::Boolean && b == T::Boolean => {
+                            T::Boolean
                         }
-                    },
-
-                    _ => {
-                        self.errors.push(self.produce_error(
-                            AnalyzerErrorType::InvalidUnaryOperator(operator.clone()),
-                            expression
-                        ));
-
-                        None
-                    }
-                }
-            },
-            ExpressionType::Assignment { identifier, expression: assign_expr } => {
-                let assignee_type = self.try_get_identifier_type(identifier, &expression.source_location);
-                let expression_type = self.analyze_expression(assign_expr)?;
-
-                if let Some(assignee_type) = assignee_type {
-                    match (assignee_type, expression_type) {
-                        (StaticType::Pin, StaticType::PinState | StaticType::PinMode) => Some(expression_type),
-                        
-                        (t1, t2) if t1 == t2 => Some(t2),
-                        
-                        (t1, t2) => {
-                            // Safe cast check (i.e. float = int)
-                            if Self::can_implicitly_cast(t2, t1) {
-                                Some(t1)
-                            }
-                            else {
-                                self.errors.push(self.produce_error(
-                                    AnalyzerErrorType::AssignmentTypeMismatch {
-                                        assignee_type,
-                                        assignment_type: expression_type,
-                                    },
-                                    assign_expr.as_ref()
-                                ));
-
-                                None
-                            }
+                        Token::Punctuation(P::Plus | P::Minus | P::Star | P::Slash)
+                            if numeric(a) && numeric(b) =>
+                        {
+                            self.common_numeric(left, right)
+                        }
+                        Token::Punctuation(P::EqualEqual | P::BangEqual)
+                            if numeric(a) && numeric(b) =>
+                        {
+                            self.common_numeric(left, right);
+                            T::Boolean
+                        }
+                        Token::Punctuation(P::EqualEqual | P::BangEqual)
+                            if (a == b && matches!(a, T::Boolean | T::PinState | T::PinMode))
+                                || matches!(
+                                    (a, b),
+                                    (T::Pin, T::PinState) | (T::PinState, T::Pin)
+                                ) =>
+                        {
+                            T::Boolean
+                        }
+                        Token::Punctuation(
+                            P::Less | P::LessEqual | P::Greater | P::GreaterEqual,
+                        ) if numeric(a) && numeric(b) => {
+                            self.common_numeric(left, right);
+                            T::Boolean
+                        }
+                        _ => {
+                            self.error(
+                                "E_BINARY_TYPE",
+                                format!("Operator {operator:?} does not accept {a} and {b}"),
+                                span,
+                            );
+                            T::Unknown
                         }
                     }
                 }
-                else {
-                    None
+            }
+            E::Ternary {
+                first,
+                second,
+                third,
+            } => {
+                self.condition(first);
+                let a = self.expression(second);
+                let b = self.expression(third);
+                if numeric(a) && numeric(b) {
+                    self.common_numeric(second, third)
+                } else if a == b {
+                    a
+                } else {
+                    self.error(
+                        "E_TERNARY_TYPE",
+                        format!("Branches have incompatible types {a} and {b}"),
+                        span,
+                    );
+                    T::Unknown
+                }
+            }
+            E::Assignment {
+                identifier,
+                expression,
+            } => {
+                let value = self.expression(expression);
+                match self.lookup(identifier) {
+                    Some(T::Pin) if matches!(value, T::PinState | T::PinMode) => value,
+                    Some(target) => {
+                        self.coerce(expression, target);
+                        target
+                    }
+                    None => {
+                        self.error(
+                            "E_UNDEFINED",
+                            format!("'{identifier}' is undefined in this scope"),
+                            span,
+                        );
+                        T::Unknown
+                    }
                 }
             }
         };
-        
-        if let Some(static_type) = static_type {
-            if let StaticType::Unknown = static_type {
-                self.errors.push(self.produce_error(
-                    AnalyzerErrorType::UnknownTypeAssignedToExpression,
-                    expression
-                ));
-            }
-            expression.static_type = static_type;
-        }
-        else {
-            self.errors.push(self.produce_error(
-                AnalyzerErrorType::UnknownTypeAssignedToExpression,
-                expression
-            ));
-        }
-
-        static_type
+        expr.static_type = ty;
+        ty
     }
-
-    fn ensure_number_for_arithmetic(&mut self, expression: &Expression, static_type: StaticType) -> bool {
-        match static_type {
-            StaticType::Integer(_) | StaticType::Float(_) => { true }
-            _ => {
-                self.errors.push(self.produce_error(
-                    AnalyzerErrorType::NonNumericType(static_type),
-                    expression
-                ));
-                false
-            }
-        }
-    }
-
-    fn analyze_def_declaration(&mut self, declaration: &SingleDefDeclaration) {
-        if self.environment.get_type(&declaration.identifier).is_some() {
-            self.errors.push(self.produce_error(
-                AnalyzerErrorType::PortNameAlreadyDefined(declaration.identifier.clone()),
-                declaration
-            ));
-        }
-        else {
-            self.environment.define_global(declaration.identifier.clone(), StaticType::Pin);
-        }
-    }
-
-    fn try_get_identifier_type(&mut self, identifier: &String, source_location: &SourceLocation) -> Option<StaticType> {
-        if let Some(t) = self.environment.get_type(identifier) {
-            Some(t)
-        }
-        else {
-            self.errors.push(self.produce_error_location(
-                AnalyzerErrorType::IdentifierWasNotDefined(identifier.clone()),
-                source_location
-            ));
-            None
-        }
-    }
-
-    fn produce_error<T: LocatableInSource>(&self, error_type: AnalyzerErrorType, locatable: &T) -> AnalyzerError {
-        AnalyzerError::new(error_type, locatable, self.source)
-    }
-
-    fn produce_error_location(&self, error_type: AnalyzerErrorType, location: &SourceLocation) -> AnalyzerError {
-        AnalyzerError::new_location(error_type, location, self.source)
-    }
-
-    fn produce_error_all_line(&self, error_type: AnalyzerErrorType, line: usize) -> AnalyzerError {
-        AnalyzerError::new_all_line(error_type, line, self.source)
-    }
-
-    fn larger_numeric(numeric1: StaticType, numeric2: StaticType) -> Option<StaticType> {
-        if Self::can_implicitly_cast(numeric1, numeric2) {
-            Some(numeric2)
-        }
-        else if Self::can_implicitly_cast(numeric2, numeric1) {
-            Some(numeric1)
-        }
-        else {
-            None
-        }
-    }
-    
-    fn can_implicitly_cast(cast_from: StaticType, cast_to: StaticType) -> bool {
-        // Just in case - if types match then cast is also allowed
-        if cast_from == cast_to { return true; }
-
-        // Implicit casts only work for numerical types right now
-        if !matches!(cast_from, StaticType::Integer(_) | StaticType::Float(_)) ||
-            !matches!(cast_to, StaticType::Integer(_) | StaticType::Float(_)) {
-            return false;
-        }
-        
-        match (cast_from, cast_to) {
-            // Integer to Float
-            (StaticType::Integer(_), StaticType::Float(_)) |
-            // Float to Float (only widening allowed)
-            (StaticType::Float(FloatType::Float32), StaticType::Float(FloatType::Float64)) |
-            (StaticType::Float(FloatType::Literal), StaticType::Float(_)) |
-            // Integer Literals
-            // TODO: Check for boundaries! Values may overflow/underflow
-            (StaticType::Integer(IntegerType::Literal), StaticType::Integer(_)) => true,
-
-            // Integer to Integer
-            (StaticType::Integer(IntegerType::Signed(from)), StaticType::Integer(IntegerType::Signed(to))) => {
-                Self::signed_integer_widening(from, to)
-            }
-            (StaticType::Integer(IntegerType::Unsigned(from)), StaticType::Integer(IntegerType::Unsigned(to))) => {
-                Self::unsigned_integer_widening(from, to)
-            }
-            (StaticType::Integer(IntegerType::Unsigned(from)), StaticType::Integer(IntegerType::Signed(to))) => {
-                Self::unsigned_to_signed_widening(from, to)
-            }
-
-            // Other cases
-            _ => false,
-        }
-    }
-
-    fn signed_integer_widening(from: SignedIntegerType, to: SignedIntegerType) -> bool {
-        matches!((from, to),
-                | (SignedIntegerType::Int8,  SignedIntegerType::Int16 |
-                                             SignedIntegerType::Int32 |
-                                             SignedIntegerType::Int64)
-            
-                | (SignedIntegerType::Int16, SignedIntegerType::Int32 |
-                                             SignedIntegerType::Int64)
-            
-                | (SignedIntegerType::Int32, SignedIntegerType::Int64))
-    }
-
-    fn unsigned_integer_widening(from: UnsignedIntegerType, to: UnsignedIntegerType) -> bool {
-        matches!((from, to),
-                | (UnsignedIntegerType::Uns8,  UnsignedIntegerType::Uns16 |
-                                               UnsignedIntegerType::Uns32 |
-                                               UnsignedIntegerType::Uns64)
-            
-                | (UnsignedIntegerType::Uns16, UnsignedIntegerType::Uns32 |
-                                               UnsignedIntegerType::Uns64)
-            
-                | (UnsignedIntegerType::Uns32, UnsignedIntegerType::Uns64))
-    }
-
-    fn unsigned_to_signed_widening(from: UnsignedIntegerType, to: SignedIntegerType) -> bool {
-        matches!((from, to),
-                | (UnsignedIntegerType::Uns8,  SignedIntegerType::Int16 | 
-                                               SignedIntegerType::Int32 | 
-                                               SignedIntegerType::Int64)
-            
-                | (UnsignedIntegerType::Uns16, SignedIntegerType::Int32 | 
-                                               SignedIntegerType::Int64)
-            
-                | (UnsignedIntegerType::Uns32, SignedIntegerType::Int64))
-    }
-}
-
-#[derive(Debug)]
-pub struct AnalyzerError {
-    error_type: AnalyzerErrorType,
-    line_start: usize,
-    line_end: usize,
-    location: String
-}
-
-impl AnalyzerError {
-    fn new<T: LocatableInSource>(error_type: AnalyzerErrorType, locatable: &T, source: &str) -> AnalyzerError {
-        let location = locatable.get_location();
-        Self::new_location(error_type, location, source)
-    }
-
-    fn new_location(error_type: AnalyzerErrorType, location: &SourceLocation, source: &str) -> AnalyzerError {
-        AnalyzerError {
-            location: get_error_marked_line_location(location, source),
-            error_type,
-            line_start: location.line_start,
-            line_end: location.line_end,
-        }
-    }
-
-    fn new_all_line(error_type: AnalyzerErrorType, line: usize, source: &str) -> AnalyzerError {
-        let line_len = source
-            .split('\n')
-            .nth(line-1)
-            .expect("Couldn't get line from source (new_all_line)")
-            .len();
-        
-        let location = SourceLocation {
-            line_start: line,
-            line_end: line,
-            start_offset: 0,
-            end_offset: line_len,
+    fn common_numeric(&mut self, left: &mut Expression, right: &mut Expression) -> T {
+        let a = left.static_type;
+        let b = right.static_type;
+        let target = if a == b {
+            a
+        } else if literal_type(a) && !literal_type(b) {
+            b
+        } else if literal_type(b) && !literal_type(a) {
+            a
+        } else if widening(a, b) {
+            b
+        } else if widening(b, a) {
+            a
+        } else {
+            self.error(
+                "E_NUMERIC_TYPE",
+                format!("No lossless common type for {a} and {b}"),
+                left.source_location,
+            );
+            return T::Unknown;
         };
-        
-        AnalyzerError {
-            location: get_error_marked_line_location(&location, source),
-            error_type,
-            line_start: location.line_start,
-            line_end: location.line_end,
+        self.coerce(left, target);
+        self.coerce(right, target);
+        target
+    }
+    fn coerce(&mut self, expr: &mut Expression, target: T) {
+        let from = expr.static_type;
+        if from == T::Unknown || target == T::Unknown {
+            return;
         }
+        if matches!(target, T::Float(F::Float32 | F::Float64)) {
+            if let Some(value) = integer_literal(expr) {
+                let restored = if target == T::Float(F::Float32) {
+                    (value as f32) as i128
+                } else {
+                    (value as f64) as i128
+                };
+                if restored != value {
+                    self.error(
+                        "E_LITERAL_RANGE",
+                        format!(
+                            "Integer literal {value} cannot be represented exactly as {target}"
+                        ),
+                        expr.source_location,
+                    );
+                } else {
+                    expr.static_type = target;
+                }
+                return;
+            }
+        }
+        if let Some((min, max)) = integer_bounds(target) {
+            if let Some(value) = integer_literal(expr) {
+                if !(min..=max).contains(&value) {
+                    self.error(
+                        "E_LITERAL_RANGE",
+                        format!("Integer literal {value} is outside {target} range {min}..={max}"),
+                        expr.source_location,
+                    );
+                    return;
+                }
+                expr.static_type = target;
+                return;
+            }
+        }
+        if from != target
+            && !widening(from, target)
+            && !(from == T::Integer(I::Literal) && matches!(target, T::Integer(_)))
+        {
+            self.error(
+                "E_TYPE",
+                format!("Cannot implicitly convert {from} to {target} without loss"),
+                expr.source_location,
+            );
+            return;
+        }
+        if literal_type(from) && !literal_type(target) {
+            match &mut expr.expression_type {
+                E::Grouping { expression } => self.coerce(expression, target),
+                E::Unary {
+                    operator: P::Minus,
+                    right,
+                } => {
+                    if matches!(target, T::Integer(I::Unsigned(_))) {
+                        self.error(
+                            "E_TYPE",
+                            "A negated expression cannot implicitly become unsigned",
+                            expr.source_location,
+                        );
+                    } else {
+                        self.coerce(right, target);
+                    }
+                }
+                E::Binary { left, right, .. } => {
+                    self.coerce(left, target);
+                    self.coerce(right, target);
+                }
+                E::Ternary { second, third, .. } => {
+                    self.coerce(second, target);
+                    self.coerce(third, target);
+                }
+                E::Literal {
+                    value: L::Float(value),
+                } if target == T::Float(F::Float32) && !(*value as f32).is_finite() => {
+                    self.error(
+                        "E_LITERAL_RANGE",
+                        "Floating-point literal is outside f32 range",
+                        expr.source_location,
+                    );
+                }
+                _ => {}
+            }
+        }
+        expr.static_type = target;
     }
 }
-
-#[derive(Debug)]
-pub enum AnalyzerErrorType {
-    IdentifierWasNotDefined(String),
-    InvalidAssignmentTarget(String),
-    AssignmentTypeMismatch { assignee_type: StaticType, assignment_type: StaticType },
-    InvalidUnaryOperator(PunctuationType),
-    InvalidBinaryOperator(TokenType),
-    WrongTypeUnaryOperator(PunctuationType, StaticType),
-    NonBooleanInCondition(StaticType),
-    MismatchTernary(StaticType, StaticType),
-    NonIntegerInFor(StaticType),
-    NonNumericType(StaticType),
-    PortNameAlreadyDefined(String),
-    VarDeclarationTypeMismatch(StaticType, StaticType),
-    VarDeclarationMissingTypeAndInit,
-    UnknownTypeAssignedToExpression,
-    NoDefaultInitializer(StaticType)
+fn numeric(ty: T) -> bool {
+    matches!(ty, T::Integer(_) | T::Float(_))
 }
-
-impl Error for AnalyzerError {}
-impl Display for AnalyzerError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let error_header =
-            if self.line_start == self.line_end
-                { format!("[line {}] Analyzer Error", self.line_start) }
-            else
-                { format!("[lines {}-{}] Analyzer Error", self.line_start, self.line_end) };
-
-        let message = match &self.error_type {
-            AnalyzerErrorType::IdentifierWasNotDefined(name) =>
-                format!("'{name}' is undefined in this scope"),
-            AnalyzerErrorType::InvalidAssignmentTarget(name) =>
-                format!("Cannot assign to '{name}'"),
-            AnalyzerErrorType::AssignmentTypeMismatch { assignee_type, assignment_type } =>
-                format!("Type mismatch: cannot assign '{assignment_type}' to '{assignee_type}' (maybe use an explicit cast?)"),
-            AnalyzerErrorType::InvalidUnaryOperator(punctuation) =>
-                format!("Invalid unary operator: {punctuation}"),
-            AnalyzerErrorType::WrongTypeUnaryOperator(p, t) =>
-                format!("Unary operator '{p}' cannot work with type '{t}'"),
-            AnalyzerErrorType::NonBooleanInCondition(t) =>
-                format!("Expected boolean in a condition, got '{t}'"),
-            AnalyzerErrorType::MismatchTernary(t1, t2) =>
-                format!("Two branches of ternary operator have different types ('{t1}' and '{t2}'). They must be the same"),
-            AnalyzerErrorType::NonIntegerInFor(t) =>
-                format!("For loops only support integers, instead found '{t}'"),
-            AnalyzerErrorType::InvalidBinaryOperator(token_type) =>
-                format!("'{token_type:?}' can't be used as a binary operator"),
-            AnalyzerErrorType::NonNumericType(t) =>
-                format!("Expected a numeric type (integer or a float), but got '{t}'"),
-            AnalyzerErrorType::PortNameAlreadyDefined(identifier) =>
-                format!("Name '{identifier}' is already in use by another port or a variable"),
-            AnalyzerErrorType::VarDeclarationTypeMismatch(t1, t2) =>
-                format!("Type mismatch: variable is of type '{t1}', but initializer is '{t2}' (maybe use an explicit cast?)"),
-            AnalyzerErrorType::VarDeclarationMissingTypeAndInit =>
-                "Variable declaration must either specify a type (: Type) or have an initializer (= expr)".to_string(),
-            AnalyzerErrorType::UnknownTypeAssignedToExpression =>
-                "Internal error occured. Wasn't able to evaluate this expression. This is an internal compiler bug".to_string(),
-            AnalyzerErrorType::NoDefaultInitializer(static_type) =>
-                format!("There is no default value for '{static_type}', provide an initializer")
-        }.red();
-
-        // Add tabs to each line of the location so it shifts to the right
-        let location: String = self.location.split('\n')
-            .fold(String::new(), |mut output, line| {
-                output += "\t"; output += line; output += "\n";
-                output
-            });
-        
-        write!(f, "{error_header}\n{message}")?;
-        write!(f, "\n\t{}\n{}\n", "Happened here:".green(), location.trim_end())
+fn literal_type(ty: T) -> bool {
+    matches!(ty, T::Integer(I::Literal) | T::Float(F::Literal))
+}
+fn default_type(ty: T) -> T {
+    match ty {
+        T::Integer(I::Literal) => T::Integer(I::Signed(SI::Int32)),
+        T::Float(F::Literal) => T::Float(F::Float32),
+        _ => ty,
+    }
+}
+fn integer_literal(expr: &Expression) -> Option<i128> {
+    match &expr.expression_type {
+        E::Literal {
+            value: L::Integer(value),
+        } => Some(i128::from(*value)),
+        E::Grouping { expression } => integer_literal(expression),
+        E::Unary {
+            operator: P::Minus,
+            right,
+        } => integer_literal(right)?.checked_neg(),
+        _ => None,
+    }
+}
+fn integer_bounds(ty: T) -> Option<(i128, i128)> {
+    let (signed, bits) = match ty {
+        T::Integer(I::Signed(s)) => (
+            true,
+            match s {
+                SI::Int8 => 8,
+                SI::Int16 => 16,
+                SI::Int32 => 32,
+                SI::Int64 => 64,
+            },
+        ),
+        T::Integer(I::Unsigned(s)) => (
+            false,
+            match s {
+                UI::Uns8 => 8,
+                UI::Uns16 => 16,
+                UI::Uns32 => 32,
+                UI::Uns64 => 64,
+            },
+        ),
+        _ => return None,
+    };
+    Some(if signed {
+        (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+    } else {
+        (0, (1i128 << bits) - 1)
+    })
+}
+fn widening(from: T, to: T) -> bool {
+    if from == to {
+        return true;
+    }
+    if let (Some((a, b)), Some((c, d))) = (integer_bounds(from), integer_bounds(to)) {
+        return c <= a && b <= d;
+    }
+    match (from, to) {
+        (T::Float(F::Literal), T::Float(_)) | (T::Float(F::Float32), T::Float(F::Float64)) => true,
+        (T::Integer(_), T::Float(F::Float32 | F::Float64)) => {
+            let precision = if to == T::Float(F::Float32) { 24 } else { 53 };
+            integer_bounds(from)
+                .is_some_and(|(a, b)| a >= -(1i128 << precision) && b <= (1i128 << precision))
+        }
+        _ => false,
     }
 }

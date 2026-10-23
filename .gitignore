@@ -1,3 +1,4 @@
 /target
-# Output files from avra
+/build
+# Output files from old versions of Helium / AVRA
 /output.*

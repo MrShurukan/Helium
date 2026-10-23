@@ -1,22 +1,26 @@
-﻿use crate::frontend::expression::{Expression, ExpressionType, PinRef, PinRefError};
+use crate::frontend::expression::{Expression, ExpressionType, PinRef, PinRefError};
 use crate::frontend::scanner::{Scanner, ScannerError};
-use crate::frontend::statement::{DefDeclarationError, SingleDefDeclaration, Statement, StatementType};
+use crate::frontend::statement::{
+    DefDeclarationError, SingleDefDeclaration, Statement, StatementType,
+};
 use crate::frontend::token::Token;
-use crate::frontend::token_type::{BooleanConstantType as BCT, ConstantType as CT, KeywordType as KT,
-                                  LiteralType as LT, PunctuationType as PT, TokenType as TT};
+use crate::frontend::token_type::{
+    BooleanConstantType as BCT, ConstantType as CT, KeywordType as KT, LiteralType as LT,
+    PunctuationType as PT, TokenType as TT,
+};
 use crate::frontend::utils::TokenIterator;
 use colored::Colorize;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+pub mod expression;
+mod position_info;
 mod scanner;
 pub mod statement;
+pub mod static_type;
 mod token;
 pub mod token_type;
 pub mod utils;
-mod position_info;
-pub mod expression;
-pub mod static_type;
 
 /// Main struct for the front-end of helium. This class receives a source file,
 /// starts up a scanner, gets tokens and then parses them into a list of statements.
@@ -28,30 +32,34 @@ pub struct Parser<'a> {
     /// Reference to an original string to point out errors with a location
     pub source: &'a str,
     /// List of errors that will be accumulated during the call of `parse`
-    errors: Vec<ParserError>
+    errors: Vec<ParserError>,
 }
 
 /// Performs a check on the peeked token. If it matched the `enum_types` pattern then it's consumed.
 /// Otherwise, an error is returned that the token was missing with the `error_message` error message
-/// 
+///
 /// Returns the consumed token for convenience
 macro_rules! check_and_consume {
     ($self:ident, $tokens:ident, $enum_types:pat_param, $error_message:literal) => {
         match $self.peek($tokens)?.token_type {
             $enum_types => $tokens.advance().unwrap(),
             _ => {
-                $self.errors.push($self.missing_token_error($error_message, $tokens));
+                $self
+                    .errors
+                    .push($self.missing_token_error($error_message, $tokens));
                 return None;
             }
         }
     };
-    
+
     // Returns error pointing to a previous token
     ($self:ident, $tokens:ident, $enum_types:pat_param, $error_message:literal, use_prev_token) => {
         match $self.peek($tokens)?.token_type {
             $enum_types => $tokens.advance().unwrap(),
             _ => {
-                $self.errors.push($self.missing_token_error_previous($error_message, $tokens));
+                $self
+                    .errors
+                    .push($self.missing_token_error_previous($error_message, $tokens));
                 return None;
             }
         }
@@ -59,13 +67,17 @@ macro_rules! check_and_consume {
 }
 
 /// This macro is used to automate binary operator parsing.
-/// All binary operators are right-associative with themselves (at least in the moment of
+/// All binary operators are left-associative with themselves (at least in the moment of
 /// writing, check `grammar.txt`).
 ///
 /// This means there is a loop to read them
 macro_rules! parse_binary {
     ($self:ident, $enum_types:pat_param, $expression:ident, $tokens:ident, $next_precedence:ident) => {
-        while let token @ Token { token_type: $enum_types, .. } = $self.peek($tokens)? {
+        while let token @ Token {
+            token_type: $enum_types,
+            ..
+        } = $self.peek($tokens)?
+        {
             let token = token.clone();
             $tokens.advance();
             let right = $self.$next_precedence($tokens)?;
@@ -93,8 +105,12 @@ macro_rules! binary_error_produce {
             _ = $self.$next_precedence($tokens)?;
 
             // Discard the expression entirely. Report an error
-            $self.errors.push($self.get_error_marked_line(ParserErrorType::BinaryOperatorNoLeftPart,
-                current_token));
+            $self.errors.push(
+                $self.get_error_marked_line(
+                    ParserErrorType::BinaryOperatorNoLeftPart,
+                    current_token,
+                ),
+            );
             return None;
         }
     };
@@ -107,37 +123,36 @@ macro_rules! binary_error_produce {
 /// * `$self` - reference to self
 /// * `$enum_types` - token type pattern to match for error producing and binary parsing
 /// * `$error_enum_types` - if this argument is passed (extended version) then it's used for binary
-///    producing instead of `$enum_types`. The latter is still used for parsing the binary operator
+///   producing instead of `$enum_types`. The latter is still used for parsing the binary operator
 /// * `$tokens` - mutable reference to `TokenIterator`
 /// * `$next_precedence` - function for the next precedence after current one (like `ternary` after
-///    `assignment`)
+///   `assignment`)
 macro_rules! parse_binary_with_error_produce {
-    ($self:ident, $enum_types:pat_param, $tokens:ident, $next_precedence:ident) => {
-        {
-            binary_error_produce!($self, $enum_types, $tokens, $next_precedence);
+    ($self:ident, $enum_types:pat_param, $tokens:ident, $next_precedence:ident) => {{
+        binary_error_produce!($self, $enum_types, $tokens, $next_precedence);
 
-            let mut expr = $self.$next_precedence($tokens)?;
-            parse_binary!($self, $enum_types, expr, $tokens, $next_precedence);
+        let mut expr = $self.$next_precedence($tokens)?;
+        parse_binary!($self, $enum_types, expr, $tokens, $next_precedence);
 
-            expr
-        }
-    };
+        expr
+    }};
 
-    ($self:ident, $enum_types:pat_param, $error_enum_types:pat_param, $tokens:ident, $next_precedence:ident) => {
-        {
-            binary_error_produce!($self, $error_enum_types, $tokens, $next_precedence);
+    ($self:ident, $enum_types:pat_param, $error_enum_types:pat_param, $tokens:ident, $next_precedence:ident) => {{
+        binary_error_produce!($self, $error_enum_types, $tokens, $next_precedence);
 
-            let mut expr = $self.$next_precedence($tokens)?;
-            parse_binary!($self, $enum_types, expr, $tokens, $next_precedence);
+        let mut expr = $self.$next_precedence($tokens)?;
+        parse_binary!($self, $enum_types, expr, $tokens, $next_precedence);
 
-            expr
-        }
-    };
+        expr
+    }};
 }
 
 impl Parser<'_> {
-    pub fn new(source: &str) -> Parser {
-        Parser { source, errors: Vec::new() }
+    pub fn new(source: &str) -> Parser<'_> {
+        Parser {
+            source,
+            errors: Vec::new(),
+        }
     }
 
     /// Main function - parses the source file and gets out a list of statements (or a list of errors).
@@ -148,17 +163,15 @@ impl Parser<'_> {
     // TODO: A lot of things like blocks if unclosed will return an error to EOF with 'Incorrect token in this place'
     pub fn parse(self) -> Result<Vec<Statement>, Vec<ParserError>> {
         let tokens = self.scan()?;
-        println!("Tokens:");
-        for (i, token) in tokens.iter().enumerate() {
-            println!("{i}. {token}");
-        }
-
         let mut tokens = TokenIterator::new(tokens.as_slice());
         self.read_top_level(&mut tokens)
     }
 
     // -------------------- THIS PART IS DECLARATIONS AND STATEMENTS -------------------- //
-    fn read_top_level(mut self, tokens: &mut TokenIterator) -> Result<Vec<Statement>, Vec<ParserError>> {
+    fn read_top_level(
+        mut self,
+        tokens: &mut TokenIterator,
+    ) -> Result<Vec<Statement>, Vec<ParserError>> {
         let mut statements: Vec<Statement> = Vec::new();
 
         let mut already_read_setup = false;
@@ -170,55 +183,75 @@ impl Parser<'_> {
                 break;
             };
 
-            let result = match token.token_type {
-                TT::Keyword(KT::Var) if !already_read_setup && !already_read_loop =>
-                    self.var_declaration(tokens),
-                TT::Keyword(KT::Def) if !already_read_setup && !already_read_loop =>
-                    self.def_declaration(tokens),
-                // Can't declare global variables and ports after setup or loop
-                TT::Keyword(KT::Var | KT::Def) => {
-                    let token = token.clone();
-                    // Discard the declaration
-                    _ = if matches!(token.token_type, TT::Keyword(KT::Var)) {
+            let result =
+                match token.token_type {
+                    TT::Keyword(KT::Var) if !already_read_setup && !already_read_loop => {
                         self.var_declaration(tokens)
                     }
-                    else {
+                    TT::Keyword(KT::Def) if !already_read_setup && !already_read_loop => {
                         self.def_declaration(tokens)
-                    };
-
-                    self.errors.push(self.get_error_marked_line(ParserErrorType::DefOrVarAfterSetupOrLoop, token));
-                    None
-                },
-                TT::Keyword(KT::Setup) =>
-                    if already_read_setup {
+                    }
+                    // Can't declare global variables and ports after setup or loop
+                    TT::Keyword(KT::Var | KT::Def) => {
                         let token = token.clone();
-                        // Read the setup anyway, but discard the result
-                        _ = self.loop_declaration(tokens);
-                        self.errors.push(self.get_error_marked_line(ParserErrorType::DuplicateSetup, token.clone()));
+                        // Discard the declaration
+                        _ = if matches!(token.token_type, TT::Keyword(KT::Var)) {
+                            self.var_declaration(tokens)
+                        } else {
+                            self.def_declaration(tokens)
+                        };
+
+                        self.errors.push(self.get_error_marked_line(
+                            ParserErrorType::DefOrVarAfterSetupOrLoop,
+                            token,
+                        ));
                         None
                     }
-                    else {
-                        already_read_setup = true;
-                        self.setup_declaration(tokens)
-                    },
-                TT::Keyword(KT::Loop) =>
-                    if already_read_loop {
-                        let token = token.clone();
-                        // Read the loop anyway, but discard the result
-                        _ = self.loop_declaration(tokens);
-                        self.errors.push(self.get_error_marked_line(ParserErrorType::DuplicateLoop, token));
+                    TT::Keyword(KT::Setup) => {
+                        if already_read_loop {
+                            let token = token.clone();
+                            let _ = self.setup_declaration(tokens);
+                            self.errors.push(
+                                self.get_error_marked_line(ParserErrorType::SetupAfterLoop, token),
+                            );
+                            None
+                        } else if already_read_setup {
+                            let token = token.clone();
+                            // Read the setup anyway, but discard the result
+                            _ = self.setup_declaration(tokens);
+                            self.errors.push(self.get_error_marked_line(
+                                ParserErrorType::DuplicateSetup,
+                                token.clone(),
+                            ));
+                            None
+                        } else {
+                            already_read_setup = true;
+                            self.setup_declaration(tokens)
+                        }
+                    }
+                    TT::Keyword(KT::Loop) => {
+                        if already_read_loop {
+                            let token = token.clone();
+                            // Read the loop anyway, but discard the result
+                            _ = self.loop_declaration(tokens);
+                            self.errors.push(
+                                self.get_error_marked_line(ParserErrorType::DuplicateLoop, token),
+                            );
+                            None
+                        } else {
+                            already_read_loop = true;
+                            self.loop_declaration(tokens)
+                        }
+                    }
+
+                    _ => {
+                        self.errors.push(self.get_error_marked_line(
+                            ParserErrorType::IncorrectGlobalToken,
+                            token.clone(),
+                        ));
                         None
                     }
-                    else {
-                        already_read_loop = true;
-                        self.loop_declaration(tokens)
-                    },
-
-                _ => {
-                    self.errors.push(self.get_error_marked_line(ParserErrorType::IncorrectGlobalToken, token.clone()));
-                    None
-                }
-            };
+                };
 
             match result {
                 Some(statement) => {
@@ -233,34 +266,40 @@ impl Parser<'_> {
         }
 
         if !already_read_loop {
-            self.errors.push(ParserError::new_without_token(ParserErrorType::MissingLoopDeclaration));
+            self.errors.push(ParserError::new_without_token(
+                ParserErrorType::MissingLoopDeclaration,
+            ));
         }
 
         if self.errors.is_empty() {
             Ok(statements)
-        }
-        else {
+        } else {
             Err(self.errors)
         }
     }
 
     fn declaration(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         let token = self.peek(tokens)?;
-        
+
         match token.token_type {
-            TT::Keyword(KT::Var) => { self.advance(tokens)?; self.var_declaration(tokens) },
-            _ => self.statement(tokens)
+            TT::Keyword(KT::Var) => {
+                self.advance(tokens)?;
+                self.var_declaration(tokens)
+            }
+            _ => self.statement(tokens),
         }
     }
-    
+
     fn var_declaration(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
-        let var_keyword = tokens.previous()
+        let var_keyword = tokens
+            .previous()
             .expect("Expected previous token ('{') in block_statement")
             .clone();
-        
+
         let ident_token = self.advance(tokens)?;
         if !matches!(ident_token.token_type, TT::Identifier(_)) {
-            self.errors.push(self.missing_token_error("Expected a variable name", tokens));
+            self.errors
+                .push(self.missing_token_error("Expected a variable name", tokens));
             return None;
         }
         let ident_token = ident_token.clone();
@@ -273,25 +312,45 @@ impl Parser<'_> {
                 static_type = Some(token.clone());
             } else {
                 self.errors.push(self.get_error_marked_line(
-                    ParserErrorType::IncorrectToken(format!("Expected type after ':', got '{:?}'", token.token_type)),
-                    token.clone()));
+                    ParserErrorType::IncorrectToken(format!(
+                        "Expected type after ':', got '{:?}'",
+                        token.token_type
+                    )),
+                    token.clone(),
+                ));
                 return None;
             }
             self.advance(tokens)?;
         }
-        
-        let mut initializer = None; 
-        
+
+        let mut initializer = None;
+
         if static_type.is_none() {
-            check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' (initializer) here");
+            check_and_consume!(
+                self,
+                tokens,
+                TT::Punctuation(PT::Equal),
+                "Expected '=' (initializer) here"
+            );
             initializer = Some(self.expression(tokens)?);
         } else if let TT::Punctuation(PT::Equal) = self.peek(tokens)?.token_type {
             self.advance(tokens)?;
             initializer = Some(self.expression(tokens)?);
         }
 
-        check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected a ';' after variable declaration", use_prev_token);
-        Some(Statement::new_var_declaration(&var_keyword, ident_token, static_type, initializer))
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::Semicolon),
+            "Expected a ';' after variable declaration",
+            use_prev_token
+        );
+        Some(Statement::new_var_declaration(
+            &var_keyword,
+            ident_token,
+            static_type,
+            initializer,
+        ))
     }
 
     fn def_declaration(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
@@ -306,23 +365,28 @@ impl Parser<'_> {
         let token = self.peek(tokens)?;
         match token {
             // Identifier = it's a one-liner
-            Token { token_type: TT::Identifier(_), .. } => {
+            Token {
+                token_type: TT::Identifier(_),
+                ..
+            } => {
                 let def_declaration = self.single_def_declaration(tokens)?;
                 Some(Statement::new_def_declaration(vec![def_declaration]))
-            },
+            }
             // Left brace = it's a multiline version
-            Token { token_type: TT::Punctuation(PT::LeftBrace), .. } => {
+            Token {
+                token_type: TT::Punctuation(PT::LeftBrace),
+                ..
+            } => {
                 let token = token.clone();
                 tokens.advance();
-                
+
                 let mut def_declarations: Vec<SingleDefDeclaration> = Vec::new();
                 loop {
                     let next_token = self.peek(tokens);
                     if next_token.is_none() {
-                        self.errors.push(self.get_error_marked_line(
-                            ParserErrorType::UnclosedDefBlock,
-                            token
-                        ));
+                        self.errors.push(
+                            self.get_error_marked_line(ParserErrorType::UnclosedDefBlock, token),
+                        );
                         return None;
                     }
 
@@ -336,31 +400,58 @@ impl Parser<'_> {
                 }
 
                 if def_declarations.is_empty() {
-                    self.errors.push(self.get_error_marked_line(ParserErrorType::EmptyDefBlock, token));
+                    self.errors
+                        .push(self.get_error_marked_line(ParserErrorType::EmptyDefBlock, token));
                     None
-                }
-                else { 
+                } else {
                     Some(Statement::new_def_declaration(def_declarations))
                 }
-            },
+            }
             // Error
             token => {
                 self.errors.push(self.get_error_marked_line(
-                    ParserErrorType::MissingToken(String::from("Expected '{' or an identifier after 'def'")),
-                    token.clone()
+                    ParserErrorType::MissingToken(String::from(
+                        "Expected '{' or an identifier after 'def'",
+                    )),
+                    token.clone(),
                 ));
                 None
             }
         }
     }
 
-    fn single_def_declaration(&mut self, tokens: &mut TokenIterator) -> Option<SingleDefDeclaration> {
-        let identifier = check_and_consume!(self, tokens, TT::Identifier(_), "Expected identifier after this token", use_prev_token).clone();
-        check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' after an identifier in a def statement");
+    fn single_def_declaration(
+        &mut self,
+        tokens: &mut TokenIterator,
+    ) -> Option<SingleDefDeclaration> {
+        let identifier = check_and_consume!(
+            self,
+            tokens,
+            TT::Identifier(_),
+            "Expected identifier after this token",
+            use_prev_token
+        )
+        .clone();
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::Equal),
+            "Expected '=' after an identifier in a def statement"
+        );
         let pin_ref = self.pin_ref(tokens)?;
-        let pin_mode = check_and_consume!(self, tokens, TT::Constant(CT::PinMode(_)),
-            "Expected a pin mode (for example 'INPUT') after a port reference").clone();
-        check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected ';' after a def statement");
+        let pin_mode = check_and_consume!(
+            self,
+            tokens,
+            TT::Constant(CT::PinMode(_)),
+            "Expected a pin mode (for example 'INPUT') after a port reference"
+        )
+        .clone();
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::Semicolon),
+            "Expected ';' after a def statement"
+        );
 
         SingleDefDeclaration::new(identifier, pin_ref, pin_mode)
             .map_err(|err| self.errors.push(self.convert_def_error(err)))
@@ -368,9 +459,21 @@ impl Parser<'_> {
     }
 
     fn pin_ref(&mut self, tokens: &mut TokenIterator) -> Option<PinRef> {
-        let port = check_and_consume!(self, tokens, TT::Port(_), "Expected a port name here").clone();
-        check_and_consume!(self, tokens, TT::Punctuation(PT::Dot), "Expected a '.' after a port name");
-        let pin_number = check_and_consume!(self, tokens, TT::Literal(LT::Integer(_)), "Expected an integer here").clone();
+        let port =
+            check_and_consume!(self, tokens, TT::Port(_), "Expected a port name here").clone();
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::Dot),
+            "Expected a '.' after a port name"
+        );
+        let pin_number = check_and_consume!(
+            self,
+            tokens,
+            TT::Literal(LT::Integer(_)),
+            "Expected an integer here"
+        )
+        .clone();
 
         PinRef::new(port, pin_number)
             .map_err(|err| self.errors.push(self.convert_pin_ref_error(err)))
@@ -378,55 +481,108 @@ impl Parser<'_> {
     }
 
     fn setup_declaration(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
-        check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "Expected '{' after setup", use_prev_token);
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::LeftBrace),
+            "Expected '{' after setup",
+            use_prev_token
+        );
         let block = self.block_statement(tokens)?;
         if let StatementType::Block(statements) = block.statement_type {
-            Some(Statement::new_setup_declaration(statements, block.source_location))
+            Some(Statement::new_setup_declaration(
+                statements,
+                block.source_location,
+            ))
+        } else {
+            unreachable!()
         }
-        else { unreachable!() }
     }
 
     fn loop_declaration(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
-        check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "Expected '{' after loop", use_prev_token);
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::LeftBrace),
+            "Expected '{' after loop",
+            use_prev_token
+        );
         let block = self.block_statement(tokens)?;
         if let StatementType::Block(statements) = block.statement_type {
-            Some(Statement::new_loop_declaration(statements, block.source_location))
+            Some(Statement::new_loop_declaration(
+                statements,
+                block.source_location,
+            ))
+        } else {
+            unreachable!()
         }
-        else { unreachable!() }
     }
 
     fn statement(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         let token = self.peek(tokens)?;
         match token.token_type {
-            TT::Keyword(KT::For) => { self.advance(tokens)?; self.for_statement(tokens) }
-            TT::Keyword(KT::If) => { self.advance(tokens)?; self.if_statement(tokens) }
-            TT::Keyword(KT::While) => { self.advance(tokens)?; self.while_loop(tokens) }
-            TT::Punctuation(PT::LeftBrace) => { self.advance(tokens)?; self.block_statement(tokens) }
-            _ => self.expression_statement(tokens)
+            TT::Keyword(KT::For) => {
+                self.advance(tokens)?;
+                self.for_statement(tokens)
+            }
+            TT::Keyword(KT::If) => {
+                self.advance(tokens)?;
+                self.if_statement(tokens)
+            }
+            TT::Keyword(KT::While) => {
+                self.advance(tokens)?;
+                self.while_loop(tokens)
+            }
+            TT::Punctuation(PT::LeftBrace) => {
+                self.advance(tokens)?;
+                self.block_statement(tokens)
+            }
+            _ => self.expression_statement(tokens),
         }
     }
 
     fn for_statement(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         let ident_token = self.advance(tokens)?;
         if !matches!(ident_token.token_type, TT::Identifier(_)) {
-            self.errors.push(self.missing_token_error("Expected identifier after 'for'", tokens));
+            self.errors
+                .push(self.missing_token_error("Expected identifier after 'for'", tokens));
             return None;
         }
         let ident_token = ident_token.clone();
 
-        check_and_consume!(self, tokens, TT::Punctuation(PT::Equal), "Expected '=' after identifier in for loop");
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::Equal),
+            "Expected '=' after identifier in for loop"
+        );
         let from = self.expression(tokens)?;
-        check_and_consume!(self, tokens, TT::Keyword(KT::To), "Expected 'to' after from-expression in a for loop");
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Keyword(KT::To),
+            "Expected 'to' after from-expression in a for loop"
+        );
         let to = self.expression(tokens)?;
-        check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "For only supports a block body '{'");
-        let body = self.block_statement(tokens)?; 
-        
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::LeftBrace),
+            "For only supports a block body '{'"
+        );
+        let body = self.block_statement(tokens)?;
+
         Some(Statement::new_for(ident_token, from, to, Box::new(body)))
     }
 
     fn if_statement(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         let condition = self.expression(tokens)?;
-        check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "Expected '{' after if condition");
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::LeftBrace),
+            "Expected '{' after if condition"
+        );
         let body = self.block_statement(tokens)?;
         let mut else_body: Option<Box<Statement>> = None;
         if let TT::Keyword(KT::Else) = self.peek(tokens)?.token_type {
@@ -435,13 +591,16 @@ impl Parser<'_> {
                 TT::Punctuation(PT::LeftBrace) => {
                     self.advance(tokens)?;
                     else_body = Some(Box::new(self.block_statement(tokens)?));
-                },
+                }
                 TT::Keyword(KT::If) => {
                     self.advance(tokens)?;
                     else_body = Some(Box::new(self.if_statement(tokens)?));
-                },
+                }
                 _ => {
-                    self.errors.push(self.missing_token_error("Expected a block or another 'if' after else", tokens));
+                    self.errors.push(self.missing_token_error(
+                        "Expected a block or another 'if' after else",
+                        tokens,
+                    ));
                 }
             }
         }
@@ -451,7 +610,12 @@ impl Parser<'_> {
 
     fn while_loop(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         let condition = self.expression(tokens)?;
-        check_and_consume!(self, tokens, TT::Punctuation(PT::LeftBrace), "Expected '{' after while condition");
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::LeftBrace),
+            "Expected '{' after while condition"
+        );
         let body = self.block_statement(tokens)?;
 
         Some(Statement::new_while(condition, Box::new(body)))
@@ -459,7 +623,8 @@ impl Parser<'_> {
 
     fn block_statement(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         let mut statements: Vec<Statement> = Vec::new();
-        let left_brace = tokens.previous()
+        let left_brace = tokens
+            .previous()
             .expect("Expected previous token ('{') in block_statement")
             .clone();
 
@@ -473,27 +638,45 @@ impl Parser<'_> {
                 Some(_) => {}
             }
 
+            let position = tokens.position();
             let declaration = self.declaration(tokens);
             match declaration {
                 Some(statement) => statements.push(statement),
-                None => Self::synchronize(tokens)
+                None => {
+                    // Recovery must consume an invalid token if parsing made no progress.
+                    // Otherwise a reserved but unsupported keyword can repeat forever.
+                    if tokens.position() == position {
+                        tokens.advance();
+                    }
+                    Self::synchronize(tokens);
+                }
             }
         }
 
-        let right_brace = 
-            if let Some(Token { token_type: TT::Punctuation(PT::RightBrace), .. }) = self.peek(tokens) {
-                tokens.advance().unwrap()
-            } else {
-                self.errors.push(self.missing_token_error_previous("Expected '}' after a block", tokens));
-                return None;
-            };
-        
+        let right_brace = if let Some(Token {
+            token_type: TT::Punctuation(PT::RightBrace),
+            ..
+        }) = self.peek(tokens)
+        {
+            tokens.advance().unwrap()
+        } else {
+            self.errors
+                .push(self.missing_token_error_previous("Expected '}' after a block", tokens));
+            return None;
+        };
+
         Some(Statement::new_block(&left_brace, right_brace, statements))
     }
 
     fn expression_statement(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         let value = self.expression(tokens)?;
-        check_and_consume!(self, tokens, TT::Punctuation(PT::Semicolon), "Expected ';' after expression.", use_prev_token);
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::Semicolon),
+            "Expected ';' after expression.",
+            use_prev_token
+        );
         Some(Statement::new_expression(value))
     }
 
@@ -520,7 +703,12 @@ impl Parser<'_> {
                 return Some(Expression::new_assignment(&l_value, r_value));
             }
 
-            self.errors.push(self.get_error_marked_line(ParserErrorType::InvalidAssignmentTarget, equals.clone()));
+            self.errors.push(
+                self.get_error_marked_line(
+                    ParserErrorType::InvalidAssignmentTarget,
+                    equals.clone(),
+                ),
+            );
             return None;
         }
 
@@ -544,15 +732,13 @@ impl Parser<'_> {
                 let third = self.logic_or(tokens)?;
 
                 expr = Expression::new_ternary(expr, second, third);
-            }
-            else {
+            } else {
                 self.errors.push(
-                    self.get_error_marked_line(ParserErrorType::UnfinishedTernary, question_token)
+                    self.get_error_marked_line(ParserErrorType::UnfinishedTernary, question_token),
                 );
                 return None;
             }
         }
-
 
         Some(expr)
     }
@@ -571,15 +757,24 @@ impl Parser<'_> {
 
     // != ==
     fn equality(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
-        let expr = parse_binary_with_error_produce!(self, TT::Punctuation(PT::BangEqual | PT::EqualEqual), tokens, comparison);
+        let expr = parse_binary_with_error_produce!(
+            self,
+            TT::Punctuation(PT::BangEqual | PT::EqualEqual),
+            tokens,
+            comparison
+        );
 
         Some(expr)
     }
 
     // > >= < <=
     fn comparison(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
-        let expr = parse_binary_with_error_produce!(self,
-            TT::Punctuation(PT::Greater | PT::GreaterEqual | PT::Less | PT::LessEqual), tokens, term);
+        let expr = parse_binary_with_error_produce!(
+            self,
+            TT::Punctuation(PT::Greater | PT::GreaterEqual | PT::Less | PT::LessEqual),
+            tokens,
+            term
+        );
 
         Some(expr)
     }
@@ -587,15 +782,25 @@ impl Parser<'_> {
     // + -
     fn term(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
         // Only a plus should produce an error, because a minus could still be a unary operator
-        let expr = parse_binary_with_error_produce!(self,
-            TT::Punctuation(PT::Plus | PT::Minus), TT::Punctuation(PT::Plus), tokens, factor);
+        let expr = parse_binary_with_error_produce!(
+            self,
+            TT::Punctuation(PT::Plus | PT::Minus),
+            TT::Punctuation(PT::Plus),
+            tokens,
+            factor
+        );
 
         Some(expr)
     }
 
     // * /
     fn factor(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
-        let expr = parse_binary_with_error_produce!(self, TT::Punctuation(PT::Star | PT::Slash), tokens, unary);
+        let expr = parse_binary_with_error_produce!(
+            self,
+            TT::Punctuation(PT::Star | PT::Slash),
+            tokens,
+            unary
+        );
 
         Some(expr)
     }
@@ -619,49 +824,66 @@ impl Parser<'_> {
         let token = self.peek(tokens)?.clone();
 
         let result = match token.token_type {
-            TT::Identifier(_) => { Some(Expression::new_identifier(&token)) },
-            TT::Literal(_) => { Some(Expression::new_literal(&token)) },
-            TT::Constant(CT::Boolean(constant)) => {
-                match constant {
-                    BCT::True => Some(Expression::new_literal_custom_type(&token, LT::Boolean(true))),
-                    BCT::False => Some(Expression::new_literal_custom_type(&token, LT::Boolean(false))),
-                }
+            TT::Identifier(_) => Some(Expression::new_identifier(&token)),
+            TT::Literal(_) => Some(Expression::new_literal(&token)),
+            TT::Constant(CT::Boolean(constant)) => match constant {
+                BCT::True => Some(Expression::new_literal_custom_type(
+                    &token,
+                    LT::Boolean(true),
+                )),
+                BCT::False => Some(Expression::new_literal_custom_type(
+                    &token,
+                    LT::Boolean(false),
+                )),
             },
-            TT::Constant(CT::PinMode(constant)) => {
-                Some(Expression::new_literal_custom_type(&token, LT::PinMode(*constant)))
-            },
-            TT::Constant(CT::PinState(constant)) => {
-                Some(Expression::new_literal_custom_type(&token, LT::PinState(*constant)))
-            },
+            TT::Constant(CT::PinMode(constant)) => Some(Expression::new_literal_custom_type(
+                &token,
+                LT::PinMode(*constant),
+            )),
+            TT::Constant(CT::PinState(constant)) => Some(Expression::new_literal_custom_type(
+                &token,
+                LT::PinState(*constant),
+            )),
             TT::Punctuation(PT::LeftParen) => {
                 tokens.advance();
                 let expr = self.expression(tokens)?;
                 let next_token = self.peek(tokens);
                 if next_token.is_none() {
-                    self.errors.push(self.get_error_marked_line(
-                        ParserErrorType::UnclosedParenthesis, token
-                    ));
+                    self.errors.push(
+                        self.get_error_marked_line(ParserErrorType::UnclosedParenthesis, token),
+                    );
                     return None;
                 }
-                
+
                 let next_token = next_token.unwrap();
-                if let TT::Punctuation(PT::RightParen) = next_token.token_type {} 
-                else {
+                if let TT::Punctuation(PT::RightParen) = next_token.token_type {
+                } else {
                     self.errors.push(self.get_error_marked_line(
-                        ParserErrorType::UnclosedParenthesis, (*next_token).clone()
+                        ParserErrorType::UnclosedParenthesis,
+                        (*next_token).clone(),
                     ));
                     return None;
                 }
 
-                Some(Expression::new_grouping(expr))
-            },
-            _ => { None }
+                Some(Expression {
+                    source_location: crate::frontend::utils::SourceLocation::new_from_start_end(
+                        token.source_location,
+                        next_token.source_location,
+                    ),
+                    expression_type: ExpressionType::Grouping {
+                        expression: Box::new(expr),
+                    },
+                    static_type: crate::frontend::static_type::StaticType::Unknown,
+                })
+            }
+            _ => None,
         };
 
         if result.is_none() {
-            self.errors.push(
-                self.get_error_marked_line(ParserErrorType::IncorrectToken(String::new()), token.clone())
-            );
+            self.errors.push(self.get_error_marked_line(
+                ParserErrorType::IncorrectToken(String::new()),
+                token.clone(),
+            ));
         }
 
         tokens.advance();
@@ -681,24 +903,26 @@ impl Parser<'_> {
             if let Some(token) = token {
                 self.errors.push(self.get_error_marked_line(
                     ParserErrorType::InfiniteLoopDetected,
-                    (*token).clone()
+                    (*token).clone(),
+                ));
+            } else {
+                self.errors.push(ParserError::new_without_token(
+                    ParserErrorType::InfiniteLoopDetected,
                 ));
             }
-            else {
-                self.errors.push(ParserError::new_without_token(ParserErrorType::InfiniteLoopDetected));
-            }
-            
+
             tokens.invalidate();
             return None;
         }
 
         let token = tokens.peek();
-        
+
         if let Some(token) = token {
             Some(token)
-        }
-        else {
-            self.errors.push(ParserError::new_without_token(ParserErrorType::RanOutOfTokens));
+        } else {
+            self.errors.push(ParserError::new_without_token(
+                ParserErrorType::RanOutOfTokens,
+            ));
             None
         }
     }
@@ -709,9 +933,10 @@ impl Parser<'_> {
         let token = tokens.advance();
         if let Some(token) = token {
             Some(token)
-        }
-        else {
-            self.errors.push(ParserError::new_without_token(ParserErrorType::RanOutOfTokens));
+        } else {
+            self.errors.push(ParserError::new_without_token(
+                ParserErrorType::RanOutOfTokens,
+            ));
             None
         }
     }
@@ -741,7 +966,6 @@ impl Parser<'_> {
                 TT::Punctuation(PT::RightBrace) => return,
                 _ => {}
             }
-            
 
             tokens.advance();
         }
@@ -760,7 +984,7 @@ impl Parser<'_> {
     /// Gets a helper string for error displaying with a marker on the second line.
     /// ### Example
     /// This function is used to create a string that looks something like this:
-    /// ```
+    /// ```text
     /// 14. var stuff = (1 + class) * 3
     ///                      ^^^^^
     /// ```
@@ -768,7 +992,10 @@ impl Parser<'_> {
     /// `^` on the second line. The line is parsed from `token` by the `token.line_offset` and
     /// the `token.lexeme_size` string. Line is fetched from `source` string.
     fn get_error_marked_line(&self, error_type: ParserErrorType, token: Token) -> ParserError {
-        let line = self.source.split('\n').nth(token.source_location.line_start - 1);
+        let line = self
+            .source
+            .split('\n')
+            .nth(token.source_location.line_start - 1);
         if line.is_none() {
             unreachable!("Incorrect line provided to get_error_marked_line");
         }
@@ -776,31 +1003,48 @@ impl Parser<'_> {
         let line = line.unwrap();
         let line_number_string = format!("{}. ", token.source_location.line_start);
         let spaces = " ".repeat(line_number_string.len() + token.source_location.start_offset);
-        let lexeme_size = token.source_location.end_offset - token.source_location.start_offset;
+        let lexeme_size = token
+            .source_location
+            .end_offset
+            .saturating_sub(token.source_location.start_offset);
         let marker = "^".repeat(lexeme_size).red();
 
         let location = format!("{line_number_string}{line}\n{spaces}{marker}");
-        ParserError { location: Some(location), error_type, token: Some(token) }
+        ParserError {
+            location: Some(location),
+            error_type,
+            token: Some(token),
+        }
     }
 
     /// Creates a Missing Token error while pointing to the current token in the iterator
-    fn missing_token_error(&self, error_message: &'static str, tokens: &mut TokenIterator) -> ParserError {
-        let current_token = tokens.peek()
-            .expect("No previous token available while reporting error");
-        
-        self.get_error_marked_line(
-            ParserErrorType::MissingToken(String::from(error_message)), (*current_token).clone()
-        )
+    fn missing_token_error(
+        &self,
+        error_message: &'static str,
+        tokens: &mut TokenIterator,
+    ) -> ParserError {
+        let current_token = tokens
+            .peek()
+            .map(|token| (*token).clone())
+            .or_else(|| tokens.previous().cloned());
+        let error_type = ParserErrorType::MissingToken(String::from(error_message));
+        match current_token {
+            Some(token) => self.get_error_marked_line(error_type, token),
+            None => ParserError::new_without_token(error_type),
+        }
     }
-    
+
     /// Creates a Missing Token error while pointing to the previous token in the iterator
-    fn missing_token_error_previous(&self, error_message: &'static str, tokens: &TokenIterator) -> ParserError {
-        let previous_token = tokens.previous()
-            .expect("No previous token available while reporting error");
-        
-        self.get_error_marked_line(
-            ParserErrorType::MissingToken(String::from(error_message)), (*previous_token).clone()
-        )
+    fn missing_token_error_previous(
+        &self,
+        error_message: &'static str,
+        tokens: &TokenIterator,
+    ) -> ParserError {
+        let error_type = ParserErrorType::MissingToken(String::from(error_message));
+        match tokens.previous() {
+            Some(token) => self.get_error_marked_line(error_type, token.clone()),
+            None => ParserError::new_without_token(error_type),
+        }
     }
 
     fn scan(&self) -> Result<Vec<Token>, Vec<ParserError>> {
@@ -818,8 +1062,8 @@ impl Parser<'_> {
 #[derive(Debug)]
 pub struct ParserError {
     error_type: ParserErrorType,
-    token: Option<Token>,
-    location: Option<String>
+    pub token: Option<Token>,
+    location: Option<String>,
 }
 
 impl ParserError {
@@ -827,7 +1071,7 @@ impl ParserError {
         ParserError {
             error_type,
             token: None,
-            location: None
+            location: None,
         }
     }
 }
@@ -837,47 +1081,61 @@ impl Display for ParserError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut is_scanner_error = false;
         let output = match &self.error_type {
-            ParserErrorType::ScannerError(scanner_error) =>
-                { is_scanner_error = true; &format!("{scanner_error}") },
+            ParserErrorType::ScannerError(scanner_error) => {
+                is_scanner_error = true;
+                &format!("{scanner_error}")
+            }
             ParserErrorType::UnclosedParenthesis => "Unclosed parenthesis",
             ParserErrorType::RanOutOfTokens => "No more tokens to parse",
-            ParserErrorType::IncorrectToken(message) => 
-                &format!("Incorrect token in this place. {message}"),
+            ParserErrorType::IncorrectToken(message) => {
+                &format!("Incorrect token in this place. {message}")
+            }
             ParserErrorType::UnfinishedTernary => "Incorrect ternary operator",
             ParserErrorType::BinaryOperatorNoLeftPart => "Binary operator without a left part",
-            ParserErrorType::MissingToken(message) =>
-                &format!("Missing token. {message}"),
+            ParserErrorType::MissingToken(message) => &format!("Missing token. {message}"),
             ParserErrorType::InvalidAssignmentTarget => "Invalid assignment target",
-            ParserErrorType::InvalidDefDeclaration(def_error) =>
-                &format!("{def_error}"),
-            ParserErrorType::InvalidPinRef(pin_ref_error) =>
-                &format!("{pin_ref_error}"),
+            ParserErrorType::InvalidDefDeclaration(def_error) => &format!("{def_error}"),
+            ParserErrorType::InvalidPinRef(pin_ref_error) => &format!("{pin_ref_error}"),
             ParserErrorType::UnclosedDefBlock => "Def block was unclosed (missing '}')",
             ParserErrorType::EmptyDefBlock => "Def block can't be empty",
-            ParserErrorType::DefOrVarAfterSetupOrLoop => "'def' and 'var' statements must go before setup and loop statements",
+            ParserErrorType::DefOrVarAfterSetupOrLoop => {
+                "'def' and 'var' statements must go before setup and loop statements"
+            }
             ParserErrorType::DuplicateSetup => "Can't declare 'setup' more than once",
+            ParserErrorType::SetupAfterLoop => "Declare 'setup' before 'loop'",
             ParserErrorType::DuplicateLoop => "Can't declare 'loop' more than once",
-            ParserErrorType::IncorrectGlobalToken => "This token is invalid here (expected 'def', 'var', 'setup', 'loop')",
+            ParserErrorType::IncorrectGlobalToken => {
+                "This token is invalid here (expected 'def', 'var', 'setup', 'loop')"
+            }
             ParserErrorType::MissingLoopDeclaration => "'loop' must be defined",
-            ParserErrorType::InfiniteLoopDetected => "Parser got stuck in an infinite loop here (internal error)"
+            ParserErrorType::InfiniteLoopDetected => {
+                "Parser got stuck in an infinite loop here (internal error)"
+            }
         };
 
         if is_scanner_error {
             write!(f, "{output}")?;
-        }
-        else {
+        } else {
             write!(f, "{}", output.red())?;
         }
-        
+
         // TODO: Move common error logic somewhere
         if let Some(location) = &self.location {
             // Add tabs to each line of the location so it shifts to the right
-            let location: String = location.split('\n')
+            let location: String = location
+                .split('\n')
                 .fold(String::new(), |mut output, line| {
-                    output += "\t"; output += line; output += "\n";
+                    output += "\t";
+                    output += line;
+                    output += "\n";
                     output
                 });
-            write!(f, "\n\t{}\n{}\n", "Happened here:".green(), location.trim_end())?;
+            write!(
+                f,
+                "\n\t{}\n{}\n",
+                "Happened here:".green(),
+                location.trim_end()
+            )?;
         }
 
         Ok(())
@@ -900,10 +1158,11 @@ pub enum ParserErrorType {
     EmptyDefBlock,
     DefOrVarAfterSetupOrLoop,
     DuplicateSetup,
+    SetupAfterLoop,
     DuplicateLoop,
     IncorrectGlobalToken,
     MissingLoopDeclaration,
-    InfiniteLoopDetected
+    InfiniteLoopDetected,
 }
 
 impl From<ScannerError> for ParserError {

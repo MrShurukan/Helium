@@ -1,0 +1,24 @@
+﻿// Simple LED latch example
+
+def {
+    Button = PortD.2 INPUT;
+    Led    = PortC.5 OUTPUT;
+}
+
+var button_pressed = false;
+
+setup {
+    Led = LOW;
+}
+
+loop {
+    // Button is pressed when it's connected to GND
+    if Button == LOW and !button_pressed {
+        Led = !Led;
+        button_pressed = true;
+    }
+
+    if Button == HIGH {
+        button_pressed = false;
+    }
+}

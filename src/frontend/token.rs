@@ -1,6 +1,6 @@
-﻿use std::fmt;
 use crate::frontend::token_type::TokenType;
 use crate::frontend::utils::{LocatableInSource, SourceLocation};
+use std::fmt;
 
 // TODO: Comment is inaccurate due to migration to source_location
 /// After a character inside the source file, this is the smallest meaningful piece of
@@ -14,7 +14,7 @@ use crate::frontend::utils::{LocatableInSource, SourceLocation};
 #[allow(clippy::struct_field_names)]
 pub struct Token {
     pub token_type: TokenType,
-    pub source_location: SourceLocation
+    pub source_location: SourceLocation,
 }
 
 impl LocatableInSource for Token {
@@ -25,7 +25,10 @@ impl LocatableInSource for Token {
 
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Token {{ type: {:?}, line: {} }}",
-               self.token_type, self.source_location.line_start)
+        write!(
+            f,
+            "Token {{ type: {:?}, line: {} }}",
+            self.token_type, self.source_location.line_start
+        )
     }
 }

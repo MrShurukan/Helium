@@ -1,20 +1,19 @@
-﻿use crate::frontend::token::Token;
+use crate::frontend::token::Token;
 use std::iter::Peekable;
 use std::slice::Iter;
-use colored::Colorize;
 use unicode_segmentation::{Graphemes, UnicodeSegmentation};
 
 /// Helper struct for holding string slice and working with graphemes
 pub struct ReadOnlyGraphemeSlice<'a> {
-    string: &'a str
+    string: &'a str,
 }
 
 impl ReadOnlyGraphemeSlice<'_> {
-    pub fn new(string: &str) -> ReadOnlyGraphemeSlice {
+    pub fn new(string: &str) -> ReadOnlyGraphemeSlice<'_> {
         ReadOnlyGraphemeSlice { string }
     }
 
-    pub fn grapheme_peekable(&self) -> Peekable<Graphemes> {
+    pub fn grapheme_peekable(&self) -> Peekable<Graphemes<'_>> {
         self.string.graphemes(true).peekable()
     }
 
@@ -33,69 +32,52 @@ pub struct TokenIterator<'a> {
     index: usize,
     /// Holds how many times current token was peeked
     pub repeated_peek_count: usize,
-    last_peeked_index: Option<usize>
+    last_peeked_index: Option<usize>,
 }
 
 impl TokenIterator<'_> {
-    pub fn new(tokens: &[Token]) -> TokenIterator {
-        TokenIterator { tokens, iter: tokens.iter().peekable(), index: 0, 
-            last_peeked_index: None, repeated_peek_count: 0 }
+    pub fn new(tokens: &[Token]) -> TokenIterator<'_> {
+        TokenIterator {
+            tokens,
+            iter: tokens.iter().peekable(),
+            index: 0,
+            last_peeked_index: None,
+            repeated_peek_count: 0,
+        }
     }
-    
+
     pub fn advance(&mut self) -> Option<&Token> {
         let next = self.iter.next();
         if next.is_some() {
             self.index += 1;
-            if self.repeated_peek_count != 0 {
-                println!();
-                self.repeated_peek_count = 0;
-            }
-            println!("[TokenIterator] Advancing to {} (read: {:?})", self.index.to_string().yellow(), next);
+            self.repeated_peek_count = 0;
         }
-        
         next
     }
-    
-    pub fn peek(&mut self) -> Option<&&Token> {
-        let peeked = self.iter.peek();
-        
-        if let Some(last_peeked) = self.last_peeked_index {
-            if last_peeked != self.index {
-                if self.repeated_peek_count != 0 {
-                    println!();
-                    self.repeated_peek_count = 0;
-                }
-                println!("[TokenIterator] Peeking at {} (read: {:?})", self.index.to_string().green(), peeked);
-            }
-            else {
-                if self.repeated_peek_count == 0 {
-                    print!("{} {} (1 time)", "[TokenIterator] Repeated peek at".yellow(),
-                           self.index.to_string().green());
-                }
-                else {
-                    print!("\r{} {} ({} times)", "[TokenIterator] Repeated peek at".yellow(),
-                           self.index.to_string().green(), self.repeated_peek_count+1);
-                }
-                self.repeated_peek_count += 1;
-            }
-        }
-        else {
-            println!("[TokenIterator] Peeking at {} (read: {:?})", self.index.to_string().green(), peeked);
-        }
-
-        self.last_peeked_index = Some(self.index);
-        peeked
+    pub fn position(&self) -> usize {
+        self.index
     }
-    
+    pub fn peek(&mut self) -> Option<&&Token> {
+        if self.last_peeked_index == Some(self.index) {
+            self.repeated_peek_count += 1;
+        } else {
+            self.repeated_peek_count = 0;
+        }
+        self.last_peeked_index = Some(self.index);
+        self.iter.peek()
+    }
+
     /// This is the nuke button. If called token iterator will march until the end, effectively
     /// running out of tokens immediately. Useful as a "get-me-out-of-parser" measure (i.e. infinite
     /// loop detection)
     pub fn invalidate(&mut self) {
-        while let Some(_) = self.iter.next() {}
+        for _ in self.iter.by_ref() {}
     }
-    
+
     pub fn previous(&self) -> Option<&Token> {
-        self.tokens.get(self.index - 1)
+        self.index
+            .checked_sub(1)
+            .and_then(|index| self.tokens.get(index))
     }
 }
 
@@ -113,7 +95,7 @@ pub struct SourceLocation {
     /// Offset in grapheme count from the start of the first line
     pub start_offset: usize,
     /// Offset in grapheme count from the start of the last line
-    pub end_offset: usize
+    pub end_offset: usize,
 }
 
 impl SourceLocation {
