@@ -78,7 +78,9 @@ fn missing_source_location_and_multiline_spans_render_without_panics() {
     );
 
     let error = Diagnostic::new(
-        DiagnosticKind::ExpressionLowering,
+        DiagnosticKind::TypedIrUnsupported {
+            feature: "test".into(),
+        },
         Some(SourceLocation {
             line_start: 1,
             line_end: 2,
@@ -93,18 +95,18 @@ fn missing_source_location_and_multiline_spans_render_without_panics() {
 
 #[test]
 fn support_errors_use_the_same_renderer() {
-    let source = "loop { var x=1; }";
+    let source = "loop { var x:f32=1.5; }";
     let errors = check(source, "atmega328p").unwrap_err();
     assert!(matches!(
         errors[0].kind.as_ref(),
-        DiagnosticKind::StorageLowering
+        DiagnosticKind::UnsupportedType { .. }
     ));
     assert!(errors[0]
         .render(source)
         .starts_with("error[E_UNSUPPORTED]: "));
     assert!(errors[0]
         .render(source)
-        .contains("   1 | loop { var x=1; }"));
+        .contains("   1 | loop { var x:f32=1.5; }"));
 }
 
 #[test]

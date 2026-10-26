@@ -1,103 +1,110 @@
 # Helium
 
 Helium is a small, statically typed language for AVR microcontrollers, implemented in Rust.
-The current executable target is **ATmega328P**. This is an experimental compiler: the parser
-and type checker intentionally recognize more of the language than the AVR backend supports.
-See [the support matrix](docs/SUPPORT.md) before using a feature.
+The current executable target is **ATmega328P**. LLVM is the only machine backend.
+See [supported language features](docs/SUPPORT.md) before using a feature.
 
 ## Build and test
 
-Install a stable Rust toolchain using rustup. On Windows, the GNU toolchain is sufficient for
-this project; the MSVC toolchain additionally requires the Microsoft linker/SDK.
-AVRA 1.4.2 is required for legacy HEX files. AVRDUDE is required only for explicit flashing.
-Both external executables must be on PATH.
+Install stable Rust. On Windows this project works with the GNU toolchain;
+MSVC additionally needs the Microsoft linker/SDK.
 
 ```text
 cargo build --locked
 cargo test --locked
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --test cli -- --ignored
 ```
 
-The final command runs the AVRA integration tests. These tests never flash hardware.
-Ordinary tests do not require AVRA, AVRDUDE or a connected board.
-The current development environment was verified with Rust 1.99.1 (Windows GNU) and AVRA 1.4.2.
+Ordinary tests require no external compiler or connected board. Machine output requires
+LLVM with AVR support and the AVR GNU toolchain. On Windows:
+
+```powershell
+./tools/setup-toolchain.ps1
+. ./tools/activate-toolchain.ps1
+cargo test --locked -- --include-ignored
+cargo test --locked --release -- --include-ignored
+```
+
+The setup script installs pinned tools under `build/toolchain/`. Machine execution tests
+also require Node.js and AVR8js. Tests never flash hardware. AVRA is no longer a dependency.
+See [toolchain setup and measurements](docs/LLVM_PROTOTYPE.md).
 
 ## Commands
 
 ```text
-cargo run --locked -- check goal.he --mcu atmega328p
-cargo run --locked -- build goal.he --mcu atmega328p
-cargo run --locked -- build goal.he --mcu atmega328p --emit asm
-cargo run --locked -- build goal.he --mcu atmega328p --emit ir
-cargo run --locked -- build examples/typed-ir.he --mcu atmega328p --emit ir --verify-ir --optimize-ir
-cargo run --locked -- build goal.he --mcu atmega328p --emit legacy-ir
-cargo run --locked -- build goal.he --mcu atmega328p --emit ast
+cargo run --locked -- check examples/functions-latch.he --mcu atmega328p
+cargo run --locked -- build examples/functions-latch.he --mcu atmega328p --opt size
+cargo run --locked -- build examples/functions-latch.he --mcu atmega328p --emit llvm
+cargo run --locked -- build examples/functions-latch.he --mcu atmega328p --emit asm
+cargo run --locked -- build examples/functions-latch.he --mcu atmega328p --emit elf
+cargo run --locked -- build examples/functions-latch.he --mcu atmega328p --emit ir --verify-ir --optimize-ir
+cargo run --locked -- build examples/functions-latch.he --mcu atmega328p --emit ast
 ```
 
-`check` checks syntax, types and the implemented AVR subset without invoking an external tool.
-`build` defaults to HEX and invokes AVRA; it **does not flash**.
-`--emit asm`, `ir`, `legacy-ir` and `ast` require only Helium.
-AST output includes inferred types. `ir` is the new typed, block-based Helium IR v1;
-`legacy-ir` retains the old inspection representation. Neither promises AVR support for the source.
-The library API `compile_typed_ir` emits v1; `compile_ir` remains the legacy API for compatibility.
+`check` validates the executable subset without launching external tools. It does not
+validate the installed toolchain or replace a full build. `build` defaults to HEX and
+**does not flash**. There is no backend selection option.
 
-`--verify-ir` enables the full IR verifier. Verification defaults to on in debug builds and off
-in release builds; source-language checks remain active in both. `--optimize-ir` applies three
-conservative passes to typed IR output only and requires `--emit ir`. It does not change AVR code.
-The existing AVR generator remains the default. An optional LLVM AVR backend now supports
-8/16-bit integer storage, arithmetic, control flow and GPIO through to ELF/HEX.
-Use `--backend llvm --opt none|speed|size`; `--emit llvm` produces textual LLVM IR without tools.
-See [LLVM setup, tests and measured results](docs/LLVM_PROTOTYPE.md) for the pinned Windows toolchain.
-See [the IR v1 contract](docs/IR_V1.md) for semantics, coverage and the test interpreter.
+`ast`, `ir` and `llvm` output require only Helium; `llvm` uses the `.ll` extension.
+`asm`, `elf` and `hex` invoke external tools. Assembly uses GNU/LLVM AVR syntax.
+The library exposes `analyze`, `compile_typed_ir`, `compile_llvm` and `check`.
 
-Source-level functions use `fn name(parameter:type):return_type { return value; }`.
-Omit the result type for a procedure. Calls may precede declarations; parameters are passed by value.
-Recursion and shadowing remain forbidden. Functions require typed IR or the LLVM backend.
-See [the function contract and examples](docs/FUNCTIONS.md).
+`--verify-ir` enables internal IR verification (on by default in debug, off in release).
+Source validation is always enabled. `--optimize-ir` runs experimental Helium passes
+on `--emit ir` only. `--opt none|speed|size` controls machine optimization through LLVM.
+AST/Helium IR inspection can accept features outside the current machine subset.
 
-Compiler diagnostics share one format across scanning, parsing, type checking and AVR support
-checks. Use `--color auto|always|never` (default `auto`) to control coloring; automatic color
-is disabled when stderr is redirected or `NO_COLOR` is set. Library diagnostics are plain
-unless the caller explicitly requests color. Messages are English for now; Russian translation
-and language selection are planned, with structured error kinds prepared for that work.
+Outputs default to `build/` beside the source; `-o path/to/output.hex` selects another path.
+Machine builds retain intermediate artifacts in a unique directory reported by the command.
+Failed external stages do not replace an existing destination firmware.
 
-By default outputs go into `build/` beside the source file, regardless of the current working directory.
-Use `-o path/to/result.asm` (or `.hex`, `.ir`, `.ast`) to choose a file explicitly.
-ATmega328P definitions are embedded in the compiler and assembly output, so neither execution
-nor assembling the resulting `.asm` depends on finding `assembly_includes/` at runtime.
-A HEX build retains the assembly file and may also create AVRA object/EEPROM sidecar files.
-
-Flashing is a separate, explicit command:
+## Language and diagnostics
 
 ```text
-cargo run --locked -- flash build/goal.hex --mcu atmega328p --programmer usbasp
+fn add(left:u8, right:u8):u8 {
+    return left + right;
+}
 ```
 
-The programmer must be supplied. Flashing was not tested against physical hardware during this iteration.
-The old positional command (`helium file.he atmega328p`) is replaced by these commands.
+Calls may precede declarations. Parameters are mutable local copies. Omit the result
+type for procedures. Recursion and shadowing are forbidden. Global initializer calls
+remain unsupported; use setup for runtime calls. See [the function contract](docs/FUNCTIONS.md).
 
-## Current example
+Diagnostics contain exact primary locations and semantic related labels. Missing-return
+errors identify fallthrough paths; type errors can reference the declaration that required
+the type; name conflicts show the first declaration. The CLI prints file/line/column,
+source excerpts and `--color auto|always|never` controls color. Auto respects `NO_COLOR`.
 
-`goal.he` and `test.he` demonstrate reading a button and driving an LED.
-The integration test verifies that `goal.he` assembles to **40 bytes of code** and validates the Intel HEX checksums.
-This is a regression baseline for this example, not a general size comparison with other languages.
+Messages are currently English. Russian translation and an LSP server are future work.
+Structured diagnostics and checked file/byte ranges prepare for editor integration without
+requiring an editor to parse terminal output. See [diagnostic contract and audit](docs/DIAGNOSTICS.md).
 
-The unfinished latch example from the old WIP commit is retained in
-[examples/planned/latch.he](examples/planned/latch.he). It passes language analysis but is deliberately
-rejected by the legacy AVR support check. Its constructs are supported by the LLVM prototype;
-physical hardware behavior has not been validated.
+## Hardware examples
+
+[Latch with functions](examples/functions-latch.he) uses D2 to GND, INPUT_PULLUP and the
+Nano's built-in D13 LED. It has no debounce yet. The user confirmed an earlier latch works
+on Nano; newly generated firmware still needs its own hardware validation.
+[Temperature hysteresis](examples/functions-thermostat.he) uses synthetic temperatures.
+
+Flashing is separate and explicit; AVRDUDE is required only for this operation:
+
+```text
+cargo run --locked -- flash build/firmware.hex --mcu atmega328p --programmer usbasp
+```
+
+USB bootloader uploads may need board-specific port and baud settings in AVRDUDE directly.
 
 ## Development
 
-- [Language and backend support](docs/SUPPORT.md)
-- [Architecture and iteration-one review](docs/ITERATION_1.md)
-- [Typed IR v1 contract and implementation](docs/IR_V1.md)
-- [LLVM AVR prototype, installation and measurements](docs/LLVM_PROTOTYPE.md)
-- [Functions, returns and call semantics](docs/FUNCTIONS.md)
+- [Support and semantic rules](docs/SUPPORT.md)
+- [Typed IR contract](docs/IR_V1.md)
+- [LLVM toolchain and historical measurements](docs/LLVM_PROTOTYPE.md)
+- [Function contract](docs/FUNCTIONS.md)
+- [Diagnostics and audit](docs/DIAGNOSTICS.md)
 - [Grammar](grammar.txt)
+- [Historical first iteration](docs/ITERATION_1.md)
 
-The next end-to-end application is temperature control for one or two brewing tanks:
-addressed Dallas temperature sensors, an encoder/menu, an LCD, two indicator outputs and UART diagnostics.
-Exact sensor and LCD interfaces will be selected before implementing drivers.
+Next application: temperature control for one or two brewing tanks, addressed Dallas
+sensors, encoder/menu, LCD, outputs and UART. Wider integer machine support is a separate
+iteration; it is not included in the backend removal and diagnostics work.

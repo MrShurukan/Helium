@@ -159,7 +159,6 @@ impl Parser<'_> {
     /// passing it to back-end (which will convert it to assembly language).
     ///
     /// This is parsed according to rules in `grammar.txt` (root of the repo)
-    // TODO: A lot of things like blocks if unclosed will return an error to EOF with 'Incorrect token in this place'
     pub fn parse(self) -> Result<Vec<Statement>, Vec<ParserError>> {
         let tokens = self.scan()?;
         let mut tokens = TokenIterator::new(tokens.as_slice());
@@ -173,6 +172,8 @@ impl Parser<'_> {
     ) -> Result<Vec<Statement>, Vec<ParserError>> {
         let mut statements: Vec<Statement> = Vec::new();
 
+        let mut setup_location = None;
+        let mut loop_location = None;
         let mut already_read_setup = false;
         let mut already_read_loop = false;
 
@@ -220,11 +221,12 @@ impl Parser<'_> {
                             // Read the setup anyway, but discard the result
                             _ = self.setup_declaration(tokens);
                             self.errors.push(self.get_error_marked_line(
-                                ParserErrorType::DuplicateSetup,
+                                ParserErrorType::DuplicateSetup(setup_location.unwrap()),
                                 token.clone(),
                             ));
                             None
                         } else {
+                            setup_location = Some(token.source_location);
                             already_read_setup = true;
                             self.setup_declaration(tokens)
                         }
@@ -234,11 +236,13 @@ impl Parser<'_> {
                             let token = token.clone();
                             // Read the loop anyway, but discard the result
                             _ = self.loop_declaration(tokens);
-                            self.errors.push(
-                                self.get_error_marked_line(ParserErrorType::DuplicateLoop, token),
-                            );
+                            self.errors.push(self.get_error_marked_line(
+                                ParserErrorType::DuplicateLoop(loop_location.unwrap()),
+                                token,
+                            ));
                             None
                         } else {
+                            loop_location = Some(token.source_location);
                             already_read_loop = true;
                             self.loop_declaration(tokens)
                         }
@@ -316,6 +320,7 @@ impl Parser<'_> {
                     unreachable!()
                 };
                 parameters.push(Parameter {
+                    type_location: kind.source_location,
                     identifier,
                     static_type: *static_type,
                     source_location: name.source_location,
@@ -333,10 +338,12 @@ impl Parser<'_> {
             "Expected ')' after parameters"
         );
 
+        let mut return_location = None;
         let return_type = if matches!(self.peek(tokens)?.token_type, TT::Punctuation(PT::Colon)) {
             tokens.advance();
             let kind =
                 check_and_consume!(self, tokens, TT::Type(_), "Expected return type").clone();
+            return_location = Some(kind.source_location);
             let TT::Type(kind) = kind.token_type else {
                 unreachable!()
             };
@@ -360,6 +367,8 @@ impl Parser<'_> {
                 block.source_location,
             ),
             statement_type: StatementType::FunctionDeclaration {
+                name_location: name.source_location,
+                return_location,
                 identifier,
                 parameters,
                 return_type,
@@ -551,7 +560,12 @@ impl Parser<'_> {
             TT::Punctuation(PT::Equal),
             "Expected '=' after an identifier in a def statement"
         );
+        let pin_start = self.peek(tokens)?.source_location;
         let pin_ref = self.pin_ref(tokens)?;
+        let pin_location = crate::frontend::utils::SourceLocation::new_from_start_end(
+            pin_start,
+            tokens.previous()?.source_location,
+        );
         let pin_mode = check_and_consume!(
             self,
             tokens,
@@ -566,7 +580,7 @@ impl Parser<'_> {
             "Expected ';' after a def statement"
         );
 
-        SingleDefDeclaration::new(identifier, pin_ref, pin_mode)
+        SingleDefDeclaration::new(identifier, pin_ref, pin_mode, pin_location)
             .map_err(|err| self.errors.push(self.convert_def_error(err)))
             .ok()
     }
@@ -748,6 +762,13 @@ impl Parser<'_> {
                 Some(Token { token_type: TT::Punctuation(PT::RightBrace), .. }) |
                 // Hitting the end of tokens counts too
                 None => { break; }
+                Some(token) if matches!(token.token_type, TT::Eof) => {
+                    let eof = token.clone();
+                    self.errors.push(self.get_error_marked_line(
+                        ParserErrorType::UnclosedBlock(left_brace.source_location), eof,
+                    ));
+                    return None;
+                }
                 // Anything else should be parsed by self.declaration
                 Some(_) => {}
             }
@@ -1219,10 +1240,34 @@ impl Display for ParserError {
 
 impl From<ParserError> for crate::diagnostic::Diagnostic {
     fn from(error: ParserError) -> Self {
-        Self::new(
-            crate::diagnostic::DiagnosticKind::Parse(error.error_type),
-            error.location,
-        )
+        let opening = if let ParserErrorType::UnclosedBlock(span) = &error.error_type {
+            Some(*span)
+        } else {
+            None
+        };
+        let previous = match &error.error_type {
+            ParserErrorType::DuplicateSetup(span) | ParserErrorType::DuplicateLoop(span) => {
+                Some(*span)
+            }
+            _ => None,
+        };
+        let internal = matches!(error.error_type, ParserErrorType::InfiniteLoopDetected);
+        let kind = if internal {
+            crate::diagnostic::DiagnosticKind::InvalidIr {
+                stage: "parsing",
+                detail: error.error_type.to_string(),
+            }
+        } else {
+            crate::diagnostic::DiagnosticKind::Parse(error.error_type)
+        };
+        let diagnostic = Self::new(kind, error.location);
+        if let Some(span) = opening {
+            diagnostic.with_label(span, crate::diagnostic::LabelKind::OpeningDelimiter)
+        } else if let Some(span) = previous {
+            diagnostic.with_label(span, crate::diagnostic::LabelKind::PreviousDeclaration)
+        } else {
+            diagnostic
+        }
     }
 }
 
@@ -1230,15 +1275,20 @@ impl Display for ParserErrorType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let output = match self {
             ParserErrorType::ScannerError(scanner_error) => &format!("{scanner_error}"),
+            ParserErrorType::UnclosedBlock(_) => "Expected closing '}' for this block",
             ParserErrorType::UnclosedParenthesis => "Unclosed parenthesis",
-            ParserErrorType::RanOutOfTokens => "No more tokens to parse",
+            ParserErrorType::RanOutOfTokens => {
+                "Unexpected end of source; finish the current declaration or expression"
+            }
             ParserErrorType::IncorrectToken(message) if message.is_empty() => {
                 "Incorrect token in this place."
             }
             ParserErrorType::IncorrectToken(message) => {
                 &format!("Incorrect token in this place. {message}")
             }
-            ParserErrorType::UnfinishedTernary => "Incorrect ternary operator",
+            ParserErrorType::UnfinishedTernary => {
+                "Expected an expression, then ':' and an alternative after '?'"
+            }
             ParserErrorType::BinaryOperatorNoLeftPart => "Binary operator without a left part",
             ParserErrorType::MissingToken(message) => &format!("Missing token. {message}"),
             ParserErrorType::InvalidAssignmentTarget => "Invalid assignment target",
@@ -1249,9 +1299,9 @@ impl Display for ParserErrorType {
             ParserErrorType::DefOrVarAfterSetupOrLoop => {
                 "'def' and 'var' statements must go before setup and loop statements"
             }
-            ParserErrorType::DuplicateSetup => "Can't declare 'setup' more than once",
+            ParserErrorType::DuplicateSetup(_) => "Can't declare 'setup' more than once",
             ParserErrorType::SetupAfterLoop => "Declare 'setup' before 'loop'",
-            ParserErrorType::DuplicateLoop => "Can't declare 'loop' more than once",
+            ParserErrorType::DuplicateLoop(_) => "Can't declare 'loop' more than once",
             ParserErrorType::IncorrectGlobalToken => {
                 "This token is invalid here (expected 'fn', 'def', 'var', 'setup', 'loop')"
             }
@@ -1269,6 +1319,7 @@ impl Display for ParserErrorType {
 pub enum ParserErrorType {
     ScannerError(ScannerError),
     UnclosedParenthesis,
+    UnclosedBlock(crate::frontend::utils::SourceLocation),
     RanOutOfTokens,
     IncorrectToken(String),
     UnfinishedTernary,
@@ -1280,9 +1331,9 @@ pub enum ParserErrorType {
     UnclosedDefBlock,
     EmptyDefBlock,
     DefOrVarAfterSetupOrLoop,
-    DuplicateSetup,
+    DuplicateSetup(crate::frontend::utils::SourceLocation),
     SetupAfterLoop,
-    DuplicateLoop,
+    DuplicateLoop(crate::frontend::utils::SourceLocation),
     IncorrectGlobalToken,
     MissingLoopDeclaration,
     InfiniteLoopDetected,

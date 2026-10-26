@@ -2,12 +2,10 @@
 pub struct Microcontroller {
     pub name: &'static str,
     pub avr_dude_name: &'static str,
-    pub definitions: &'static str,
 }
 pub const ATMEGA328P: Microcontroller = Microcontroller {
     name: "atmega328p",
     avr_dude_name: "m328p",
-    definitions: include_str!("../../assembly_includes/m328Pdef.inc"),
 };
 pub fn get(name: &str) -> Option<&'static Microcontroller> {
     match name {

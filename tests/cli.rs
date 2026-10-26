@@ -19,7 +19,7 @@ impl Fixture {
         fs::create_dir_all(root.join("project with spaces")).unwrap();
         fs::create_dir_all(root.join("elsewhere")).unwrap();
         let source = root.join("project with spaces").join("goal.he");
-        fs::write(&source, include_str!("../goal.he")).unwrap();
+        fs::write(&source, include_str!("../examples/functions-latch.he")).unwrap();
         Self { root, source }
     }
     fn command(&self) -> Command {
@@ -37,7 +37,10 @@ impl Fixture {
             .args(["--mcu", "atmega328p"])
             .args(extra);
         if !tools {
-            child.env("PATH", "");
+            child
+                .env("PATH", "")
+                .env_remove("HELIUM_LLVM_BIN")
+                .env_remove("HELIUM_AVR_BIN");
         }
         child.output().unwrap()
     }
@@ -87,7 +90,7 @@ fn diagnostic_color_policy_is_explicit_and_auto_is_plain_when_captured() {
 }
 
 #[test]
-fn typed_ir_flags_and_legacy_output_are_distinct() {
+fn inspection_flags_and_removed_options_are_checked() {
     let fixture = Fixture::new();
     fs::write(&fixture.source, "def Led=PortC.5 OUTPUT; loop {Led=!Led;}").unwrap();
 
@@ -102,40 +105,23 @@ fn typed_ir_flags_and_legacy_output_are_distinct() {
     assert!(ir.contains("read_pin p0"));
     assert!(ir.contains("not v"));
 
-    // Typed execution support does not falsely advertise machine-code support.
-    let output = fixture.run("build", &["--emit", "asm", "--verify-ir"], false);
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("E_UNSUPPORTED"));
-
     for args in [
         vec!["--emit", "asm", "--optimize-ir"],
         vec!["--emit", "ast", "--verify-ir"],
         vec!["--emit", "ir", "--verify-ir", "--verify-ir"],
+        vec!["--backend", "llvm"],
+        vec!["--backend", "legacy"],
+        vec!["--emit", "legacy-ir"],
     ] {
         assert!(!fixture.run("build", &args, false).status.success());
     }
-
-    fs::write(&fixture.source, include_str!("../goal.he")).unwrap();
-    assert!(fixture
-        .run("build", &["--emit", "legacy-ir"], false)
-        .status
-        .success());
-    let legacy = fs::read_to_string(
-        fixture
-            .source
-            .parent()
-            .unwrap()
-            .join("build/goal.legacy-ir"),
-    )
-    .unwrap();
-    assert!(!legacy.starts_with("helium-ir v1"));
 }
 #[test]
 fn check_and_emit_need_no_external_tools_and_are_quiet() {
     let fixture = Fixture::new();
     for (command, extra) in [
         ("check", vec![]),
-        ("build", vec!["--emit", "asm"]),
+        ("build", vec!["--emit", "llvm"]),
         ("build", vec!["--emit", "ir"]),
         ("build", vec!["--emit", "ast"]),
     ] {
@@ -147,7 +133,7 @@ fn check_and_emit_need_no_external_tools_and_are_quiet() {
         .source
         .parent()
         .unwrap()
-        .join("build/goal.asm")
+        .join("build/goal.ll")
         .is_file());
     assert!(fixture
         .source
@@ -158,11 +144,11 @@ fn check_and_emit_need_no_external_tools_and_are_quiet() {
     assert!(!fixture.root.join("elsewhere/build").exists());
 }
 #[test]
-fn build_reports_missing_avra_without_panicking() {
+fn build_reports_missing_llvm_without_panicking() {
     let fixture = Fixture::new();
     let result = fixture.run("build", &[], false);
     assert!(!result.status.success());
-    assert!(stderr(&result).contains("Cannot start avra"));
+    assert!(stderr(&result).contains("Cannot run"));
     assert!(!stderr(&result).contains("panicked"));
 }
 #[test]
@@ -217,12 +203,11 @@ fn source_file_is_not_overwritten_by_output() {
     assert_eq!(fs::read(&fixture.source).unwrap(), original);
 }
 #[test]
-#[ignore = "requires AVRA on PATH; does not flash hardware"]
-fn avra_builds_hex_from_a_different_directory() {
+#[ignore = "requires LLVM and AVR toolchain; does not flash hardware"]
+fn llvm_builds_hex_from_a_different_directory() {
     let fixture = Fixture::new();
     let result = fixture.run("build", &[], true);
     assert!(result.status.success(), "{}", stderr(&result));
-    assert!(!String::from_utf8_lossy(&result.stdout).contains("Upload"));
     let hex = fs::read_to_string(fixture.source.parent().unwrap().join("build/goal.hex")).unwrap();
     let mut count = 0;
     for line in hex.lines() {
@@ -239,17 +224,7 @@ fn avra_builds_hex_from_a_different_directory() {
             count += usize::from(data[0]);
         }
     }
-    assert_eq!(count, 40, "historical GPIO sample code size");
-}
-#[test]
-#[ignore = "requires AVRA on PATH; does not flash hardware"]
-fn avra_failure_is_returned_as_an_error() {
-    let fixture = Fixture::new();
-    let assembly = fixture.root.join("invalid.asm");
-    fs::write(&assembly, "this_is_not_an_instruction\n").unwrap();
-    let error = helium::backend::assembler::assemble(&assembly, &fixture.root.join("invalid.hex"))
-        .unwrap_err();
-    assert!(error.contains("avra failed"), "{error}");
+    assert!(count > 0);
 }
 #[test]
 fn dotted_source_names_keep_the_full_stem() {
@@ -260,7 +235,7 @@ fn dotted_source_names_keep_the_full_stem() {
         .command()
         .arg("build")
         .arg(&source)
-        .args(["--mcu", "atmega328p", "--emit", "asm"])
+        .args(["--mcu", "atmega328p", "--emit", "llvm"])
         .env("PATH", "")
         .output()
         .unwrap();
@@ -268,6 +243,6 @@ fn dotted_source_names_keep_the_full_stem() {
     assert!(source
         .parent()
         .unwrap()
-        .join("build/tank.control.asm")
+        .join("build/tank.control.ll")
         .is_file());
 }

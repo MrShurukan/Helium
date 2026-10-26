@@ -1,7 +1,7 @@
 # Функции Helium
 
 Реализован путь `fn` → AST → Helium IR → LLVM AVR → HEX.
-Legacy backend сохраняет прежнее подмножество и явно отклоняет функции.
+LLVM — единственный backend машинного кода.
 
 ```text
 fn add(left:u8, right:u8):u8 {
@@ -82,14 +82,14 @@ ISR, публичный C ABI и FFI остаются вне этой итера
 ```powershell
 . ./tools/activate-toolchain.ps1
 cargo build --locked --release
-./target/release/helium.exe check examples/functions-latch.he --mcu atmega328p --backend llvm
-./target/release/helium.exe build examples/functions-latch.he --mcu atmega328p --backend llvm --opt size -o build/functions-latch.hex
+./target/release/helium.exe check examples/functions-latch.he --mcu atmega328p
+./target/release/helium.exe build examples/functions-latch.he --mcu atmega328p --opt size -o build/functions-latch.hex
 ```
 
 Эти команды не прошивают плату. Пользователь подтвердил работу прежнего latch на Nano;
 новый вариант с функциями пока прошёл эмулятор и требует отдельного аппаратного прогона.
 
-Проверены **72 теста в debug и release**, включая **45 сборок HEX и запусков AVR8js на профиль**.
+В итерации добавления функций были проверены **72 теста в debug и release**, включая **45 сборок HEX и запусков AVR8js на профиль**.
 Новые тесты покрывают forward calls, изменяемые копии параметров, расширение результатов,
 ранние возвраты, порядок эффектов, рекурсию, ошибочные сигнатуры и обрезанные префиксы программы.
 Семантика проверяется до и после экспериментальных оптимизаций Helium IR.
@@ -103,5 +103,5 @@ GPIO-эффекты и DDR сравниваются с интерпретато�
 Это максимум конкретного выполнения с тестовым noinline, не гарантия для произвольной прошивки.
 
 Полный прогон: `cargo test --locked -- --include-ignored`, затем то же с `--release`.
-Внешние тесты требуют активированного LLVM/AVR toolchain, Node/AVR8js и AVRA в PATH.
-Обычный `cargo test` оставляет четыре внешних теста явно пропущенными.
+Внешние тесты требуют активированного LLVM/AVR toolchain, Node/AVR8js.
+Обычный `cargo test` оставляет три внешних теста явно пропущенными.

@@ -5,7 +5,11 @@ impl DiagnosticKind {
     pub fn message(&self) -> String {
         match self {
             Self::NotCallable { name } => format!("'{name}' is not a function"),
-            Self::ArgumentCount { name, expected, actual } => {
+            Self::ArgumentCount {
+                name,
+                expected,
+                actual,
+            } => {
                 format!("Function '{name}' expects {expected} arguments, but received {actual}")
             }
             Self::ProcedureValue { name } => {
@@ -15,11 +19,14 @@ impl DiagnosticKind {
                 format!("Function '{name}' cannot be used as a value; call it with parentheses")
             }
             Self::GlobalInitializerCall => {
-                "Function calls are not allowed in global initializers; move the call to setup".into()
+                "Function calls are not allowed in global initializers; move the call to setup"
+                    .into()
             }
             Self::ReturnOutsideFunction => "'return' is only allowed inside a function".into(),
             Self::MissingReturn { name } => {
-                format!("Function '{name}' must return a value on every path; add an explicit return")
+                format!(
+                    "Function '{name}' must return a value on every path; add an explicit return"
+                )
             }
             Self::ReturnValueRequired { target } => {
                 format!("This function must return a value of type {target}")
@@ -31,14 +38,19 @@ impl DiagnosticKind {
                 format!("Recursion is not supported: {}", chain.join(" -> "))
             }
             Self::FunctionSignatureType { ty } => {
-                format!("Function signatures currently support integers, bool and PinState, not {ty}")
+                format!(
+                    "Function signatures currently support integers, bool and PinState, not {ty}"
+                )
             }
-            Self::FunctionsLowering => {
-                "Functions and calls require the LLVM backend or typed IR; the legacy backend does not support them".into()
+            Self::UnsupportedType { ty, machine } => {
+                if *machine {
+                    format!("Machine code for {ty} is not implemented yet; supported integer widths are 8 and 16 bits")
+                } else {
+                    format!("Values of type {ty} are not implemented yet")
+                }
             }
-            Self::LlvmUnsupported { detail } => format!("LLVM backend: {detail}"),
             Self::TypedIrUnsupported { feature } => {
-                format!("Typed IR v1 does not support {feature}")
+                format!("Not implemented: {feature}")
             }
             Self::InvalidIr { stage, detail } => {
                 format!("IR validation failed after {stage}: {detail}")
@@ -88,34 +100,39 @@ impl DiagnosticKind {
             }
             Self::DuplicatePin => "The same physical pin is declared more than once".into(),
             Self::PullDown => "ATmega328P has no internal input pull-down resistor".into(),
+        }
+    }
+}
 
-            Self::PullUpLowering => "INPUT_PULLUP code generation is not implemented yet".into(),
-            Self::ConditionLowering => {
-                "AVR conditions currently require a pin == HIGH/LOW comparison; \
-                 boolean operators (short-circuit), ! and other conditions are not lowered yet"
-                    .into()
+impl super::LabelKind {
+    pub fn message(&self) -> String {
+        match self {
+            Self::OpeningDelimiter => "block opened here".into(),
+            Self::PreviousDeclaration => "first declared here".into(),
+            Self::ExpectedType(ty) => format!("expected type {ty} comes from here"),
+            Self::OperandType(ty) => format!("this expression has type {ty}"),
+            Self::FunctionDeclaration => "function declared here".into(),
+            Self::Fallthrough => "this path reaches the end without returning a value".into(),
+            Self::FalseBranch => {
+                "when this condition is false, execution can reach the end without a return".into()
             }
-            Self::PinAssignmentLowering => {
-                "AVR currently supports pin assignments of constant HIGH/LOW or INPUT/OUTPUT; \
-                 !Pin is typed but its single-read inversion is not lowered yet"
-                    .into()
+            Self::LoopMayNotRun => {
+                "this loop may execute zero times; a return inside it is not sufficient".into()
             }
-            Self::StorageLowering => "Variable storage is not implemented by the AVR backend yet; \
-                 use --emit ir to inspect typed IR"
-                .into(),
-            Self::LoopLowering => "Loop code generation is not implemented yet \
-                 (the top-level loop block is supported)"
-                .into(),
-            Self::PullResistorLowering => "Pull resistor configuration is not implemented".into(),
-            Self::StatementLowering => {
-                "This statement is not supported by the legacy IR yet".into()
-            }
-            Self::ExpressionLowering => {
-                "This expression is not supported by the legacy IR yet".into()
-            }
-            Self::RegisterLowering => "Instruction requires general register/storage lowering, \
-                 which is not implemented yet"
-                .into(),
+            Self::RecursiveCall => "this call participates in the recursion cycle".into(),
+        }
+    }
+}
+
+impl DiagnosticKind {
+    /// Advice is presentation, not an automatic source edit.
+    pub fn help(&self) -> Option<&'static str> {
+        match self {
+            Self::MissingReturn { .. } => Some("Return a value on each highlighted path, or add a common return after the conditional."),
+            Self::UnsupportedType { machine: true, .. } => Some("Use an explicit 8/16-bit type only if it can represent all required values; wider machine integers are planned separately."),
+            Self::GlobalInitializerCall => Some("Initialize the variable in setup. Startup ordering across libraries is not defined yet; the compiler does not move calls automatically."),
+            Self::PullDown => Some("Use an external pull-down resistor, or INPUT_PULLUP with inverted input logic."),
+            _ => None,
         }
     }
 }

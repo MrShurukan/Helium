@@ -1,86 +1,48 @@
-# Language and backend support
+# Language support
 
-There are five distinct boundaries:
+LLVM is the only machine backend. No `--backend` or `--emit legacy-ir` option exists.
+AVRA, the old linear IR and hand-written AVR assembly generation have been removed.
 
-1. `analyze(source)` parses and checks the language, producing typed AST or diagnostics.
-2. `compile_typed_ir(source, mcu, options)` constructs **Helium IR v1** for inspection and interpreted tests.
-3. `compile_ir(source, mcu)` preserves the narrower **legacy untyped** inspection API.
-4. `check` / `compile_assembly` require the implemented AVR subset. HEX builds additionally run AVRA.
-5. `--backend llvm` checks/emits the LLVM AVR subset; ELF/HEX use LLVM and AVR GNU tools.
-
-`--emit ir` selects typed IR; `--emit legacy-ir` selects legacy inspection output.
-The table below describes the older language/legacy/AVR boundaries. Typed IR v1 adds executable
-integer/bool storage, add/subtract/multiply/negate, comparisons, ternary, while, short-circuit logic,
-pin inversion and INPUT_PULLUP. Integer widths 8/16/32/64 are modeled and interpreted.
-Function signatures/calls/returns are supported in source syntax and typed IR.
-For ranges, division, shifts, float, strings and computed PinMode values remain unsupported.
-See [IR_V1.md](IR_V1.md) for the complete contract and verifier policy.
-The optional LLVM backend implements this subset through machine code for 8/16-bit integers,
-bool and PinState, including storage, while, short-circuit logic, ternary, inversion and INPUT_PULLUP.
-Source-level functions and IR calls/results are covered by machine tests; see [FUNCTIONS.md](FUNCTIONS.md).
-See [LLVM_PROTOTYPE.md](LLVM_PROTOTYPE.md) for exact boundaries and validation.
-
-| Feature | Language analysis | Legacy IR inspection | Legacy AVR assembly / HEX |
+| Feature | Analysis | Helium IR / interpreter | LLVM machine output |
 | --- | --- | --- | --- |
-| Multiple `def` declarations | Yes | Yes | Yes |
-| INPUT / OUTPUT | Yes | Yes | Yes |
-| INPUT_PULLUP | Yes | Explicit unsupported error | Explicit unsupported error |
-| INPUT_PULLDOWN on ATmega328P | Recognized syntax | Target error | Target error |
-| `setup` then mandatory `loop` | Yes | Yes | Yes |
-| Blocks and `if` / `else` | Yes | If its expressions are supported | Conditions must be `pin == HIGH/LOW` (either operand order) |
-| Pin assignment of HIGH/LOW, INPUT/OUTPUT | Yes | Yes, including chained assignments | Yes |
-| Local/global integer variables, assignment and addition | Yes | Nonnegative literals, reads, stores, addition | Explicit unsupported error |
-| Boolean variables/literals | Yes | Loads/stores | Explicit unsupported error |
-| `!bool`, `!PinState`, `!Pin` | Yes | Explicit unsupported error | Explicit unsupported error |
-| `and` / `or` | Yes, bool operands only | Explicit unsupported error | Explicit unsupported error |
-| Other numeric operations/comparisons, ternary | Yes, with type checks | Explicit unsupported error | Explicit unsupported error |
-| `while` / `for` | Yes | Explicit unsupported error | Explicit unsupported error |
-| Floating-point values and strings | Basic analysis only | Explicit unsupported error | Explicit unsupported error |
-| `fn`, calls, explicit return | Yes; scalar signatures | Explicit unsupported error | Explicit unsupported error |
-| Modules, arrays, structures | Not implemented | Not implemented | Not implemented |
-| Timers, interrupts, UART and device libraries | Not implemented | Not implemented | Not implemented |
+| bool, PinState | Yes | Yes | Yes |
+| i8/u8, i16/u16 | Yes | Yes | Yes |
+| i32/u32, i64/u64 | Yes | Yes | Located unsupported-type diagnostic |
+| Float and string | Basic type checks | Not implemented | Not implemented |
+| Variables, assignment, widening, + / - / * | Yes | Yes | Yes for supported types |
+| Comparisons, short-circuit and/or, ternary, if, while | Yes | Yes | Yes |
+| fn, arguments by value, explicit return | Yes | Yes | Yes for supported types |
+| Direct or indirect recursion | Rejected | — | — |
+| Shadowing | Rejected | — | — |
+| for ranges | Integer bound checks | Not implemented | Not implemented |
+| Division | Numeric type checks | Not implemented | Not implemented |
+| GPIO reads/writes, !Pin, INPUT_PULLUP | Yes | Yes | Yes |
+| Internal pull-down on ATmega328P | Recognized | Rejected | Rejected |
+| Stored/computed PinMode values | Basic type checks | Not implemented | Not implemented |
+| Calls in global initializers | Rejected | — | — |
+| Modules, heap, interrupts, peripheral drivers | Not implemented | — | — |
 
-`check` is not a substitute for the assembler: AVRA still checks instruction encoding and branch ranges.
-In particular, very large branch bodies may exceed the current short conditional-branch range.
-Register allocation, general memory layout, integer machine lowering and branch relaxation remain
-backend work. Typed-IR interpretation does not prove AVR timing, ABI or physical behavior.
+`analyze` parses and type-checks. `compile_typed_ir` also checks the executable Helium IR
+subset. `compile_llvm` and `check` validate the machine subset before emitting LLVM IR.
+`check` needs no external tools; a full build still validates LLVM lowering and linking.
+Restrictions apply to unreachable source too, so optimization does not silently determine
+whether an unsupported feature is accepted.
 
-## Agreed language rules
+## Semantic rules
 
-- A declaration cannot reuse any currently visible name, including a pin name. Shadowing is forbidden.
-  Names may be reused in separate sibling blocks. Setup locals are not visible in loop.
-- A variable is not visible inside its initializer. Declarations with a concrete numeric/bool type
-  and no initializer get zero/false. Strings currently get an empty default value at the AST level only.
-- Unsuffixed integers infer i32, floating-point literals infer f32. Explicit integer literal contexts
-  are checked against the target range, including negative signed minima and unsigned maxima.
-- Implicit conversions between concrete numeric types must preserve all values of the source type.
-  Integer literals converted to a float must be exactly representable. Decimal floating-point literals
-  use normal floating-point rounding; this is not a promise of decimal exactness.
-- Integer addition, subtraction, multiplication and signed negation wrap to the operation's width,
-  including signed overflow. Invalid source literals remain errors. Division and shift rules are pending.
-  Arithmetic is executable in the typed IR interpreter and in LLVM AVR code for 8/16-bit values.
-- `!bool` returns bool. `!PinState` swaps HIGH and LOW. `!Pin` returns PinState by reading the
-  actual input level exactly once and inverting it. Negation itself never writes a pin.
-  Thus `Led = !Led` works in LLVM AVR code; legacy AVR still rejects it.
-- `and` and `or` have short-circuit semantics, implemented in typed IR; the legacy AVR backend rejects them.
-- For loops introduce their own scoped loop variable, which cannot shadow an existing name.
-  Executable range/overflow behavior will be specified with their lowering.
-- `setup` must precede `loop`; global variables and pins precede both. Exactly one loop is required.
-- Pin checks describe chip register capabilities, not board wiring, fuse settings or electrical suitability.
+- Names cannot shadow a visible variable, parameter, pin or function. Separate sibling scopes
+  can reuse local names. Functions can be called before declaration.
+- Integer literals must fit their contextual type. Unsuffixed, unconstrained integers default
+  to i32, which currently needs an explicit smaller type for machine compilation.
+- Implicit integer conversions must be lossless. Arithmetic wraps in the operation's width;
+  widening its result does not undo an earlier overflow.
+- Arguments and expression operands evaluate left to right. `and`, `or` and ternary evaluate
+  only the required operand/branch.
+- `!bool` returns bool; `!PinState` swaps HIGH/LOW; `!Pin` reads the physical input exactly
+  once and inverts it. It does not write anything by itself. `Led = !Led` performs the write.
+- Missing-return analysis is structural: loops may execute zero times. A later return can
+  cover an earlier conditional's fallthrough paths. Constant-condition proof is not implemented.
+- Globals/pins precede setup/loop; setup precedes loop; exactly one loop is required.
+- GPIO validation describes MCU capabilities, not board wiring, fuses or electrical behavior.
 
-All compiler stages use the same diagnostic renderer and structured source spans.
-`DiagnosticKind` carries the error and its parameters; `DiagnosticCode` is an enum
-whose `as_str()` preserves public identifiers such as `E_PARSE` and `E_LITERAL_RANGE`.
-Library callers can inspect kinds, codes and spans without matching translated text.
-
-`Diagnostic::render()` produces plain text. `render_with()` accepts explicit rendering
-options, without reading environment variables or changing global color settings.
-The CLI supports `--color auto|always|never`; auto enables color only on a terminal
-and respects `NO_COLOR`. An explicit `always` or `never` overrides automatic policy.
-Tabs in excerpts use four-column tab stops; offsets continue to count graphemes.
-
-Messages are currently English. Russian/English selection and a default-language
-setting are deferred. Semantic/backend messages are centralized in
-`src/diagnostic/messages.rs`; parser/scanner errors retain their typed variants and
-plain English details. Those legacy detail strings also need cataloguing when the
-translation is implemented. No language option is advertised until both locales work.
+See [diagnostics](DIAGNOSTICS.md) for ranges, related locations and the current audit.

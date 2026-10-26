@@ -26,6 +26,8 @@ impl LocatableInSource for Statement {
 pub enum StatementType {
     FunctionDeclaration {
         identifier: String,
+        name_location: SourceLocation,
+        return_location: Option<SourceLocation>,
         parameters: Vec<Parameter>,
         return_type: Option<StaticType>,
         body: Vec<Statement>,
@@ -36,6 +38,8 @@ pub enum StatementType {
     /// Same with initializer. If it's missing it will be filled with a default init value
     VariableDeclaration {
         identifier: String,
+        name_location: SourceLocation,
+        type_location: Option<SourceLocation>,
         static_type: Option<StaticType>,
         initializer: Option<Expression>,
     },
@@ -53,6 +57,7 @@ pub enum StatementType {
         body: Box<Statement>,
     },
     For {
+        name_location: SourceLocation,
         identifier: String,
         from: Expression,
         to: Expression,
@@ -87,6 +92,8 @@ impl Statement {
             st_t = Some(*t);
         }
 
+        let type_location = static_type.as_ref().map(|t| t.source_location);
+
         let end = if let Some(init) = &initializer {
             init.source_location
         } else if st_t.is_some() {
@@ -99,6 +106,8 @@ impl Statement {
             source_location: SourceLocation::new_from_start_end(var_keyword.source_location, end),
             statement_type: StatementType::VariableDeclaration {
                 identifier: ident,
+                name_location: identifier.source_location,
+                type_location,
                 static_type: st_t,
                 initializer,
             },
@@ -208,6 +217,7 @@ impl Statement {
                 body.source_location,
             ),
             statement_type: StatementType::For {
+                name_location: identifier.source_location,
                 identifier: ident,
                 from,
                 to,
@@ -231,6 +241,7 @@ impl Display for StatementType {
                 parameters,
                 return_type,
                 body,
+                ..
             } => {
                 write!(f, "fn {identifier}(")?;
                 for (index, parameter) in parameters.iter().enumerate() {
@@ -253,6 +264,7 @@ impl Display for StatementType {
                 identifier,
                 static_type,
                 initializer,
+                ..
             } => match (static_type, initializer) {
                 (Some(st_type), Some(init)) => write!(
                     f,
@@ -298,6 +310,7 @@ impl Display for StatementType {
                 from,
                 to,
                 body,
+                ..
             } => write!(f, "for {identifier} = {from} to {to} {body}"),
             StatementType::SetupDeclaration(statements) => {
                 write!(f, "setup ")?;
@@ -323,6 +336,7 @@ impl StatementType {
 
 #[derive(Debug)]
 pub struct Parameter {
+    pub type_location: SourceLocation,
     pub identifier: String,
     pub static_type: StaticType,
     pub source_location: SourceLocation,
@@ -330,6 +344,9 @@ pub struct Parameter {
 
 #[derive(Debug)]
 pub struct SingleDefDeclaration {
+    pub name_location: SourceLocation,
+    pub pin_location: SourceLocation,
+    pub mode_location: SourceLocation,
     pub identifier: String,
     pub pin: PinRef,
     pub pin_mode: PinModeConstantType,
@@ -348,10 +365,14 @@ impl SingleDefDeclaration {
         identifier: Token,
         port: PinRef,
         pin_mode: Token,
+        pin_location: SourceLocation,
     ) -> Result<SingleDefDeclaration, DefDeclarationError> {
         if let TokenType::Identifier(ident) = identifier.token_type {
             if let TokenType::Constant(ConstantType::PinMode(pin)) = pin_mode.token_type {
                 Ok(SingleDefDeclaration {
+                    name_location: identifier.source_location,
+                    pin_location,
+                    mode_location: pin_mode.source_location,
                     source_location: SourceLocation::new_from_start_end(
                         identifier.source_location,
                         pin_mode.source_location,

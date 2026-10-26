@@ -11,7 +11,7 @@ foreach ($example in @('llvm-gpio', 'typed-ir', 'llvm-counter')) {
     foreach ($mode in @('none', 'speed', 'size')) {
         $destination = Join-Path $outputRoot "$example-$mode.hex"
         $watch = [Diagnostics.Stopwatch]::StartNew()
-        $output = & $Compiler build (Join-Path $heliumRoot "examples/$example.he") --mcu atmega328p --backend llvm --opt $mode -o $destination
+        $output = & $Compiler build (Join-Path $heliumRoot "examples/$example.he") --mcu atmega328p --opt $mode -o $destination
         $watch.Stop()
         if ($LASTEXITCODE) { throw "Build failed: $example $mode" }
         $directory = ($output | Where-Object { $_ -like 'Intermediates: *' }) -replace '^Intermediates: ', ''

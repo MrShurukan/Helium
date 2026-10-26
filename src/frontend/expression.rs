@@ -29,6 +29,7 @@ pub enum ExpressionType {
     },
     Identifier(String),
     Binary {
+        operator_location: SourceLocation,
         left: Box<Expression>,
         operator: TokenType,
         right: Box<Expression>,
@@ -46,6 +47,7 @@ pub enum ExpressionType {
         value: LiteralType,
     },
     Unary {
+        operator_location: SourceLocation,
         operator: PunctuationType,
         right: Box<Expression>,
     },
@@ -99,6 +101,7 @@ impl Expression {
                 right.source_location,
             ),
             expression_type: ExpressionType::Binary {
+                operator_location: operator.source_location,
                 left: Box::new(left),
                 operator: operator.token_type.clone(),
                 right: Box::new(right),
@@ -119,6 +122,7 @@ impl Expression {
                     expression.source_location,
                 ),
                 expression_type: ExpressionType::Unary {
+                    operator_location: operator.source_location,
                     operator: op.to_owned(),
                     right: Box::new(expression),
                 },
@@ -211,6 +215,7 @@ impl Display for Expression {
                 left,
                 operator,
                 right,
+                ..
             } => write!(f, "{left} {} {right}", format!("{operator:?}").green()),
             ExpressionType::Ternary {
                 first,
@@ -219,7 +224,9 @@ impl Display for Expression {
             } => write!(f, "{first} ? {second} : {third}"),
             ExpressionType::Grouping { expression } => write!(f, "({expression})"),
             ExpressionType::Literal { value } => write!(f, "{value:?}"),
-            ExpressionType::Unary { operator, right } => write!(f, "({operator:?} {right})"),
+            ExpressionType::Unary {
+                operator, right, ..
+            } => write!(f, "({operator:?} {right})"),
             ExpressionType::Assignment {
                 identifier,
                 expression,

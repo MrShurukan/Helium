@@ -42,6 +42,7 @@ impl Scanner<'_> {
         loop {
             // We are at the beginning of the next lexeme.
             self.position_info.start = self.position_info.current;
+            self.position_info.start_line = self.position_info.line;
             self.position_info.start_from_line_start = self.position_info.current_from_line_start;
 
             match Self::scan_token(&mut self.position_info, &mut peekable, &self.source) {
@@ -64,7 +65,7 @@ impl Scanner<'_> {
                 line_start: self.position_info.line,
                 line_end: self.position_info.line,
                 start_offset: self.position_info.current_from_line_start,
-                end_offset: self.position_info.current_from_line_start + 1,
+                end_offset: self.position_info.current_from_line_start,
             },
         });
 
@@ -503,15 +504,13 @@ impl ScannerError {
         position_info: &PositionInfo,
         _source: &ReadOnlyGraphemeSlice,
     ) -> Self {
-        let offset = position_info.current_from_line_start.saturating_sub(1);
-
         ScannerError {
             error_type,
             location: SourceLocation {
-                line_start: position_info.line,
+                line_start: position_info.start_line,
                 line_end: position_info.line,
-                start_offset: offset,
-                end_offset: offset + 1,
+                start_offset: position_info.start_from_line_start,
+                end_offset: position_info.current_from_line_start,
             },
         }
     }

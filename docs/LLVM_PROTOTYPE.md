@@ -8,8 +8,8 @@ Helium → AST → Helium IR v1 → LLVM IR → opt → llc → AVR object
                                    avr-gcc + avr-libc → ELF → HEX
 ```
 
-Старый backend остаётся выбранным по умолчанию (`--backend legacy`). Новый включается
-через `--backend llvm`. Это экспериментальная реализация, а не смена backend всего проекта.
+LLVM теперь является единственным backend. Опция выбора backend удалена.
+Измерения ниже сохраняются как история первоначального прототипа.
 Первоначальные машинные проверки выполнены в AVR8js; позже пользователь подтвердил работу
 базового latch на Arduino Nano. Новые исходные функции описаны в [FUNCTIONS.md](FUNCTIONS.md).
 
@@ -19,7 +19,7 @@ Helium → AST → Helium IR v1 → LLVM IR → opt → llc → AVR object
 ./tools/setup-toolchain.ps1
 . ./tools/activate-toolchain.ps1
 cargo build --locked --release
-./target/release/helium.exe build examples/llvm-counter.he --mcu atmega328p --backend llvm --opt size -o build/counter.hex
+./target/release/helium.exe build examples/llvm-counter.he --mcu atmega328p --opt size -o build/counter.hex
 ```
 
 Установка локальна для checkout: `build/toolchain/`, без изменения системного PATH или реестра.
@@ -38,7 +38,7 @@ cargo build --locked --release
 `HELIUM_LLVM_BIN`, `HELIUM_AVR_BIN`, `HELIUM_AVR8JS`. Первые две содержат директории бинарников,
 третья — директорию распакованного пакета AVR8js. Без первых двух компилятор ищет программы
 в PATH. Тесты используют `node` из PATH либо `HELIUM_NODE` с полным путём к Node.js.
-Для прежних AVRA-тестов `avra` по-прежнему нужен в PATH.
+AVRA больше не требуется.
 
 При выборе другой поставки LLVM необходимо проверить `llc --version`: в списке targets
 должен присутствовать AVR. Проверенная официальная Windows-сборка LLVM 21.1.8 его не содержит.
@@ -52,18 +52,18 @@ LLVM backend обнаруживает отсутствие AVR и возвращ
 
 ```powershell
 # Проверка поддерживаемого подмножества, без внешних программ:
-./target/release/helium.exe check examples/llvm-counter.he --mcu atmega328p --backend llvm
+./target/release/helium.exe check examples/llvm-counter.he --mcu atmega328p
 
 # Неоптимизированный LLVM IR, без LLVM/GCC на машине:
-./target/release/helium.exe build examples/llvm-counter.he --mcu atmega328p --backend llvm --emit llvm -o build/counter.ll
+./target/release/helium.exe build examples/llvm-counter.he --mcu atmega328p --emit llvm -o build/counter.ll
 
 # LLVM assembly, ELF или HEX:
-./target/release/helium.exe build examples/llvm-counter.he --mcu atmega328p --backend llvm --emit elf --opt speed -o build/counter.elf
+./target/release/helium.exe build examples/llvm-counter.he --mcu atmega328p --emit elf --opt speed -o build/counter.elf
 ```
 
 `--emit asm` у LLVM выдаёт GNU/LLVM AVR assembly, которую нельзя подавать в AVRA.
 `--emit llvm` всегда выдаёт исходный LLVM IR и не принимает `--opt`.
-Форматы `ir`, `legacy-ir`, `ast` остаются отдельными командами инспекции без `--backend llvm`.
+Форматы `ir` и `ast` доступны в том же CLI без внешних инструментов.
 
 Каждая машинная сборка создаёт отдельную директорию `llvm-<pid>-<timestamp>` рядом с результатом.
 Там сохраняются `module.ll`, `optimized.ll`, `program.s`, а для ELF/HEX также объектный файл,
@@ -163,7 +163,7 @@ Flash = `.text + .data`; статическая SRAM = `.data + .bss + .noinit`.
 Остаток `.text` включает векторы, startup, exit, библиотечные помощники и выравнивание,
 поэтому он не называется точным размером одного startup-файла.
 
-Legacy AVRA baseline по-прежнему **40 байт**. Полная LLVM-прошивка GPIO — **164 байта**,
+Исторический legacy AVRA baseline составлял **40 байт**. Полная LLVM-прошивка GPIO — **164 байта**,
 из которых **32 байта** принадлежат программе и обёртке, а **132** — окружению.
 Следовательно, сейчас LLVM не выигрывает размер готовой простейшей прошивки. При этом backend
 уже выполняет арифметику, хранение и управление потоком, отсутствующие в legacy-генераторе.

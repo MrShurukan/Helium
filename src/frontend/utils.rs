@@ -108,3 +108,23 @@ impl SourceLocation {
         }
     }
 }
+
+impl SourceLocation {
+    /// The final token of a block (its closing brace).
+    pub fn closing(self) -> Self {
+        Self {
+            line_start: self.line_end,
+            line_end: self.line_end,
+            start_offset: self.end_offset.saturating_sub(1),
+            end_offset: self.end_offset,
+        }
+    }
+
+    pub fn name(self, name: &str) -> Self {
+        Self {
+            line_end: self.line_start,
+            end_offset: self.start_offset + name.graphemes(true).count(),
+            ..self
+        }
+    }
+}

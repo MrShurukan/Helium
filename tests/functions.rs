@@ -183,16 +183,8 @@ fn recursion_is_rejected_even_in_unused_or_unreachable_code() {
 }
 
 #[test]
-fn legacy_paths_reject_functions_instead_of_silently_dropping_them() {
-    let source = "fn f() {} loop { f(); }";
-    assert!(matches!(
-        *helium::compile_ir(source, "atmega328p").err().unwrap()[0].kind,
-        DiagnosticKind::FunctionsLowering
-    ));
-    assert!(helium::compile_assembly(source, "atmega328p")
-        .unwrap_err()
-        .iter()
-        .any(|error| matches!(*error.kind, DiagnosticKind::FunctionsLowering)));
+fn default_compilation_accepts_functions() {
+    helium::check("fn f() {} loop { f(); }", "atmega328p").unwrap();
 }
 
 #[test]

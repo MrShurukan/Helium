@@ -4,6 +4,7 @@
 pub struct PositionInfo {
     /// Beginning position of a lexeme
     pub start: usize,
+    pub start_line: usize,
     /// Where scanner is currently in the file
     pub current: usize,
     /// Current line being processed by scanner
@@ -20,6 +21,7 @@ impl PositionInfo {
     pub fn new() -> Self {
         Self {
             start: 0,
+            start_line: 1,
             current: 0,
             line: 1,
             current_from_line_start: 0,

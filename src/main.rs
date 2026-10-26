@@ -1,6 +1,8 @@
 use helium::diagnostic::{Diagnostic, DiagnosticKind, RenderOptions};
 use helium::{
-    analyze, backend::assembler, compile_assembly_with_options, compile_ir, compile_typed_ir, ir,
+    analyze,
+    backend::{flash, llvm_toolchain},
+    compile_llvm, compile_typed_ir, ir,
 };
 use std::io::IsTerminal;
 use std::{env, fs, path::PathBuf, process::ExitCode};
@@ -8,12 +10,11 @@ use std::{env, fs, path::PathBuf, process::ExitCode};
 const USAGE: &str = concat!(
     "Usage:\n",
     "  helium check <source.he> --mcu atmega328p\n",
-    "  helium build <source.he> --mcu atmega328p [--emit hex|asm|ir|legacy-ir|ast] [-o <file>]\n",
+    "  helium build <source.he> --mcu atmega328p [--emit hex|elf|asm|llvm|ir|ast] [-o <file>]\n",
     "  helium flash <file.hex> --mcu atmega328p --programmer <name>\n",
     "Options: --color auto|always|never (default: auto; NO_COLOR disables automatic color)\n",
     "  --verify-ir (check/build; default enabled in debug, disabled in release)\n",
-    "  --backend legacy|llvm (default: legacy); LLVM build supports --emit llvm|asm|elf|hex\n",
-    "  --opt none|speed|size (LLVM only; default: none)\n",
+    "  --opt none|speed|size (machine output only; default: none)\n",
     "  --optimize-ir (build --emit ir only; constant folding, CFG cleanup and dead values)"
 );
 
@@ -49,7 +50,6 @@ fn run(args: Vec<String>) -> Result<String, String> {
     let mut output = None;
     let mut programmer = None;
     let mut color = None;
-    let mut backend = None;
     let mut optimization = None;
     let mut ir_options = ir::Options::default();
     let mut explicit_verify = false;
@@ -80,7 +80,6 @@ fn run(args: Vec<String>) -> Result<String, String> {
             "-o" | "--output" if command == "build" => &mut output,
             "--programmer" if command == "flash" => &mut programmer,
             "--color" => &mut color,
-            "--backend" if command != "flash" => &mut backend,
             "--opt" if command == "build" => &mut optimization,
             _ => return Err(format!("Unknown or inapplicable option {option}\n{USAGE}")),
         };
@@ -110,7 +109,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
     }
 
     if command == "flash" {
-        assembler::flash(
+        flash::flash(
             &input,
             &mcu,
             &programmer.ok_or("--programmer is required for flash")?,
@@ -124,83 +123,65 @@ fn run(args: Vec<String>) -> Result<String, String> {
     if ir_options.optimize && emit.as_deref() != Some("ir") {
         return Err("--optimize-ir requires build --emit ir".into());
     }
-    if explicit_verify && matches!(emit.as_deref(), Some("ast" | "legacy-ir")) {
+    if explicit_verify && matches!(emit.as_deref(), Some("ast")) {
         return Err("--verify-ir requires typed IR or AVR compilation".into());
     }
 
+    let source_name = input.display().to_string();
+    let source_file = helium::diagnostic::source::SourceFile {
+        id: helium::diagnostic::source::FileId(0),
+        name: &source_name,
+        text: &source,
+    };
     let diagnostics = |errors: Vec<helium::diagnostic::Diagnostic>| {
-        format!(
-            "{}\n{}",
-            input.display(),
-            errors
-                .iter()
-                .map(|e| e.render_with(&source, RenderOptions { color }))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
+        errors
+            .iter()
+            .map(|e| e.render_in(&source_file, RenderOptions { color }))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
 
-    let backend = backend.as_deref().unwrap_or("legacy");
-    if !matches!(backend, "legacy" | "llvm") {
+    let emit = emit.as_deref().unwrap_or("hex");
+    if !matches!(emit, "ast" | "ir" | "llvm" | "asm" | "elf" | "hex") {
         return Err(format!(
-            "Unknown backend '{backend}'; expected legacy or llvm"
+            "Unknown emit format '{emit}'; expected ast, ir, llvm, asm, elf or hex"
         ));
     }
-    if backend != "llvm" && optimization.is_some() {
-        return Err("--opt requires --backend llvm".into());
+    if optimization.is_some() && matches!(emit, "ast" | "ir" | "llvm") {
+        return Err("--opt applies only to machine output (asm, elf, hex)".into());
+    }
+    let level = llvm_toolchain::Optimization::parse(optimization.as_deref().unwrap_or("none"))?;
+    if command == "check" {
+        compile_llvm(&source, &mcu, ir_options).map_err(diagnostics)?;
+        return Ok(format!("Checked {}", input.display()));
     }
 
-    if backend == "llvm" {
-        use helium::backend::{llvm, llvm_toolchain};
+    let content = match emit {
+        "ast" => format!("{:#?}\n", analyze(&source).map_err(diagnostics)?),
+        "ir" => compile_typed_ir(&source, &mcu, ir_options)
+            .map_err(diagnostics)?
+            .dump(),
+        _ => compile_llvm(&source, &mcu, ir_options).map_err(diagnostics)?,
+    };
 
-        if ir_options.optimize {
-            return Err("--optimize-ir is not used by the LLVM backend; use --opt".into());
-        }
-        let level = llvm_toolchain::Optimization::parse(optimization.as_deref().unwrap_or("none"))?;
-        let emit = emit.as_deref().unwrap_or("hex");
-        if !matches!(emit, "llvm" | "asm" | "elf" | "hex") {
-            return Err("LLVM backend supports --emit llvm, asm, elf or hex".into());
-        }
-        let module = compile_typed_ir(&source, &mcu, ir_options).map_err(diagnostics)?;
-        let text = llvm::emit(&module, false).map_err(|detail| {
-            diagnostics(vec![Diagnostic::new(
-                DiagnosticKind::LlvmUnsupported { detail },
-                None,
-            )])
-        })?;
-        if command == "check" {
-            return Ok(format!("Checked {} for LLVM", input.display()));
-        }
+    let extension = if emit == "llvm" { "ll" } else { emit };
+    let destination = output.map(PathBuf::from).unwrap_or_else(|| {
+        input
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("build")
+            .join(format!(
+                "{}.{extension}",
+                input.file_stem().unwrap_or_default().to_string_lossy()
+            ))
+    });
 
-        let extension = if emit == "llvm" { "ll" } else { emit };
-        let destination = output.map(PathBuf::from).unwrap_or_else(|| {
-            input
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .join("build")
-                .join(format!(
-                    "{}.{extension}",
-                    input.file_stem().unwrap_or_default().to_string_lossy()
-                ))
-        });
-        if destination.canonicalize().ok() == Some(input.canonicalize().map_err(|e| e.to_string())?)
-        {
-            return Err("Output must not overwrite the source file".into());
-        }
-        if emit == "llvm" {
-            if optimization.is_some() {
-                return Err(
-                    "--emit llvm emits unoptimized IR; --opt applies to machine output".into(),
-                );
-            }
-            if let Some(parent) = destination.parent().filter(|p| !p.as_os_str().is_empty()) {
-                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            fs::write(&destination, text).map_err(|e| e.to_string())?;
-            return Ok(format!("Built {}", destination.display()));
-        }
+    if destination.canonicalize().ok() == Some(input.canonicalize().map_err(|e| e.to_string())?) {
+        return Err("Output must not overwrite the source file".into());
+    }
 
-        let result = llvm_toolchain::build(&text, &destination, emit, level)?;
+    if matches!(emit, "asm" | "elf" | "hex") {
+        let result = llvm_toolchain::build(&content, &destination, emit, level)?;
         return Ok(format!(
             "Built {} (external stages: {} ms)\nIntermediates: {}\n{}",
             destination.display(),
@@ -210,74 +191,11 @@ fn run(args: Vec<String>) -> Result<String, String> {
         ));
     }
 
-    if command == "check" {
-        compile_assembly_with_options(&source, &mcu, ir_options).map_err(diagnostics)?;
-        return Ok(format!("Checked {}", input.display()));
-    }
-
-    let emit = emit.as_deref().unwrap_or("hex");
-    let content = match emit {
-        "hex" | "asm" => {
-            compile_assembly_with_options(&source, &mcu, ir_options).map_err(diagnostics)?
-        }
-        "ir" => compile_typed_ir(&source, &mcu, ir_options)
-            .map_err(diagnostics)?
-            .dump(),
-        "legacy-ir" => {
-            compile_ir(&source, &mcu)
-                .map_err(diagnostics)?
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("\n")
-                + "\n"
-        }
-        "ast" => format!("{:#?}\n", analyze(&source).map_err(diagnostics)?),
-        _ => {
-            return Err(format!(
-                "Unknown emit format '{emit}'; expected hex, asm, ir, legacy-ir or ast"
-            ))
-        }
-    };
-
-    let destination = output.map(PathBuf::from).unwrap_or_else(|| {
-        input
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("build")
-            .join(format!(
-                "{}.{emit}",
-                input.file_stem().unwrap_or_default().to_string_lossy()
-            ))
-    });
-
-    let source_path = input.canonicalize().map_err(|e| e.to_string())?;
-    if destination.canonicalize().ok().as_ref() == Some(&source_path) {
-        return Err("Output must not overwrite the source file".into());
-    }
-
     if let Some(parent) = destination.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(parent).map_err(|e| format!("Cannot create output directory: {e}"))?;
     }
 
-    let assembly_path = if emit == "hex" {
-        destination.with_extension("asm")
-    } else {
-        destination.clone()
-    };
-    if assembly_path.canonicalize().ok().as_ref() == Some(&source_path) {
-        return Err("Assembly output must not overwrite the source file".into());
-    }
-    if emit == "hex" && assembly_path == destination {
-        return Err("HEX output must have a different path from the intermediate .asm file".into());
-    }
-
-    fs::write(&assembly_path, content)
-        .map_err(|e| format!("Cannot write {}: {e}", assembly_path.display()))?;
-
-    if emit == "hex" {
-        assembler::assemble(&assembly_path, &destination)?;
-    }
-
+    fs::write(&destination, content)
+        .map_err(|e| format!("Cannot write {}: {e}", destination.display()))?;
     Ok(format!("Built {}", destination.display()))
 }

@@ -22,6 +22,16 @@ fn unsupported(feature: &str, location: SourceLocation) -> Diagnostic {
     )
 }
 
+fn invalid(detail: &str, location: SourceLocation) -> Diagnostic {
+    Diagnostic::new(
+        DiagnosticKind::InvalidIr {
+            stage: "typed lowering",
+            detail: detail.into(),
+        },
+        Some(location),
+    )
+}
+
 fn ty(ty: T, location: SourceLocation) -> Result<Type, Diagnostic> {
     Ok(match ty {
         T::Boolean => Type::Bool,
@@ -60,6 +70,7 @@ fn integer_literal(expr: &Expression) -> Option<i128> {
         E::Unary {
             operator: P::Minus,
             right,
+            ..
         } => integer_literal(right)?.checked_neg(),
         _ => None,
     }
@@ -255,7 +266,7 @@ pub(crate) fn lower(statements: &[Statement], target: &str) -> Result<Module, Di
         builder.body(body)?;
         if !builder.terminated() {
             if result.is_some() {
-                return Err(unsupported(
+                return Err(invalid(
                     "function falling through without a return",
                     statement.source_location,
                 ));
@@ -462,10 +473,11 @@ impl<'a> Builder<'a> {
                 identifier,
                 static_type,
                 initializer,
+                ..
             } => {
                 let expr = initializer
                     .as_ref()
-                    .ok_or_else(|| unsupported("missing initializer", statement.source_location))?;
+                    .ok_or_else(|| invalid("missing initializer", statement.source_location))?;
                 let value = self.value(expr)?;
                 let local = self.local(
                     identifier,
@@ -540,7 +552,7 @@ impl<'a> Builder<'a> {
                 ))
             }
             _ => {
-                return Err(unsupported(
+                return Err(invalid(
                     "nested program declaration",
                     statement.source_location,
                 ))
@@ -617,7 +629,7 @@ impl<'a> Builder<'a> {
                 arguments,
             } => self
                 .call(identifier, arguments, origin.clone())?
-                .ok_or_else(|| unsupported("procedure used as a value", expr.source_location))?,
+                .ok_or_else(|| invalid("procedure used as a value", expr.source_location))?,
             E::Literal { value } => {
                 let bits = match value {
                     L::Integer(value) => *value,
@@ -644,16 +656,18 @@ impl<'a> Builder<'a> {
                 } else if let Some(&(global, ty)) = self.globals.get(name) {
                     self.emit(Op::LoadGlobal(global), ty, origin.clone())
                 } else {
-                    return Err(unsupported("unresolved name", expr.source_location));
+                    return Err(invalid("unresolved name", expr.source_location));
                 }
             }
             E::Grouping { expression } => self.value(expression)?,
-            E::Unary { operator, right } => {
+            E::Unary {
+                operator, right, ..
+            } => {
                 let value = self.value(right)?;
                 let op = match operator {
                     P::Minus => Unary::Negate,
                     P::Bang => Unary::Not,
-                    _ => return Err(unsupported("unary operator", expr.source_location)),
+                    _ => return Err(invalid("unary operator", expr.source_location)),
                 };
                 self.emit(
                     Op::Unary(op, value),
@@ -665,6 +679,7 @@ impl<'a> Builder<'a> {
                 left,
                 operator: Token::Keyword(K::And | K::Or),
                 right,
+                ..
             } => {
                 let condition = self.value(left)?;
                 let E::Binary {
@@ -702,6 +717,7 @@ impl<'a> Builder<'a> {
                 left,
                 operator,
                 right,
+                ..
             } => {
                 let left = self.value(left)?;
                 let right = self.value(right)?;
@@ -723,7 +739,7 @@ impl<'a> Builder<'a> {
                             ))
                         }
                     },
-                    _ => return Err(unsupported("binary operator", expr.source_location)),
+                    _ => return Err(invalid("binary operator", expr.source_location)),
                 };
                 let result_type = if op.comparison() {
                     Type::Bool
@@ -766,7 +782,7 @@ impl<'a> Builder<'a> {
                 } else if let Some(&(global, _)) = self.globals.get(identifier) {
                     Op::StoreGlobal(global, value)
                 } else {
-                    return Err(unsupported("unresolved assignment", expr.source_location));
+                    return Err(invalid("unresolved assignment", expr.source_location));
                 };
                 self.effect(op, origin.clone());
                 value

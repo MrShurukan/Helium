@@ -1,4 +1,5 @@
 mod messages;
+pub mod source;
 
 use crate::frontend::{
     static_type::StaticType,
@@ -8,6 +9,7 @@ use crate::frontend::{
 };
 use std::fmt;
 use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 /// Stable public identifiers, independent of wording and presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +33,6 @@ pub enum DiagnosticCode {
     PinDuplicate,
     PinMode,
     Unsupported,
-    Backend,
     Parse,
     Internal,
 }
@@ -58,7 +59,6 @@ impl DiagnosticCode {
             Self::PinDuplicate => "E_PIN_DUPLICATE",
             Self::PinMode => "E_PIN_MODE",
             Self::Unsupported => "E_UNSUPPORTED",
-            Self::Backend => "E_BACKEND",
             Self::Parse => "E_PARSE",
             Self::Internal => "E_INTERNAL_IR",
         }
@@ -103,9 +103,9 @@ pub enum DiagnosticKind {
     FunctionSignatureType {
         ty: StaticType,
     },
-    FunctionsLowering,
-    LlvmUnsupported {
-        detail: String,
+    UnsupportedType {
+        ty: StaticType,
+        machine: bool,
     },
     TypedIrUnsupported {
         feature: String,
@@ -168,15 +168,6 @@ pub enum DiagnosticKind {
     },
     DuplicatePin,
     PullDown,
-    PullUpLowering,
-    ConditionLowering,
-    PinAssignmentLowering,
-    StorageLowering,
-    LoopLowering,
-    PullResistorLowering,
-    StatementLowering,
-    ExpressionLowering,
-    RegisterLowering,
 }
 
 impl DiagnosticKind {
@@ -192,10 +183,8 @@ impl DiagnosticKind {
             | Self::ReturnValueRequired { .. }
             | Self::UnexpectedReturnValue => DiagnosticCode::Return,
             Self::RecursiveCalls { .. } => DiagnosticCode::Recursion,
-            Self::FunctionSignatureType { .. } | Self::FunctionsLowering => {
-                DiagnosticCode::Unsupported
-            }
-            Self::TypedIrUnsupported { .. } | Self::LlvmUnsupported { .. } => {
+            Self::FunctionSignatureType { .. } => DiagnosticCode::Unsupported,
+            Self::TypedIrUnsupported { .. } | Self::UnsupportedType { .. } => {
                 DiagnosticCode::Unsupported
             }
             Self::InvalidIr { .. } => DiagnosticCode::Internal,
@@ -218,17 +207,28 @@ impl DiagnosticKind {
             Self::InvalidPin { .. } => DiagnosticCode::Pin,
             Self::DuplicatePin => DiagnosticCode::PinDuplicate,
             Self::PullDown => DiagnosticCode::PinMode,
-            Self::PullUpLowering => DiagnosticCode::Unsupported,
-            Self::ConditionLowering => DiagnosticCode::Unsupported,
-            Self::PinAssignmentLowering => DiagnosticCode::Unsupported,
-            Self::StorageLowering => DiagnosticCode::Unsupported,
-            Self::LoopLowering => DiagnosticCode::Unsupported,
-            Self::PullResistorLowering => DiagnosticCode::Unsupported,
-            Self::StatementLowering => DiagnosticCode::Unsupported,
-            Self::ExpressionLowering => DiagnosticCode::Unsupported,
-            Self::RegisterLowering => DiagnosticCode::Backend,
         }
     }
+}
+
+/// Semantic labels stay independent of wording and terminal/editor rendering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LabelKind {
+    OpeningDelimiter,
+    PreviousDeclaration,
+    ExpectedType(StaticType),
+    OperandType(StaticType),
+    FunctionDeclaration,
+    Fallthrough,
+    FalseBranch,
+    LoopMayNotRun,
+    RecursiveCall,
+}
+
+#[derive(Debug, Clone)]
+pub struct Label {
+    pub location: SourceLocation,
+    pub kind: LabelKind,
 }
 
 /// A diagnostic is data; rendering and process exit belong to the caller.
@@ -236,6 +236,7 @@ impl DiagnosticKind {
 pub struct Diagnostic {
     pub kind: Box<DiagnosticKind>,
     pub location: Option<SourceLocation>,
+    pub labels: Vec<Label>,
 }
 
 impl Diagnostic {
@@ -243,7 +244,13 @@ impl Diagnostic {
         Self {
             kind: Box::new(kind),
             location,
+            labels: Vec::new(),
         }
+    }
+
+    pub fn with_label(mut self, location: SourceLocation, kind: LabelKind) -> Self {
+        self.labels.push(Label { location, kind });
+        self
     }
 
     pub fn code(&self) -> DiagnosticCode {
@@ -258,6 +265,14 @@ impl Diagnostic {
         self.render_with(source, RenderOptions::default())
     }
 
+    pub fn render_in(&self, source: &source::SourceFile<'_>, options: RenderOptions) -> String {
+        let position = self
+            .location
+            .map(|s| format!("{}:{}:{}", source.name, s.line_start, s.start_offset + 1))
+            .unwrap_or_else(|| source.name.to_owned());
+        format!("--> {position}\n{}", self.render_with(source.text, options))
+    }
+
     pub fn render_with(&self, source: &str, options: RenderOptions) -> String {
         let label = if self.code() == DiagnosticCode::Internal {
             "internal compiler error"
@@ -268,45 +283,18 @@ impl Diagnostic {
         let mut result = format!("{heading}: {}", self.message());
 
         if let Some(span) = self.location {
-            // split keeps a final empty line, so EOF errors can point after a newline.
-            for (index, line) in source.split('\n').enumerate() {
-                let number = index + 1;
-                if number < span.line_start || number > span.line_end {
-                    continue;
-                }
+            render_span(&mut result, source, span, options);
+        }
 
-                let line = line.strip_suffix('\r').unwrap_or(line);
-                let length = line.graphemes(true).count();
-                let start = if number == span.line_start {
-                    span.start_offset.min(length)
-                } else {
-                    0
-                };
-                let end = if number == span.line_end {
-                    span.end_offset.min(length)
-                } else {
-                    length
-                };
-
-                // Source offsets count graphemes; expand tabs consistently in both
-                // the displayed line and the underline (four-column tab stops).
-                let (line, columns) = expand_tabs(line);
-                let start = columns[start];
-                let end = columns[end];
-                let width = span.line_end.to_string().len().max(4);
-                let gutter = paint(&format!("{number:>width$} |"), "34", options.color);
-                let marker_gutter = paint(&format!("{:width$} |", ""), "34", options.color);
-
-                result.push_str(&format!(
-                    "\n{gutter} {line}\n{marker_gutter} {}{}",
-                    " ".repeat(start),
-                    paint(
-                        &"^".repeat(end.saturating_sub(start).max(1)),
-                        "1;31",
-                        options.color
-                    )
-                ));
+        for label in &self.labels {
+            result.push_str(&format!("\n  = {}", label.kind.message()));
+            if Some(label.location) != self.location {
+                render_span(&mut result, source, label.location, options);
             }
+        }
+
+        if let Some(help) = self.kind.help() {
+            result.push_str(&format!("\n  help: {help}"));
         }
 
         result
@@ -327,6 +315,58 @@ pub struct RenderOptions {
     pub color: bool,
 }
 
+fn render_span(result: &mut String, source: &str, span: SourceLocation, options: RenderOptions) {
+    // split keeps a final empty line, so EOF errors can point after a newline.
+    for (index, line) in source.split('\n').enumerate() {
+        let number = index + 1;
+        if number < span.line_start || number > span.line_end {
+            continue;
+        }
+
+        // Bound excerpts while retaining both ends of a multiline range.
+        if span.line_end.saturating_sub(span.line_start) > 4
+            && number > span.line_start + 1
+            && number < span.line_end - 1
+        {
+            if number == span.line_start + 2 {
+                result.push_str("\n     | ...");
+            }
+            continue;
+        }
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let length = line.graphemes(true).count();
+        let start = if number == span.line_start {
+            span.start_offset.min(length)
+        } else {
+            0
+        };
+        let end = if number == span.line_end {
+            span.end_offset.min(length)
+        } else {
+            length
+        };
+
+        // Source offsets count graphemes; expand tabs consistently in both
+        // the displayed line and the underline (four-column tab stops).
+        let (line, columns) = expand_tabs(line);
+        let start = columns[start];
+        let end = columns[end];
+        let width = span.line_end.to_string().len().max(4);
+        let gutter = paint(&format!("{number:>width$} |"), "34", options.color);
+        let marker_gutter = paint(&format!("{:width$} |", ""), "34", options.color);
+
+        result.push_str(&format!(
+            "\n{gutter} {line}\n{marker_gutter} {}{}",
+            " ".repeat(start),
+            paint(
+                &"^".repeat(end.saturating_sub(start).max(1)),
+                "1;31",
+                options.color
+            )
+        ));
+    }
+}
+
 fn expand_tabs(line: &str) -> (String, Vec<usize>) {
     let mut text = String::new();
     let mut columns = vec![0];
@@ -339,7 +379,7 @@ fn expand_tabs(line: &str) -> (String, Vec<usize>) {
             column += spaces;
         } else {
             text.push_str(grapheme);
-            column += 1;
+            column += UnicodeWidthStr::width(grapheme);
         }
 
         columns.push(column);

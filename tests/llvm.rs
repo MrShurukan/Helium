@@ -60,14 +60,7 @@ fn llvm_cli_emits_ir_without_external_tools_and_protects_source() {
     fs::write(&source, text).unwrap();
     let run = |extra: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_helium"))
-            .args([
-                "build",
-                source.to_str().unwrap(),
-                "--mcu",
-                "atmega328p",
-                "--backend",
-                "llvm",
-            ])
+            .args(["build", source.to_str().unwrap(), "--mcu", "atmega328p"])
             .args(extra)
             .env("PATH", "")
             .env_remove("HELIUM_LLVM_BIN")
@@ -88,7 +81,7 @@ fn llvm_cli_emits_ir_without_external_tools_and_protects_source() {
         .success());
     assert_eq!(fs::read_to_string(&source).unwrap(), text);
     assert!(!run(&["--emit", "llvm", "--opt", "size"]).status.success());
-    assert!(!run(&["--emit", "ir", "--optimize-ir"]).status.success());
+    assert!(run(&["--emit", "ir", "--optimize-ir"]).status.success());
 
     let hex = root.join("existing.hex");
     fs::write(&hex, "keep existing firmware").unwrap();

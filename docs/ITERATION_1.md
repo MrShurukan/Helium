@@ -1,3 +1,5 @@
+> Historical record of iteration one. The legacy pipeline described here has since been removed; see README and DIAGNOSTICS.md for the current compiler.
+
 # Iteration one review
 
 ## Scope and baseline

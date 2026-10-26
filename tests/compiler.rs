@@ -2,8 +2,12 @@ use helium::diagnostic::DiagnosticCode;
 use helium::frontend::{
     expression::ExpressionType as E, statement::StatementType as S, static_type::StaticType as T,
 };
-use helium::middle_end::linear_ir::{IRType as I, LoadType};
-use helium::{analyze, check, compile_assembly, compile_ir};
+use helium::ir::{
+    self,
+    interpret::{Event, Interpreter},
+    *,
+};
+use helium::{analyze, check, compile_typed_ir};
 use std::collections::HashMap;
 
 fn errors(source: &str) -> Vec<DiagnosticCode> {
@@ -103,9 +107,7 @@ fn boolean_operators_and_pin_inversion_have_explicit_types() {
         panic!()
     };
     assert_eq!(*ty, T::Boolean);
-    let error = check("def Led=PortC.5 OUTPUT; loop { Led=!Led; }", "atmega328p").unwrap_err();
-    assert_eq!(error[0].code(), DiagnosticCode::Unsupported);
-    assert!(error[0].location.is_some());
+    check("def Led=PortC.5 OUTPUT; loop { Led=!Led; }", "atmega328p").unwrap();
 }
 #[test]
 fn ternary_and_default_initializer_are_typed() {
@@ -198,77 +200,56 @@ fn target_and_support_errors_are_explicit() {
         DiagnosticCode::PinDuplicate
     );
     for source in [
-        "loop {var x=1;}",
-        "loop {while true {}}",
-        "def A=PortB.0 INPUT_PULLUP; loop {}",
-        "loop {if true and false {}}",
+        "loop {var x:f32=1.5;}",
+        "loop {for i=0 to 3 {}}",
+        "loop {var x:u8=4/2;}",
     ] {
         let errors = check(source, "atmega328p").unwrap_err();
         assert!(errors.iter().all(|d| d.location.is_some()), "{source}");
     }
 }
+fn compile(source: &str) -> Module {
+    compile_typed_ir(
+        source,
+        "atmega328p",
+        ir::Options {
+            verify: true,
+            optimize: false,
+        },
+    )
+    .unwrap()
+}
+
 #[test]
 fn gpio_names_multiple_defs_and_deterministic_ir() {
-    let first = compile_ir(GPIO, "atmega328p")
-        .unwrap()
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-    let second = compile_ir(GPIO, "atmega328p")
-        .unwrap()
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(first, second);
-    assert!(first.contains("SetInputPortMode PortD2"));
-    assert!(first.contains("SetOutputPortMode PortC5"));
-    let asm = compile_assembly(GPIO, "atmega328p").unwrap();
-    assert!(asm.contains("SBIS PIND,2"));
-    assert!(!asm.contains(".include \"./"));
+    let module = compile(GPIO);
+    assert_eq!(module.dump(), compile(GPIO).dump());
+    assert_eq!(module.pins[0].name, "Key");
+    assert_eq!(module.pins[1].name, "Led");
+    check(GPIO, "atmega328p").unwrap();
 }
+
 #[test]
 fn repeated_pin_reads_are_not_cached_in_or_across_branches() {
     let source="def Key=PortD.2 INPUT; loop { if Key==LOW { if Key==LOW {} } else { if Key==LOW {} } if Key==LOW {} }";
-    let ir = compile_ir(source, "atmega328p").unwrap();
-    assert_eq!(
-        ir.iter()
-            .filter(|i| matches!(i.ir_type, I::SkipIfPinHigh(_)))
-            .count(),
-        4
-    );
-    compile_assembly(source, "atmega328p").unwrap();
+    let module = compile(source);
+    let mut runner = Interpreter::new(&module, 1000).unwrap();
+    runner.inputs.insert(PinId(0), [true, false, true].into());
+    runner.invoke(FunctionId(2), &[]).unwrap();
+    assert_eq!(runner.events.len(), 3);
 }
 
-// A small independent evaluator for the arithmetic inspection subset. It checks
-// observable stores, rather than asserting the builder's register numbering.
 fn evaluate(source: &str) -> HashMap<String, u64> {
-    let mut registers = HashMap::new();
-    let mut memory = HashMap::new();
-    for instruction in compile_ir(source, "atmega328p").unwrap() {
-        match instruction.ir_type {
-            I::Load(LoadType::ImmediateInt(value), reg) => {
-                registers.insert(reg, value);
-            }
-            I::Load(LoadType::Memory(name), reg) => {
-                registers.insert(reg, memory[&name]);
-            }
-            I::Store(reg, name) => {
-                memory.insert(name, registers[&reg]);
-            }
-            I::Move { reg_from, reg_to } => {
-                registers.insert(reg_to, registers[&reg_from]);
-            }
-            I::IntegerAdd { a, b, output } => {
-                registers.insert(output, registers[&a] + registers[&b]);
-            }
-            I::Jump(label) if label == "loop" => break,
-            I::Label(_) => {}
-            _ => panic!("unexpected instruction"),
-        }
-    }
-    memory
+    let mut module = compile(source);
+    module.functions[0].blocks[1].terminator = Terminator::Return(None);
+    let mut runner = Interpreter::new(&module, 10000).unwrap();
+    runner.run_entry().unwrap();
+    module
+        .globals
+        .iter()
+        .zip(&runner.globals)
+        .map(|(g, value)| (g.name.clone(), value.bits))
+        .collect()
 }
 #[test]
 fn assignments_reads_and_scopes_preserve_values() {
@@ -283,14 +264,13 @@ fn assignments_reads_and_scopes_preserve_values() {
 }
 #[test]
 fn chained_pin_assignments_keep_both_effects() {
-    let asm = compile_assembly(
-        "def A=PortB.0 OUTPUT; def B=PortB.1 OUTPUT; loop {A=B=HIGH;}",
-        "atmega328p",
-    )
-    .unwrap();
-    let a = asm.find("SBI PORTB,0").unwrap();
-    let b = asm.find("SBI PORTB,1").unwrap();
-    assert!(b < a);
+    let module = compile("def A=PortB.0 OUTPUT; def B=PortB.1 OUTPUT; loop {A=B=HIGH;}");
+    let mut runner = Interpreter::new(&module, 1000).unwrap();
+    runner.invoke(FunctionId(2), &[]).unwrap();
+    assert_eq!(
+        runner.events,
+        [Event::Write(PinId(1), true), Event::Write(PinId(0), true)]
+    );
 }
 #[test]
 fn integer_to_float_literals_must_be_exact() {
@@ -305,14 +285,10 @@ fn setup_must_precede_loop() {
     assert!(analyze("setup {} setup {} loop {}").is_err());
 }
 #[test]
-fn planned_latch_has_valid_types_but_is_not_claimed_as_supported() {
-    let source = include_str!("../examples/planned/latch.he");
-    analyze(source).unwrap();
-    assert!(check(source, "atmega328p")
-        .unwrap_err()
-        .iter()
-        .any(|d| d.code() == DiagnosticCode::Unsupported));
+fn latch_is_supported_by_the_only_backend() {
+    check(include_str!("../examples/functions-latch.he"), "atmega328p").unwrap();
 }
+
 #[test]
 fn malformed_token_combinations_do_not_panic() {
     // Deterministic small corpus catches error-recovery interactions, not just handpicked valid programs.
@@ -331,26 +307,13 @@ fn malformed_token_combinations_do_not_panic() {
     }
 }
 #[test]
-fn gpio_ir_matches_reviewed_snapshot() {
-    let ir = compile_ir(include_str!("../goal.he"), "atmega328p").unwrap();
-    let actual = ir
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
-    assert_eq!(
-        actual,
-        include_str!("snapshots/gpio.ir").replace("\r\n", "\n")
-    );
-}
-#[test]
 fn grouped_and_reversed_pin_comparisons_use_the_correct_pin() {
     for condition in ["(Key)==LOW", "LOW==(Key)"] {
         let source = format!("def Key=PortD.2 INPUT; loop {{ if {condition} {{}} }}");
-        assert!(compile_assembly(&source, "atmega328p")
-            .unwrap()
-            .contains("SBIS PIND,2"));
+        let module = compile(&source);
+        let mut runner = Interpreter::new(&module, 1000).unwrap();
+        runner.invoke(FunctionId(2), &[]).unwrap();
+        assert_eq!(runner.events, [Event::Read(PinId(0), false)]);
     }
 }
 #[test]

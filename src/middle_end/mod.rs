@@ -1,7 +1,6 @@
 mod functions;
-pub mod linear_ir;
 
-use crate::diagnostic::{Diagnostic, DiagnosticKind};
+use crate::diagnostic::{Diagnostic, DiagnosticKind, LabelKind};
 use crate::frontend::{
     expression::{Expression, ExpressionType as E},
     statement::{Statement, StatementType as S},
@@ -17,12 +16,13 @@ use std::collections::{BTreeMap, HashMap};
 
 /// Resolves names and types. A declaration may not shadow any visible name.
 pub struct Analyzer {
-    scopes: Vec<HashMap<String, T>>,
+    scopes: Vec<HashMap<String, (T, SourceLocation)>>,
     errors: Vec<Diagnostic>,
     functions: BTreeMap<String, Signature>,
     calls: BTreeMap<String, Vec<(String, SourceLocation)>>,
     current_function: Option<String>,
     return_type: Option<Option<T>>,
+    return_location: Option<SourceLocation>,
     global_initializer: bool,
 }
 
@@ -35,6 +35,7 @@ impl Analyzer {
             calls: BTreeMap::new(),
             current_function: None,
             return_type: None,
+            return_location: None,
             global_initializer: false,
         }
     }
@@ -80,22 +81,46 @@ impl Analyzer {
         self.scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(name).copied())
+            .find_map(|scope| scope.get(name).map(|(ty, _)| *ty))
     }
 
     fn declare(&mut self, name: &str, ty: T, span: SourceLocation) {
-        if self.lookup(name).is_some() || self.functions.contains_key(name) {
-            self.error(
-                DiagnosticKind::DuplicateName {
-                    name: name.to_owned(),
-                },
-                span,
+        let previous = self
+            .scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name).map(|(_, span)| *span))
+            .or_else(|| {
+                self.functions
+                    .get(name)
+                    .map(|signature| signature.name_location)
+            });
+        if let Some(previous) = previous {
+            self.errors.push(
+                Diagnostic::new(
+                    DiagnosticKind::DuplicateName {
+                        name: name.to_owned(),
+                    },
+                    Some(span),
+                )
+                .with_label(previous, LabelKind::PreviousDeclaration),
             );
         } else {
             self.scopes
                 .last_mut()
                 .expect("root scope exists")
-                .insert(name.to_owned(), ty);
+                .insert(name.to_owned(), (ty, span));
+        }
+    }
+
+    fn coerce_with_origin(&mut self, expr: &mut Expression, target: T, origin: SourceLocation) {
+        let before = self.errors.len();
+        self.coerce(expr, target);
+        for error in &mut self.errors[before..] {
+            error.labels.push(crate::diagnostic::Label {
+                location: origin,
+                kind: LabelKind::ExpectedType(target),
+            });
         }
     }
 
@@ -117,10 +142,13 @@ impl Analyzer {
                 identifier,
                 parameters,
                 return_type,
+                return_location,
                 body,
+                ..
             } => {
                 self.current_function = Some(identifier.clone());
                 self.return_type = Some(*return_type);
+                self.return_location = *return_location;
                 self.scopes.push(HashMap::new());
                 for parameter in parameters {
                     self.declare(
@@ -131,14 +159,24 @@ impl Analyzer {
                 }
                 self.block(body);
                 self.scopes.pop();
-                if return_type.is_some() && !functions::body_returns(body) {
-                    self.error(
-                        DiagnosticKind::MissingReturn {
-                            name: identifier.clone(),
-                        },
-                        span,
-                    );
+                if let Some(target) = return_type {
+                    let exits = functions::fallthrough(body, span.closing());
+                    if let Some((location, _)) = exits.first() {
+                        let mut error = Diagnostic::new(
+                            DiagnosticKind::MissingReturn {
+                                name: identifier.clone(),
+                            },
+                            Some(*location),
+                        );
+                        for (location, kind) in exits {
+                            error = error.with_label(location, kind);
+                        }
+                        error = error
+                            .with_label(return_location.unwrap(), LabelKind::ExpectedType(*target));
+                        self.errors.push(error);
+                    }
                 }
+                self.return_location = None;
                 self.current_function = None;
                 self.return_type = None;
             }
@@ -148,12 +186,26 @@ impl Analyzer {
                 }
                 match (self.return_type, value) {
                     (None, _) => self.error(DiagnosticKind::ReturnOutsideFunction, span),
-                    (Some(Some(target)), Some(value)) => self.coerce(value, target),
-                    (Some(Some(target)), None) => {
-                        self.error(DiagnosticKind::ReturnValueRequired { target }, span)
+                    (Some(Some(target)), Some(value)) => {
+                        self.coerce_with_origin(value, target, self.return_location.unwrap())
                     }
-                    (Some(None), Some(_)) => {
-                        self.error(DiagnosticKind::UnexpectedReturnValue, span)
+                    (Some(Some(target)), None) => self.errors.push(
+                        Diagnostic::new(DiagnosticKind::ReturnValueRequired { target }, Some(span))
+                            .with_label(
+                                self.return_location.unwrap(),
+                                LabelKind::ExpectedType(target),
+                            ),
+                    ),
+                    (Some(None), Some(value)) => {
+                        let declaration =
+                            self.functions[self.current_function.as_ref().unwrap()].name_location;
+                        self.errors.push(
+                            Diagnostic::new(
+                                DiagnosticKind::UnexpectedReturnValue,
+                                Some(value.source_location),
+                            )
+                            .with_label(declaration, LabelKind::FunctionDeclaration),
+                        );
                     }
                     (Some(None), None) => {}
                 }
@@ -162,6 +214,8 @@ impl Analyzer {
                 identifier,
                 static_type,
                 initializer,
+                name_location,
+                type_location,
             } => {
                 if initializer.is_none() {
                     let value = match static_type {
@@ -178,7 +232,7 @@ impl Analyzer {
                             static_type: T::Unknown,
                         });
                     } else {
-                        self.error(DiagnosticKind::MissingInitializer, span);
+                        self.error(DiagnosticKind::MissingInitializer, *name_location);
                     }
                 }
 
@@ -191,15 +245,15 @@ impl Analyzer {
                 let target = static_type.unwrap_or_else(|| default_type(inferred));
 
                 if let Some(expr) = initializer {
-                    self.coerce(expr, target);
+                    self.coerce_with_origin(expr, target, type_location.unwrap_or(*name_location));
                 }
 
                 *static_type = Some(target);
-                self.declare(identifier, target, span);
+                self.declare(identifier, target, *name_location);
             }
             S::DefDeclaration(declarations) => {
                 for pin in declarations {
-                    self.declare(&pin.identifier, T::Pin, pin.source_location);
+                    self.declare(&pin.identifier, T::Pin, pin.name_location);
                 }
             }
             S::SetupDeclaration(body) | S::LoopDeclaration(body) | S::Block(body) => {
@@ -239,13 +293,21 @@ impl Analyzer {
                 from,
                 to,
                 body,
+                name_location,
             } => {
                 let a = self.expression(from);
                 let b = self.expression(to);
                 let ty = if matches!((a, b), (T::Integer(_), T::Integer(_))) {
                     self.common_numeric(from, to)
                 } else {
-                    self.error(DiagnosticKind::ForBounds, span);
+                    if a != T::Unknown && b != T::Unknown {
+                        let bad = if !matches!(a, T::Integer(_)) {
+                            from.source_location
+                        } else {
+                            to.source_location
+                        };
+                        self.error(DiagnosticKind::ForBounds, bad);
+                    }
                     T::Unknown
                 };
 
@@ -254,7 +316,7 @@ impl Analyzer {
                 self.coerce(to, ty);
 
                 self.scopes.push(HashMap::new());
-                self.declare(identifier, ty, span);
+                self.declare(identifier, ty, *name_location);
                 self.statement(body);
                 self.scopes.pop();
             }
@@ -272,6 +334,7 @@ impl Analyzer {
     fn expression(&mut self, expr: &mut Expression) -> T {
         let span = expr.source_location;
 
+        let error_start = self.errors.len();
         let ty = match &mut expr.expression_type {
             E::Call {
                 identifier,
@@ -307,7 +370,9 @@ impl Analyzer {
                 T::Unknown
             }),
             E::Grouping { expression } => self.expression(expression),
-            E::Unary { operator, right } => {
+            E::Unary {
+                operator, right, ..
+            } => {
                 let operand = self.expression(right);
 
                 match (operator, operand) {
@@ -331,6 +396,7 @@ impl Analyzer {
                 left,
                 operator,
                 right,
+                ..
             } => {
                 let a = self.expression(left);
                 let b = self.expression(right);
@@ -390,7 +456,9 @@ impl Analyzer {
                 let a = self.expression(second);
                 let b = self.expression(third);
 
-                if numeric(a) && numeric(b) {
+                if a == T::Unknown || b == T::Unknown {
+                    T::Unknown
+                } else if numeric(a) && numeric(b) {
                     self.common_numeric(second, third)
                 } else if a == b {
                     a
@@ -408,7 +476,13 @@ impl Analyzer {
                 match self.lookup(identifier) {
                     Some(T::Pin) if matches!(value, T::PinState | T::PinMode) => value,
                     Some(target) => {
-                        self.coerce(expression, target);
+                        let origin = self
+                            .scopes
+                            .iter()
+                            .rev()
+                            .find_map(|scope| scope.get(identifier).map(|(_, span)| *span))
+                            .unwrap();
+                        self.coerce_with_origin(expression, target, origin);
                         target
                     }
                     None => {
@@ -416,7 +490,7 @@ impl Analyzer {
                             DiagnosticKind::UndefinedName {
                                 name: identifier.clone(),
                             },
-                            span,
+                            span.name(identifier),
                         );
                         T::Unknown
                     }
@@ -424,6 +498,74 @@ impl Analyzer {
             }
         };
 
+        // Attach both sides of type disagreements without creating extra errors.
+        for error in &mut self.errors[error_start..] {
+            if error.location != Some(span) {
+                continue;
+            }
+            match (&*error.kind, &expr.expression_type) {
+                (
+                    DiagnosticKind::BinaryType { a, b, .. },
+                    E::Binary {
+                        left,
+                        right,
+                        operator_location,
+                        ..
+                    },
+                ) => {
+                    error.location = Some(*operator_location);
+                    error.labels = vec![
+                        crate::diagnostic::Label {
+                            location: left.source_location,
+                            kind: LabelKind::OperandType(*a),
+                        },
+                        crate::diagnostic::Label {
+                            location: right.source_location,
+                            kind: LabelKind::OperandType(*b),
+                        },
+                    ];
+                }
+                (
+                    DiagnosticKind::UnaryType { operand, .. },
+                    E::Unary {
+                        right,
+                        operator_location,
+                        ..
+                    },
+                ) => {
+                    error.location = Some(*operator_location);
+                    error.labels.push(crate::diagnostic::Label {
+                        location: right.source_location,
+                        kind: LabelKind::OperandType(*operand),
+                    });
+                }
+                (DiagnosticKind::BranchTypes { a, b }, E::Ternary { second, third, .. }) => {
+                    error.labels = vec![
+                        crate::diagnostic::Label {
+                            location: second.source_location,
+                            kind: LabelKind::OperandType(*a),
+                        },
+                        crate::diagnostic::Label {
+                            location: third.source_location,
+                            kind: LabelKind::OperandType(*b),
+                        },
+                    ];
+                }
+                (
+                    DiagnosticKind::ProcedureValue { name }
+                    | DiagnosticKind::FunctionValue { name },
+                    _,
+                ) => {
+                    if let Some(signature) = self.functions.get(name) {
+                        error.labels.push(crate::diagnostic::Label {
+                            location: signature.return_location.unwrap_or(signature.name_location),
+                            kind: LabelKind::FunctionDeclaration,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
         expr.static_type = ty;
 
         ty
@@ -444,7 +586,13 @@ impl Analyzer {
         } else if widening(b, a) {
             a
         } else {
-            self.error(DiagnosticKind::NumericTypes { a, b }, left.source_location);
+            self.errors.push(
+                Diagnostic::new(
+                    DiagnosticKind::NumericTypes { a, b },
+                    Some(left.source_location),
+                )
+                .with_label(right.source_location, LabelKind::OperandType(b)),
+            );
             return T::Unknown;
         };
 
@@ -520,6 +668,7 @@ impl Analyzer {
                 E::Unary {
                     operator: P::Minus,
                     right,
+                    ..
                 } => {
                     if matches!(target, T::Integer(I::Unsigned(_))) {
                         self.error(DiagnosticKind::NegatedUnsigned, expr.source_location);
@@ -573,6 +722,7 @@ fn integer_literal(expr: &Expression) -> Option<i128> {
         E::Unary {
             operator: P::Minus,
             right,
+            ..
         } => integer_literal(right)?.checked_neg(),
         _ => None,
     }

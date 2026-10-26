@@ -4,6 +4,9 @@ use super::*;
 pub(super) struct Signature {
     parameters: Vec<T>,
     result: Option<T>,
+    pub(super) name_location: SourceLocation,
+    parameter_locations: Vec<SourceLocation>,
+    pub(super) return_location: Option<SourceLocation>,
 }
 
 impl Analyzer {
@@ -13,6 +16,8 @@ impl Analyzer {
                 identifier,
                 parameters,
                 return_type,
+                name_location,
+                return_location,
                 ..
             } = &statement.statement_type
             else {
@@ -21,20 +26,23 @@ impl Analyzer {
 
             for (ty, span) in parameters
                 .iter()
-                .map(|p| (p.static_type, p.source_location))
-                .chain(return_type.map(|t| (t, statement.source_location)))
+                .map(|p| (p.static_type, p.type_location))
+                .chain(return_type.map(|t| (t, return_location.unwrap())))
             {
                 if !matches!(ty, T::Integer(_) | T::Boolean | T::PinState) {
                     self.error(DiagnosticKind::FunctionSignatureType { ty }, span);
                 }
             }
 
-            if self.functions.contains_key(identifier) {
-                self.error(
-                    DiagnosticKind::DuplicateName {
-                        name: identifier.clone(),
-                    },
-                    statement.source_location,
+            if let Some(previous) = self.functions.get(identifier) {
+                self.errors.push(
+                    Diagnostic::new(
+                        DiagnosticKind::DuplicateName {
+                            name: identifier.clone(),
+                        },
+                        Some(*name_location),
+                    )
+                    .with_label(previous.name_location, LabelKind::PreviousDeclaration),
                 );
             } else {
                 self.functions.insert(
@@ -42,6 +50,9 @@ impl Analyzer {
                     Signature {
                         parameters: parameters.iter().map(|p| p.static_type).collect(),
                         result: *return_type,
+                        name_location: *name_location,
+                        parameter_locations: parameters.iter().map(|p| p.type_location).collect(),
+                        return_location: *return_location,
                     },
                 );
             }
@@ -62,7 +73,11 @@ impl Analyzer {
         for (index, argument) in arguments.iter_mut().enumerate() {
             self.expression(argument);
             if let Some(target) = signature.as_ref().and_then(|s| s.parameters.get(index)) {
-                self.coerce(argument, *target);
+                self.coerce_with_origin(
+                    argument,
+                    *target,
+                    signature.as_ref().unwrap().parameter_locations[index],
+                );
             }
         }
 
@@ -72,17 +87,29 @@ impl Analyzer {
             } else {
                 DiagnosticKind::UndefinedName { name: name.into() }
             };
-            self.error(kind, span);
+            let mut error = Diagnostic::new(kind, Some(span.name(name)));
+            if let Some(location) = self
+                .scopes
+                .iter()
+                .rev()
+                .find_map(|scope| scope.get(name).map(|(_, span)| *span))
+            {
+                error = error.with_label(location, LabelKind::PreviousDeclaration);
+            }
+            self.errors.push(error);
             return Some(T::Unknown);
         };
         if arguments.len() != signature.parameters.len() {
-            self.error(
-                DiagnosticKind::ArgumentCount {
-                    name: name.into(),
-                    expected: signature.parameters.len(),
-                    actual: arguments.len(),
-                },
-                span,
+            self.errors.push(
+                Diagnostic::new(
+                    DiagnosticKind::ArgumentCount {
+                        name: name.into(),
+                        expected: signature.parameters.len(),
+                        actual: arguments.len(),
+                    },
+                    Some(span),
+                )
+                .with_label(signature.name_location, LabelKind::FunctionDeclaration),
             );
         }
         if let Some(caller) = &self.current_function {
@@ -112,10 +139,22 @@ impl Analyzer {
                         let start = stack.iter().position(|n| n == callee).unwrap();
                         let mut chain = stack[start..].to_vec();
                         chain.push(callee.clone());
-                        errors.push(Diagnostic::new(
-                            DiagnosticKind::RecursiveCalls { chain },
+                        let mut error = Diagnostic::new(
+                            DiagnosticKind::RecursiveCalls {
+                                chain: chain.clone(),
+                            },
                             Some(*span),
-                        ));
+                        );
+                        for pair in chain.windows(2) {
+                            if let Some((_, location)) =
+                                edges[&pair[0]].iter().find(|(name, _)| name == &pair[1])
+                            {
+                                if location != span {
+                                    error = error.with_label(*location, LabelKind::RecursiveCall);
+                                }
+                            }
+                        }
+                        errors.push(error);
                     }
                     _ => {}
                 }
@@ -139,20 +178,60 @@ impl Analyzer {
     }
 }
 
-pub(super) fn body_returns(body: &[Statement]) -> bool {
-    body.iter().any(statement_returns)
-}
+/// Keep only paths that can fall through the entire sequence. A later return
+/// discharges earlier branch witnesses; a return inside a loop does not.
+pub(super) fn fallthrough(
+    body: &[Statement],
+    end: SourceLocation,
+) -> Vec<(SourceLocation, LabelKind)> {
+    let mut exits = vec![(end, LabelKind::Fallthrough)];
 
-fn statement_returns(statement: &Statement) -> bool {
-    match &statement.statement_type {
-        S::Return(_) => true,
-        S::Block(body) => body_returns(body),
-        S::If {
-            then_body,
-            else_body: Some(other),
-            ..
-        } => statement_returns(then_body) && statement_returns(other),
-        // Conservative: loops may execute zero times, even with a constant test.
-        _ => false,
+    for statement in body {
+        if exits.is_empty() {
+            break;
+        }
+
+        match &statement.statement_type {
+            S::Return(_) => exits.clear(),
+            S::Block(body) => {
+                let inner = fallthrough(body, statement.source_location.closing());
+                if inner.is_empty() {
+                    exits.clear();
+                } else if inner
+                    .iter()
+                    .any(|(_, kind)| *kind != LabelKind::Fallthrough)
+                {
+                    exits = inner;
+                }
+            }
+            S::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                exits = fallthrough(
+                    std::slice::from_ref(then_body.as_ref()),
+                    then_body.source_location.closing(),
+                );
+                if let Some(other) = else_body {
+                    exits.extend(fallthrough(
+                        std::slice::from_ref(other.as_ref()),
+                        other.source_location.closing(),
+                    ));
+                } else {
+                    exits.push((condition.source_location, LabelKind::FalseBranch));
+                }
+            }
+            S::While { condition, .. } => {
+                exits.push((condition.source_location, LabelKind::LoopMayNotRun));
+            }
+            S::For { from, to, .. } => exits.push((
+                SourceLocation::new_from_start_end(from.source_location, to.source_location),
+                LabelKind::LoopMayNotRun,
+            )),
+            _ => {}
+        }
     }
+
+    exits
 }

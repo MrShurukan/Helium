@@ -18,13 +18,6 @@ fn run(tool: &str, command: &mut Command) -> Result<(), String> {
     }
 }
 
-pub fn assemble(assembly: &Path, hex: &Path) -> Result<(), String> {
-    run(
-        "avra",
-        Command::new("avra").arg("-o").arg(hex).arg(assembly),
-    )
-}
-
 pub fn flash(hex: &Path, mcu: &str, programmer: &str) -> Result<(), String> {
     let target =
         super::microcontroller::get(mcu).ok_or_else(|| format!("Unsupported MCU '{mcu}'"))?;
