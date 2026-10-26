@@ -135,6 +135,7 @@ impl Parser<'_> {
             unreachable!()
         };
         Some(Statement {
+            symbol: None,
             source_location: SourceLocation::new_from_start_end(start, end),
             statement_type: StatementType::TimerDeclaration(TimerDeclaration {
                 identifier,

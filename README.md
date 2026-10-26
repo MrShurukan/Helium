@@ -59,6 +59,11 @@ validate the installed toolchain or replace a full build. `build` defaults to HE
 The library exposes `analyze`, `compile_typed_ir`, `compile_llvm`, `check` and
 `check_with_options(source, mcu, Options)` for clock/configuration-aware checks.
 
+`analyze` returns one `AnalyzedProgram`: `statements()` exposes the analyzed tree,
+`symbols()` its resolved declarations and `shared_analysis()` the call/resource graph.
+The result is read-only. Symbol IDs are local to that result, not persistent IDs across edits.
+There is no separate AST-only analysis path; `build --emit ast` displays the complete result.
+
 Internal IR verification is enabled by default in both debug and release.
 `--verify-ir` remains an explicit assertion of that policy; the library can set `Options.verify=false`.
 Source validation is always enabled. `--optimize-ir` runs experimental Helium passes

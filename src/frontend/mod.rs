@@ -325,6 +325,7 @@ impl Parser<'_> {
         };
 
         Some(Statement {
+            symbol: None,
             source_location: crate::frontend::utils::SourceLocation::new_from_start_end(
                 start,
                 block.source_location,
@@ -371,6 +372,7 @@ impl Parser<'_> {
                     unreachable!()
                 };
                 parameters.push(Parameter {
+                    symbol: None,
                     type_location: kind.source_location,
                     identifier,
                     static_type: *static_type,
@@ -413,6 +415,7 @@ impl Parser<'_> {
             unreachable!()
         };
         Some(Statement {
+            symbol: None,
             source_location: crate::frontend::utils::SourceLocation::new_from_start_end(
                 start,
                 block.source_location,
@@ -447,6 +450,7 @@ impl Parser<'_> {
         )
         .source_location;
         Some(Statement {
+            symbol: None,
             source_location: crate::frontend::utils::SourceLocation::new_from_start_end(start, end),
             statement_type: StatementType::Return(value),
         })
@@ -1042,6 +1046,7 @@ impl Parser<'_> {
         )
         .source_location;
         Some(Expression {
+            symbol: None,
             expression_type: ExpressionType::Call {
                 identifier,
                 arguments,
@@ -1101,6 +1106,7 @@ impl Parser<'_> {
                 }
 
                 Some(Expression {
+                    symbol: None,
                     source_location: crate::frontend::utils::SourceLocation::new_from_start_end(
                         token.source_location,
                         next_token.source_location,

@@ -12,6 +12,7 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug)]
 #[allow(clippy::struct_field_names)]
 pub struct Statement {
+    pub symbol: Option<crate::semantic::SymbolId>,
     pub statement_type: StatementType,
     pub source_location: SourceLocation,
 }
@@ -69,6 +70,54 @@ pub enum StatementType {
 }
 
 impl Statement {
+    /// Read-only counterpart of for_each_expression_mut.
+    pub fn for_each_expression(&self, visit: &mut impl FnMut(&Expression)) {
+        use StatementType as S;
+        match &self.statement_type {
+            S::TimerDeclaration(timer) => {
+                for s in &timer.body {
+                    s.for_each_expression(visit);
+                }
+            }
+            S::FunctionDeclaration { body, .. }
+            | S::SetupDeclaration(body)
+            | S::LoopDeclaration(body)
+            | S::Block(body)
+            | S::NoInterrupt(body) => {
+                for s in body {
+                    s.for_each_expression(visit);
+                }
+            }
+            S::VariableDeclaration { initializer, .. } | S::Return(initializer) => {
+                if let Some(e) = initializer {
+                    visit(e);
+                }
+            }
+            S::Expression(e) => visit(e),
+            S::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                visit(condition);
+                then_body.for_each_expression(visit);
+                if let Some(s) = else_body {
+                    s.for_each_expression(visit);
+                }
+            }
+            S::While { condition, body } => {
+                visit(condition);
+                body.for_each_expression(visit);
+            }
+            S::For { from, to, body, .. } => {
+                visit(from);
+                visit(to);
+                body.for_each_expression(visit);
+            }
+            S::DefDeclaration(_) => {}
+        }
+    }
+
     /// Visit expression roots throughout nested statements, including unreachable
     /// statements. The visitor chooses how to descend into expression operands.
     pub fn for_each_expression_mut(&mut self, visit: &mut impl FnMut(&mut Expression)) {
@@ -120,6 +169,7 @@ impl Statement {
 
     pub fn new_expression(expression: Expression) -> Self {
         Self {
+            symbol: None,
             source_location: expression.source_location,
             statement_type: StatementType::Expression(expression),
         }
@@ -155,6 +205,7 @@ impl Statement {
         };
 
         Self {
+            symbol: None,
             source_location: SourceLocation::new_from_start_end(var_keyword.source_location, end),
             statement_type: StatementType::VariableDeclaration {
                 identifier: ident,
@@ -174,6 +225,7 @@ impl Statement {
         let last = def_declarations.last().unwrap();
 
         Self {
+            symbol: None,
             source_location: SourceLocation::new_from_start_end(
                 first.source_location,
                 last.source_location,
@@ -184,6 +236,7 @@ impl Statement {
 
     pub fn new_setup_declaration(body: Vec<Statement>, source_location: SourceLocation) -> Self {
         Self {
+            symbol: None,
             source_location,
             statement_type: StatementType::SetupDeclaration(body),
         }
@@ -191,6 +244,7 @@ impl Statement {
 
     pub fn new_loop_declaration(body: Vec<Statement>, source_location: SourceLocation) -> Self {
         Self {
+            symbol: None,
             source_location,
             statement_type: StatementType::LoopDeclaration(body),
         }
@@ -203,6 +257,7 @@ impl Statement {
         statements: Vec<Statement>,
     ) -> Self {
         Self {
+            symbol: None,
             source_location: SourceLocation::new_from_start_end(
                 opening_brace.source_location,
                 closing_brace.source_location,
@@ -229,6 +284,7 @@ impl Statement {
         };
 
         Self {
+            symbol: None,
             source_location: SourceLocation {
                 line_start: condition.source_location.line_start,
                 line_end,
@@ -245,6 +301,7 @@ impl Statement {
 
     pub fn new_while(condition: Expression, body: Box<Statement>) -> Self {
         Self {
+            symbol: None,
             source_location: SourceLocation::new_from_start_end(
                 condition.source_location,
                 body.source_location,
@@ -264,6 +321,7 @@ impl Statement {
         };
 
         Self {
+            symbol: None,
             source_location: SourceLocation::new_from_start_end(
                 identifier.source_location,
                 body.source_location,
@@ -418,6 +476,7 @@ pub struct TimerDeclaration {
 
 #[derive(Debug)]
 pub struct Parameter {
+    pub symbol: Option<crate::semantic::SymbolId>,
     pub type_location: SourceLocation,
     pub identifier: String,
     pub static_type: StaticType,
@@ -426,6 +485,7 @@ pub struct Parameter {
 
 #[derive(Debug)]
 pub struct SingleDefDeclaration {
+    pub symbol: Option<crate::semantic::SymbolId>,
     pub name_location: SourceLocation,
     pub pin_location: SourceLocation,
     pub mode_location: SourceLocation,
@@ -452,6 +512,7 @@ impl SingleDefDeclaration {
         if let TokenType::Identifier(ident) = identifier.token_type {
             if let TokenType::Constant(ConstantType::PinMode(pin)) = pin_mode.token_type {
                 Ok(SingleDefDeclaration {
+                    symbol: None,
                     name_location: identifier.source_location,
                     pin_location,
                     mode_location: pin_mode.source_location,

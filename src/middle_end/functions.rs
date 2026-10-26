@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Clone)]
 pub(super) struct Signature {
+    pub(super) id: SymbolId,
     no_interrupt: Option<SourceLocation>,
     parameters: Vec<T>,
     result: Option<T>,
@@ -11,7 +12,7 @@ pub(super) struct Signature {
 }
 
 impl Analyzer {
-    pub(super) fn collect_signatures(&mut self, statements: &[Statement]) {
+    pub(super) fn collect_signatures(&mut self, statements: &mut [Statement]) {
         for statement in statements {
             let S::FunctionDeclaration {
                 no_interrupt,
@@ -47,9 +48,22 @@ impl Analyzer {
                     .with_label(previous.name_location, LabelKind::PreviousDeclaration),
                 );
             } else {
+                let id = self.symbols.add(Symbol {
+                    name: identifier.clone(),
+                    kind: SymbolKind::Function {
+                        parameters: parameters.iter().map(|p| p.static_type).collect(),
+                        result: *return_type,
+                        requires_no_interrupt: no_interrupt.is_some(),
+                    },
+                    ty: return_type.unwrap_or(T::NoValue),
+                    declaration: *name_location,
+                    owner: None,
+                });
+                statement.symbol = Some(id);
                 self.functions.insert(
                     identifier.clone(),
                     Signature {
+                        id,
                         no_interrupt: *no_interrupt,
                         parameters: parameters.iter().map(|p| p.static_type).collect(),
                         result: *return_type,
@@ -95,7 +109,7 @@ impl Analyzer {
                 .scopes
                 .iter()
                 .rev()
-                .find_map(|scope| scope.get(name).map(|(_, span)| *span))
+                .find_map(|scope| scope.get(name).map(|id| self.symbols.get(*id).declaration))
             {
                 error = error.with_label(location, LabelKind::PreviousDeclaration);
             }
@@ -129,40 +143,43 @@ impl Analyzer {
         }
         if let Some(caller) = &self.current_function {
             self.calls
-                .entry(caller.clone())
+                .entry(self.functions[caller].id)
                 .or_default()
-                .push((name.into(), span));
+                .push((signature.id, span));
         }
         signature.result
     }
 
     pub(super) fn check_recursion(&mut self) {
-        // Visit in deterministic name/source order, including unused functions.
         fn visit(
-            name: &str,
-            edges: &BTreeMap<String, Vec<(String, SourceLocation)>>,
-            state: &mut HashMap<String, u8>,
-            stack: &mut Vec<String>,
+            id: SymbolId,
+            edges: &BTreeMap<SymbolId, Vec<(SymbolId, SourceLocation)>>,
+            symbols: &SymbolTable,
+            state: &mut HashMap<SymbolId, u8>,
+            stack: &mut Vec<SymbolId>,
             errors: &mut Vec<Diagnostic>,
         ) {
-            state.insert(name.into(), 1);
-            stack.push(name.into());
-            for (callee, span) in edges.get(name).into_iter().flatten() {
+            state.insert(id, 1);
+            stack.push(id);
+            for (callee, span) in edges.get(&id).into_iter().flatten() {
                 match state.get(callee).copied().unwrap_or(0) {
-                    0 => visit(callee, edges, state, stack, errors),
+                    0 => visit(*callee, edges, symbols, state, stack, errors),
                     1 => {
                         let start = stack.iter().position(|n| n == callee).unwrap();
                         let mut chain = stack[start..].to_vec();
-                        chain.push(callee.clone());
+                        chain.push(*callee);
                         let mut error = Diagnostic::new(
                             DiagnosticKind::RecursiveCalls {
-                                chain: chain.clone(),
+                                chain: chain
+                                    .iter()
+                                    .map(|id| symbols.get(*id).name.clone())
+                                    .collect(),
                             },
                             Some(*span),
                         );
                         for pair in chain.windows(2) {
                             if let Some((_, location)) =
-                                edges[&pair[0]].iter().find(|(name, _)| name == &pair[1])
+                                edges[&pair[0]].iter().find(|(id, _)| *id == pair[1])
                             {
                                 if location != span {
                                     error = error.with_label(*location, LabelKind::RecursiveCall);
@@ -175,15 +192,15 @@ impl Analyzer {
                 }
             }
             stack.pop();
-            state.insert(name.into(), 2);
+            state.insert(id, 2);
         }
-
         let mut state = HashMap::new();
-        for name in self.functions.keys() {
-            if !state.contains_key(name) {
+        for signature in self.functions.values() {
+            if !state.contains_key(&signature.id) {
                 visit(
-                    name,
+                    signature.id,
                     &self.calls,
+                    &self.symbols,
                     &mut state,
                     &mut Vec::new(),
                     &mut self.errors,

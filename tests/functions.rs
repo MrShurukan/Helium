@@ -215,7 +215,7 @@ fn malformed_function_syntax_and_prefixes_do_not_panic() {
 fn functions_preserve_deterministic_ids_and_parameter_origins() {
     use helium::frontend::{statement::StatementType, static_type::StaticType};
     let ast = analyze("fn ready() {} loop { ready(); }").unwrap();
-    let StatementType::LoopDeclaration(body) = &ast[1].statement_type else {
+    let StatementType::LoopDeclaration(body) = &ast.statements()[1].statement_type else {
         panic!()
     };
     let StatementType::Expression(call) = &body[0].statement_type else {

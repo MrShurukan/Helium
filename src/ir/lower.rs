@@ -11,6 +11,7 @@ use crate::frontend::{
         PinStateConstantType as State, PunctuationType as P, TokenType as Token,
     },
 };
+use crate::semantic::{AnalyzedProgram, SymbolId};
 use std::collections::HashMap;
 
 fn unsupported(feature: &str, location: SourceLocation) -> Diagnostic {
@@ -116,10 +117,11 @@ fn checked_integer(
 }
 
 pub(crate) fn lower(
-    statements: &[Statement],
+    program: &AnalyzedProgram,
     target: &str,
     timer: Option<crate::timer::TimerConfig>,
 ) -> Result<Module, Diagnostic> {
+    let statements = program.statements();
     let mut module = Module {
         lifecycle: None,
         timer,
@@ -138,17 +140,12 @@ pub(crate) fn lower(
     let mut functions = HashMap::new();
 
     for statement in statements {
-        if let S::FunctionDeclaration {
-            identifier,
-            return_type,
-            ..
-        } = &statement.statement_type
-        {
+        if let S::FunctionDeclaration { return_type, .. } = &statement.statement_type {
             let id = FunctionId(functions.len() + 3);
             let result = return_type
                 .map(|t| ty(t, statement.source_location))
                 .transpose()?;
-            functions.insert(identifier.clone(), (id, result));
+            functions.insert(statement.symbol.unwrap(), (id, result));
         }
     }
 
@@ -161,7 +158,7 @@ pub(crate) fn lower(
             } => {
                 let global = GlobalId(module.globals.len());
                 let ty = ty(static_type.unwrap_or(T::Unknown), statement.source_location)?;
-                globals.insert(identifier.clone(), (global, ty));
+                globals.insert(statement.symbol.unwrap(), (global, ty));
                 module.globals.push(Storage {
                     name: identifier.clone(),
                     ty,
@@ -171,7 +168,7 @@ pub(crate) fn lower(
             S::DefDeclaration(declarations) => {
                 for declaration in declarations {
                     let pin = PinId(module.pins.len());
-                    pins.insert(declaration.identifier.clone(), pin);
+                    pins.insert(declaration.symbol.unwrap(), pin);
                     module.pins.push(Pin {
                         name: declaration.identifier.clone(),
                         port: declaration.pin.port.clone(),
@@ -207,14 +204,13 @@ pub(crate) fn lower(
     );
     for statement in statements {
         if let S::VariableDeclaration {
-            identifier,
             initializer: Some(expr),
             ..
         } = &statement.statement_type
         {
             let value = initialize.value(expr)?;
             initialize.effect(
-                Op::StoreGlobal(globals[identifier].0, value),
+                Op::StoreGlobal(globals[&statement.symbol.unwrap()].0, value),
                 Origin::Source(statement.source_location),
             );
         }
@@ -224,7 +220,7 @@ pub(crate) fn lower(
             for declaration in declarations {
                 initialize.effect(
                     Op::SetPinMode(
-                        pins[&declaration.identifier],
+                        pins[&declaration.symbol.unwrap()],
                         mode(&declaration.pin_mode, declaration.source_location)?,
                     ),
                     Origin::Source(declaration.source_location),
@@ -282,10 +278,9 @@ pub(crate) fn lower(
         else {
             continue;
         };
-        let (id, result) = functions[identifier];
+        let (id, result) = functions[&statement.symbol.unwrap()];
         let mut builder = Builder::new(id, identifier, &globals, &pins, &functions);
         builder.return_type = result;
-        builder.scopes.push(HashMap::new());
         for parameter in parameters {
             let kind = ty(parameter.static_type, parameter.source_location)?;
             let value = ValueId {
@@ -298,11 +293,7 @@ pub(crate) fn lower(
 
             let origin = Origin::Source(parameter.source_location);
             let local = builder.local(&parameter.identifier, kind, origin.clone());
-            builder
-                .scopes
-                .last_mut()
-                .unwrap()
-                .insert(parameter.identifier.clone(), local);
+            builder.bindings.insert(parameter.symbol.unwrap(), local);
             builder.effect(Op::StoreLocal(local, value), origin);
         }
         builder.body(body)?;
@@ -337,10 +328,8 @@ pub(crate) fn lower(
             module.functions.push(handler);
         }
     }
-    for name in crate::middle_end::shared::interrupt_globals(statements) {
-        if let Some((id, _)) = globals.get(&name) {
-            module.interrupt_globals.insert(*id);
-        }
+    for symbol in program.shared_analysis().interrupt_globals() {
+        module.interrupt_globals.insert(globals[symbol].0);
     }
     Ok(module)
 }
@@ -359,10 +348,10 @@ struct Builder<'a> {
     next_value: usize,
     value_types: HashMap<ValueId, Type>,
     locals: Vec<Storage>,
-    scopes: Vec<HashMap<String, LocalId>>,
-    globals: &'a HashMap<String, (GlobalId, Type)>,
-    pins: &'a HashMap<String, PinId>,
-    functions: &'a HashMap<String, (FunctionId, Option<Type>)>,
+    bindings: HashMap<SymbolId, LocalId>,
+    globals: &'a HashMap<SymbolId, (GlobalId, Type)>,
+    pins: &'a HashMap<SymbolId, PinId>,
+    functions: &'a HashMap<SymbolId, (FunctionId, Option<Type>)>,
     parameters: Vec<(ValueId, Type)>,
     return_type: Option<Type>,
     interrupt_states: Vec<ValueId>,
@@ -372,9 +361,9 @@ impl<'a> Builder<'a> {
     fn new(
         id: FunctionId,
         name: &str,
-        globals: &'a HashMap<String, (GlobalId, Type)>,
-        pins: &'a HashMap<String, PinId>,
-        functions: &'a HashMap<String, (FunctionId, Option<Type>)>,
+        globals: &'a HashMap<SymbolId, (GlobalId, Type)>,
+        pins: &'a HashMap<SymbolId, PinId>,
+        functions: &'a HashMap<SymbolId, (FunctionId, Option<Type>)>,
     ) -> Self {
         Self {
             id,
@@ -388,7 +377,7 @@ impl<'a> Builder<'a> {
             next_value: 0,
             value_types: HashMap::new(),
             locals: vec![],
-            scopes: vec![],
+            bindings: HashMap::new(),
             globals,
             pins,
             functions,
@@ -495,13 +484,6 @@ impl<'a> Builder<'a> {
         id
     }
 
-    fn lookup(&self, name: &str) -> Option<LocalId> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name).copied())
-    }
-
     fn protected_body(
         &mut self,
         statements: &[Statement],
@@ -519,14 +501,12 @@ impl<'a> Builder<'a> {
     }
 
     fn body(&mut self, statements: &[Statement]) -> Result<(), Diagnostic> {
-        self.scopes.push(HashMap::new());
         for statement in statements {
             if self.terminated() {
                 break;
             }
             self.statement(statement)?;
         }
-        self.scopes.pop();
         Ok(())
     }
 
@@ -541,14 +521,11 @@ impl<'a> Builder<'a> {
                 self.terminate(Terminator::Return(value));
             }
             S::Expression(Expression {
-                expression_type:
-                    E::Call {
-                        identifier,
-                        arguments,
-                    },
+                symbol: Some(symbol),
+                expression_type: E::Call { arguments, .. },
                 ..
             }) => {
-                self.call(identifier, arguments, origin)?;
+                self.call(*symbol, arguments, origin)?;
             }
             S::Expression(expr) if expr.static_type == T::PinMode => {
                 self.mode_expression(expr)?;
@@ -572,10 +549,7 @@ impl<'a> Builder<'a> {
                     origin.clone(),
                 );
                 self.effect(Op::StoreLocal(local, value), origin);
-                self.scopes
-                    .last_mut()
-                    .expect("body has a scope")
-                    .insert(identifier.clone(), local);
+                self.bindings.insert(statement.symbol.unwrap(), local);
             }
             S::Block(body) => self.body(body)?,
             S::NoInterrupt(body) => self.protected_body(body, origin)?,
@@ -658,10 +632,10 @@ impl<'a> Builder<'a> {
             E::Assignment {
                 identifier,
                 expression,
-            } if self.pins.contains_key(identifier) => {
+            } if self.pins.contains_key(&expr.symbol.unwrap()) => {
                 let mode = self.mode_expression(expression)?;
                 self.effect(
-                    Op::SetPinMode(self.pins[identifier], mode),
+                    Op::SetPinMode(self.pins[&expr.symbol.unwrap()], mode),
                     Origin::Source(expr.source_location),
                 );
                 Ok(mode)
@@ -675,11 +649,11 @@ impl<'a> Builder<'a> {
 
     fn call(
         &mut self,
-        name: &str,
+        symbol: SymbolId,
         arguments: &[Expression],
         origin: Origin,
     ) -> Result<Option<ValueId>, Diagnostic> {
-        let (id, result) = self.functions[name];
+        let (id, result) = self.functions[&symbol];
         // Evaluate and snapshot each argument before evaluating the next one.
         let arguments = arguments
             .iter()
@@ -712,11 +686,8 @@ impl<'a> Builder<'a> {
         }
 
         let value = match &expr.expression_type {
-            E::Call {
-                identifier,
-                arguments,
-            } => self
-                .call(identifier, arguments, origin.clone())?
+            E::Call { arguments, .. } => self
+                .call(expr.symbol.unwrap(), arguments, origin.clone())?
                 .ok_or_else(|| invalid("procedure used as a value", expr.source_location))?,
             E::Literal { value } => {
                 let bits = match value {
@@ -732,16 +703,17 @@ impl<'a> Builder<'a> {
                     origin.clone(),
                 )
             }
-            E::Identifier(name) => {
-                if let Some(&pin) = self.pins.get(name) {
+            E::Identifier(_) => {
+                let symbol = expr.symbol.unwrap();
+                if let Some(&pin) = self.pins.get(&symbol) {
                     self.emit(Op::ReadPin(pin), Type::PinState, origin.clone())
-                } else if let Some(local) = self.lookup(name) {
+                } else if let Some(local) = self.bindings.get(&symbol).copied() {
                     self.emit(
                         Op::LoadLocal(local),
                         self.locals[local.index].ty,
                         origin.clone(),
                     )
-                } else if let Some(&(global, ty)) = self.globals.get(name) {
+                } else if let Some(&(global, ty)) = self.globals.get(&symbol) {
                     self.emit(Op::LoadGlobal(global), ty, origin.clone())
                 } else {
                     return Err(invalid("unresolved name", expr.source_location));
@@ -858,16 +830,14 @@ impl<'a> Builder<'a> {
                 self.current = end.index;
                 self.emit(Op::LoadLocal(slot), branch_type, origin.clone())
             }
-            E::Assignment {
-                identifier,
-                expression,
-            } => {
+            E::Assignment { expression, .. } => {
                 let value = self.value(expression)?;
-                let op = if let Some(&pin) = self.pins.get(identifier) {
+                let symbol = expr.symbol.unwrap();
+                let op = if let Some(&pin) = self.pins.get(&symbol) {
                     Op::WritePin(pin, value)
-                } else if let Some(local) = self.lookup(identifier) {
+                } else if let Some(local) = self.bindings.get(&symbol).copied() {
                     Op::StoreLocal(local, value)
-                } else if let Some(&(global, _)) = self.globals.get(identifier) {
+                } else if let Some(&(global, _)) = self.globals.get(&symbol) {
                     Op::StoreGlobal(global, value)
                 } else {
                     return Err(invalid("unresolved assignment", expr.source_location));

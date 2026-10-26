@@ -4,15 +4,17 @@ pub mod diagnostic;
 pub mod frontend;
 pub mod ir;
 pub mod middle_end;
+pub mod semantic;
 mod support;
+pub use semantic::AnalyzedProgram;
 pub mod timer;
 
 use diagnostic::Diagnostic;
-use frontend::{statement::Statement, Parser};
+use frontend::Parser;
 
 /// Parse and type-check the language, including constructs not yet lowered to AVR.
-pub fn analyze(source: &str) -> Result<Vec<Statement>, Vec<Diagnostic>> {
-    let mut statements = Parser::new(source).parse().map_err(|errors| {
+pub fn analyze(source: &str) -> Result<AnalyzedProgram, Vec<Diagnostic>> {
+    let statements = Parser::new(source).parse().map_err(|errors| {
         use unicode_segmentation::UnicodeSegmentation;
         let line = source.rsplit('\n').next().unwrap_or("");
         let eof = frontend::utils::SourceLocation {
@@ -31,9 +33,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Vec<Diagnostic>> {
         diagnostics
     })?;
 
-    middle_end::Analyzer::new(source).analyze(&mut statements)?;
-
-    Ok(statements)
+    middle_end::Analyzer::new(source).analyze(statements)
 }
 
 /// Validate the executable language subset without starting external tools.
@@ -79,7 +79,7 @@ pub fn compile_typed_ir(
 }
 
 fn typed_ir_from_ast(
-    statements: &[Statement],
+    program: &AnalyzedProgram,
     mcu: &str,
     options: ir::Options,
     machine: bool,
@@ -92,10 +92,11 @@ fn typed_ir_from_ast(
             )]
         })?;
     }
+    let statements = program.statements();
     support::validate_pins(statements, mcu)?;
     support::validate_features(statements, machine)?;
     let timer = timer::resolve(statements, options.cpu_hz)?;
-    let mut module = ir::lower(statements, mcu, timer).map_err(|error| vec![error])?;
+    let mut module = ir::lower(program, mcu, timer).map_err(|error| vec![error])?;
     let internal_error = |stage, error: ir::verify::Error| {
         vec![Diagnostic::new(
             diagnostic::DiagnosticKind::InvalidIr {

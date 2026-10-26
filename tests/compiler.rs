@@ -92,7 +92,7 @@ fn boolean_operators_and_pin_inversion_have_explicit_types() {
     let ast =
         analyze("def Led=PortC.5 OUTPUT; loop { Led=!Led; var state=!HIGH; var flag=!false; }")
             .unwrap();
-    let S::LoopDeclaration(statements) = &ast[1].statement_type else {
+    let S::LoopDeclaration(statements) = &ast.statements()[1].statement_type else {
         panic!()
     };
     let S::Expression(expr) = &statements[0].statement_type else {
@@ -112,7 +112,7 @@ fn boolean_operators_and_pin_inversion_have_explicit_types() {
 #[test]
 fn ternary_and_default_initializer_are_typed() {
     let ast = analyze(&body("var x:u8; var b=true?false:true;")).unwrap();
-    let S::LoopDeclaration(statements) = &ast[0].statement_type else {
+    let S::LoopDeclaration(statements) = &ast.statements()[0].statement_type else {
         panic!()
     };
     for statement in statements {
@@ -131,7 +131,7 @@ fn ternary_and_default_initializer_are_typed() {
 #[test]
 fn parser_precedence_and_left_associativity() {
     let ast = analyze(&body("var x=10-3-2*2;")).unwrap();
-    let S::LoopDeclaration(body) = &ast[0].statement_type else {
+    let S::LoopDeclaration(body) = &ast.statements()[0].statement_type else {
         panic!()
     };
     let S::VariableDeclaration {

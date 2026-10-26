@@ -9,6 +9,7 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_field_names)]
 pub struct Expression {
+    pub symbol: Option<crate::semantic::SymbolId>,
     pub expression_type: ExpressionType,
     pub source_location: SourceLocation,
     // TODO: Comment this
@@ -114,6 +115,7 @@ impl Expression {
     pub fn new_assignment(identifier: &Expression, expression: Expression) -> Self {
         if let ExpressionType::Identifier(name) = &identifier.expression_type {
             Self {
+                symbol: None,
                 source_location: SourceLocation::new_from_start_end(
                     identifier.source_location,
                     expression.source_location,
@@ -131,6 +133,7 @@ impl Expression {
 
     pub fn new_ternary(first: Expression, second: Expression, third: Expression) -> Self {
         Self {
+            symbol: None,
             source_location: SourceLocation::new_from_start_end(
                 first.source_location,
                 third.source_location,
@@ -146,6 +149,7 @@ impl Expression {
 
     pub fn new_binary(left: Expression, operator: &Token, right: Expression) -> Self {
         Self {
+            symbol: None,
             source_location: SourceLocation::new_from_start_end(
                 left.source_location,
                 right.source_location,
@@ -167,6 +171,7 @@ impl Expression {
         } = operator
         {
             Self {
+                symbol: None,
                 source_location: SourceLocation::new_from_start_end(
                     operator.source_location,
                     expression.source_location,
@@ -190,6 +195,7 @@ impl Expression {
         } = token
         {
             Self {
+                symbol: None,
                 source_location: token.source_location,
                 expression_type: ExpressionType::Literal {
                     value: literal_type.clone(),
@@ -203,6 +209,7 @@ impl Expression {
 
     pub fn new_literal_custom_type(token: &Token, literal_type: LiteralType) -> Self {
         Self {
+            symbol: None,
             source_location: token.source_location,
             expression_type: ExpressionType::Literal {
                 value: literal_type,
@@ -215,6 +222,7 @@ impl Expression {
     /// that doesn't point to any real source
     pub fn new_literal_tokenless(literal_type: LiteralType) -> Self {
         Self {
+            symbol: None,
             source_location: SourceLocation::default(),
             expression_type: ExpressionType::Literal {
                 value: literal_type,
@@ -230,6 +238,7 @@ impl Expression {
         } = token
         {
             Self {
+                symbol: None,
                 source_location: token.source_location,
                 expression_type: ExpressionType::Identifier(name.clone()),
                 static_type: StaticType::Unknown,

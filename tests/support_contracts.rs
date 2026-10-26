@@ -26,8 +26,8 @@ fn analyzed_expressions_have_concrete_types_in_every_source_context() {
         );
         e.for_each_child(assert_concrete);
     }
-    for s in &mut analyze(source).unwrap() {
-        s.for_each_expression_mut(&mut |e| assert_concrete(e));
+    for statement in analyze(source).unwrap().statements() {
+        statement.for_each_expression(&mut assert_concrete);
     }
 }
 

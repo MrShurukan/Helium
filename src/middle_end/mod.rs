@@ -1,5 +1,5 @@
 mod functions;
-pub(crate) mod shared;
+pub mod shared;
 
 use crate::diagnostic::{Diagnostic, DiagnosticKind, LabelKind};
 use crate::frontend::{
@@ -12,15 +12,18 @@ use crate::frontend::{
     token_type::{KeywordType as K, LiteralType as L, PunctuationType as P, TokenType as Token},
     utils::SourceLocation,
 };
+use crate::semantic::{AnalyzedProgram, BodyId, Symbol, SymbolId, SymbolKind, SymbolTable};
 use functions::Signature;
 use std::collections::{BTreeMap, HashMap};
 
 /// Resolves names and types. A declaration may not shadow any visible name.
 pub struct Analyzer {
-    scopes: Vec<HashMap<String, (T, SourceLocation)>>,
+    scopes: Vec<HashMap<String, SymbolId>>,
+    symbols: SymbolTable,
+    current_body: BodyId,
     errors: Vec<Diagnostic>,
     functions: BTreeMap<String, Signature>,
-    calls: BTreeMap<String, Vec<(String, SourceLocation)>>,
+    calls: BTreeMap<SymbolId, Vec<(SymbolId, SourceLocation)>>,
     current_function: Option<String>,
     return_type: Option<Option<T>>,
     return_location: Option<SourceLocation>,
@@ -32,6 +35,8 @@ impl Analyzer {
     pub fn new(_source: &str) -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            symbols: SymbolTable::default(),
+            current_body: BodyId::Initialization,
             errors: vec![],
             functions: BTreeMap::new(),
             calls: BTreeMap::new(),
@@ -43,8 +48,11 @@ impl Analyzer {
         }
     }
 
-    pub fn analyze(mut self, statements: &mut [Statement]) -> Result<(), Vec<Diagnostic>> {
-        self.collect_signatures(statements);
+    pub fn analyze(
+        mut self,
+        mut statements: Vec<Statement>,
+    ) -> Result<AnalyzedProgram, Vec<Diagnostic>> {
+        self.collect_signatures(&mut statements);
 
         // Global initialization keeps source order. Function bodies see all globals,
         // but calls in global initializers are deferred until setup is available.
@@ -59,9 +67,14 @@ impl Analyzer {
         }
         self.global_initializer = false;
         // Hardware names occupy the same namespace, but are not runtime values.
-        for statement in statements.iter() {
+        for statement in statements.iter_mut() {
             if let S::TimerDeclaration(timer) = &statement.statement_type {
-                self.declare(&timer.identifier, T::NoValue, timer.name_location);
+                statement.symbol = self.declare(
+                    &timer.identifier,
+                    T::NoValue,
+                    timer.name_location,
+                    SymbolKind::Timer,
+                );
             }
         }
 
@@ -74,19 +87,26 @@ impl Analyzer {
             }
         }
         self.check_recursion();
-        self.errors.extend(shared::check(statements));
 
         if self.errors.is_empty() {
-            for statement in statements {
+            for statement in &mut statements {
                 statement.for_each_expression_mut(&mut |e| self.finalize_expression(e));
             }
         }
 
-        if self.errors.is_empty() {
-            Ok(())
-        } else {
-            Err(self.errors)
+        if !self.errors.is_empty() {
+            return Err(self.errors);
         }
+        let shared = shared::Program::collect(&statements, &self.symbols);
+        let errors = shared.check(&self.symbols);
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        Ok(AnalyzedProgram {
+            statements,
+            symbols: self.symbols,
+            shared,
+        })
     }
 
     fn error(&mut self, kind: DiagnosticKind, span: SourceLocation) {
@@ -112,39 +132,51 @@ impl Analyzer {
         expr.for_each_child_mut(|child| self.finalize_expression(child));
     }
 
-    fn lookup(&self, name: &str) -> Option<T> {
+    fn resolve(&self, name: &str) -> Option<SymbolId> {
         self.scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(name).map(|(ty, _)| *ty))
+            .find_map(|scope| scope.get(name).copied())
     }
 
-    fn declare(&mut self, name: &str, ty: T, span: SourceLocation) {
+    fn lookup(&self, name: &str) -> Option<T> {
+        self.resolve(name).map(|id| self.symbols.get(id).ty)
+    }
+
+    fn declare(
+        &mut self,
+        name: &str,
+        ty: T,
+        span: SourceLocation,
+        kind: SymbolKind,
+    ) -> Option<SymbolId> {
         let previous = self
-            .scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name).map(|(_, span)| *span))
-            .or_else(|| {
-                self.functions
-                    .get(name)
-                    .map(|signature| signature.name_location)
-            });
+            .resolve(name)
+            .or_else(|| self.functions.get(name).map(|s| s.id));
         if let Some(previous) = previous {
             self.errors.push(
                 Diagnostic::new(
-                    DiagnosticKind::DuplicateName {
-                        name: name.to_owned(),
-                    },
+                    DiagnosticKind::DuplicateName { name: name.into() },
                     Some(span),
                 )
-                .with_label(previous, LabelKind::PreviousDeclaration),
+                .with_label(
+                    self.symbols.get(previous).declaration,
+                    LabelKind::PreviousDeclaration,
+                ),
             );
+            None
         } else {
-            self.scopes
-                .last_mut()
-                .expect("root scope exists")
-                .insert(name.to_owned(), (ty, span));
+            let owner = (!self.global_initializer && kind != SymbolKind::Timer)
+                .then_some(self.current_body);
+            let id = self.symbols.add(Symbol {
+                name: name.into(),
+                kind,
+                ty,
+                declaration: span,
+                owner,
+            });
+            self.scopes.last_mut().unwrap().insert(name.into(), id);
+            Some(id)
         }
     }
 
@@ -174,6 +206,9 @@ impl Analyzer {
 
         match &mut statement.statement_type {
             S::TimerDeclaration(timer) => {
+                if let Some(id) = statement.symbol {
+                    self.current_body = BodyId::Interrupt(id);
+                }
                 self.interrupts_disabled = true;
                 self.block(&mut timer.body);
                 self.interrupts_disabled = false;
@@ -189,14 +224,16 @@ impl Analyzer {
             } => {
                 self.interrupts_disabled = no_interrupt.is_some();
                 self.current_function = Some(identifier.clone());
+                self.current_body = BodyId::Function(self.functions[identifier].id);
                 self.return_type = Some(*return_type);
                 self.return_location = *return_location;
                 self.scopes.push(HashMap::new());
                 for parameter in parameters {
-                    self.declare(
+                    parameter.symbol = self.declare(
                         &parameter.identifier,
                         parameter.static_type,
                         parameter.source_location,
+                        SymbolKind::Parameter,
                     );
                 }
                 self.block(body);
@@ -270,6 +307,7 @@ impl Analyzer {
                     };
                     if let Some(value) = value {
                         *initializer = Some(Expression {
+                            symbol: None,
                             expression_type: E::Literal { value },
                             source_location: span,
                             static_type: T::Unknown,
@@ -292,26 +330,55 @@ impl Analyzer {
                 }
 
                 *static_type = Some(target);
-                self.declare(identifier, target, *name_location);
+                statement.symbol = self.declare(
+                    identifier,
+                    target,
+                    *name_location,
+                    if self.global_initializer {
+                        SymbolKind::Global
+                    } else {
+                        SymbolKind::Local
+                    },
+                );
             }
             S::DefDeclaration(declarations) => {
                 for pin in declarations {
-                    self.declare(&pin.identifier, T::Pin, pin.name_location);
+                    let port = self.symbols.port(&pin.pin.port);
+                    pin.symbol = self.declare(
+                        &pin.identifier,
+                        T::Pin,
+                        pin.name_location,
+                        SymbolKind::Pin {
+                            port,
+                            bit: pin.pin.pin_number,
+                        },
+                    );
                 }
             }
-            S::NoInterrupt(body) | S::SetupDeclaration(body) => {
+            S::SetupDeclaration(body) => {
+                self.current_body = BodyId::Setup;
+                self.interrupts_disabled = true;
+                self.block(body);
+                self.interrupts_disabled = false;
+            }
+            S::NoInterrupt(body) => {
                 let previous = self.interrupts_disabled;
                 self.interrupts_disabled = true;
                 self.block(body);
                 self.interrupts_disabled = previous;
             }
-            S::LoopDeclaration(body) | S::Block(body) => self.block(body),
+            S::LoopDeclaration(body) => {
+                self.current_body = BodyId::MainLoop;
+                self.block(body);
+            }
+            S::Block(body) => self.block(body),
             S::Expression(expr) => {
                 if let E::Call {
                     identifier,
                     arguments,
                 } = &mut expr.expression_type
                 {
+                    expr.symbol = self.functions.get(identifier).map(|s| s.id);
                     expr.static_type = self
                         .call(identifier, arguments, expr.source_location)
                         .unwrap_or(T::NoValue);
@@ -363,7 +430,7 @@ impl Analyzer {
                 self.coerce(to, ty);
 
                 self.scopes.push(HashMap::new());
-                self.declare(identifier, ty, *name_location);
+                statement.symbol = self.declare(identifier, ty, *name_location, SymbolKind::Local);
                 self.statement(body);
                 self.scopes.pop();
             }
@@ -381,6 +448,14 @@ impl Analyzer {
     fn expression(&mut self, expr: &mut Expression) -> T {
         let span = expr.source_location;
 
+        expr.symbol = match &expr.expression_type {
+            E::Call { identifier, .. } => self.functions.get(identifier).map(|s| s.id),
+            E::Identifier(name)
+            | E::Assignment {
+                identifier: name, ..
+            } => self.resolve(name),
+            _ => None,
+        };
         let error_start = self.errors.len();
         let ty = match &mut expr.expression_type {
             E::Call {
@@ -536,7 +611,11 @@ impl Analyzer {
                             .scopes
                             .iter()
                             .rev()
-                            .find_map(|scope| scope.get(identifier).map(|(_, span)| *span))
+                            .find_map(|scope| {
+                                scope
+                                    .get(identifier)
+                                    .map(|id| self.symbols.get(*id).declaration)
+                            })
                             .unwrap();
                         self.coerce_with_origin(expression, target, origin);
                         target
