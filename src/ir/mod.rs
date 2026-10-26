@@ -181,6 +181,13 @@ pub struct Pin {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    /// Lifecycle-only effects, not exposed as source-language operations.
+    InterruptDisable,
+    TimerStart,
+    /// Save target interrupt state and disable interrupts; an ordered memory effect.
+    InterruptSave,
+    /// Restore the matching saved state, not unconditionally enable interrupts.
+    InterruptRestore(ValueId),
     Const(Constant),
     Unary(Unary, ValueId),
     Binary(Binary, ValueId, ValueId),
@@ -198,7 +205,8 @@ pub enum Op {
 impl Op {
     pub fn operands(&self) -> Vec<ValueId> {
         match self {
-            Self::Unary(_, a)
+            Self::InterruptRestore(a)
+            | Self::Unary(_, a)
             | Self::Widen(a, _)
             | Self::StoreLocal(_, a)
             | Self::StoreGlobal(_, a)
@@ -218,7 +226,6 @@ impl Op {
                 | Self::Binary(..)
                 | Self::Widen(..)
                 | Self::LoadLocal(_)
-                | Self::LoadGlobal(_)
         )
     }
 }
@@ -269,6 +276,7 @@ pub struct Block {
 
 #[derive(Debug, Clone)]
 pub struct Function {
+    pub requires_no_interrupt: bool,
     pub id: FunctionId,
     pub name: String,
     pub parameters: Vec<(ValueId, Type)>,
@@ -282,6 +290,9 @@ pub struct Function {
 
 #[derive(Debug, Clone)]
 pub struct Module {
+    pub timer: Option<crate::timer::TimerConfig>,
+    pub interrupt_handler: Option<FunctionId>,
+    pub interrupt_globals: std::collections::HashSet<GlobalId>,
     pub target: String,
     pub globals: Vec<Storage>,
     pub pins: Vec<Pin>,
@@ -291,6 +302,7 @@ pub struct Module {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
+    pub cpu_hz: Option<u32>,
     pub verify: bool,
     pub optimize: bool,
 }
@@ -298,6 +310,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            cpu_hz: None,
             verify: cfg!(debug_assertions),
             optimize: false,
         }
@@ -313,6 +326,15 @@ impl Module {
             "helium-ir v1 target={} entry=f{}\n",
             self.target, self.entry.0
         );
+        if let Some(timer) = &self.timer {
+            writeln!(
+                text,
+                "{} handler=f{}",
+                timer.report(),
+                self.interrupt_handler.unwrap().0
+            )
+            .unwrap();
+        }
         for (index, global) in self.globals.iter().enumerate() {
             writeln!(text, "global g{index}: {} {}", global.ty, global.name).unwrap();
         }
@@ -326,6 +348,9 @@ impl Module {
         }
 
         for function in &self.functions {
+            if function.requires_no_interrupt {
+                writeln!(text, "requires noInterrupt").unwrap();
+            }
             let parameters = function
                 .parameters
                 .iter()
@@ -365,6 +390,10 @@ impl Module {
 impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InterruptDisable => f.write_str("interrupt_disable"),
+            Self::TimerStart => f.write_str("timer_start"),
+            Self::InterruptSave => f.write_str("interrupt_save"),
+            Self::InterruptRestore(value) => write!(f, "interrupt_restore v{}", value.index),
             Self::Const(value) => match value.ty {
                 Type::Bool => write!(f, "const {}", value.bits != 0),
                 Type::PinState => {

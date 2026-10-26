@@ -4,6 +4,10 @@
 и три консервативных оптимизации. LLVM AVR использует этот IR, включая исходные функции.
 Старый линейный IR и legacy backend удалены.
 
+Добавлены `Function.requires_no_interrupt` и эффектные `InterruptSave`/`InterruptRestore`.
+Verifier проверяет баланс защищённых областей на CFG, порядок восстановления и контекст
+вызовов. Подробнее: [noInterrupt](INTERRUPTS.md).
+
 ## Место в компиляторе
 
 ```text
@@ -45,8 +49,8 @@ source -> parser -> analyzer -> typed AST -> Helium IR v1
 `void` выражен отсутствием результата функции и не является типом значения.
 Неопределённых типов и нетипизированных литералов в готовом IR нет.
 
-Модель и интерпретатор поддерживают все перечисленные целые ширины. Это не обещание
-такой же поддержки физическим AVR-backend: первым машинным подмножеством планируются 8/16 бит.
+Модель и интерпретатор поддерживают все перечисленные целые ширины. Машинный LLVM
+backend сейчас поддерживает 8/16 бит; расширение остальных ширин — отдельный этап.
 
 - Целочисленные `add`, `sub`, `mul`, знаковый `neg` оборачиваются по ширине типа.
 - Знаковые числа используют дополнительный код; переполнение не является undefined behavior.
@@ -98,9 +102,9 @@ analyzer; например, Pin и PinState не становятся взаим
 устранять выполненную запись, даже если записывается то же значение. Эффекты из доказанно
 недостижимой ветви можно удалить, поскольку исходная программа их не выполняет.
 
-Аппаратные регистры с особыми правилами (например, write-one-to-clear) будут отдельной
-задачей аппаратного lowering. Обычный StoreGlobal не обозначает MMIO. Прерывания и
-асинхронный доступ к глобальным переменным пока вне контракта.
+Обычный StoreGlobal не обозначает MMIO. Особые аппаратные правила (например,
+write-one-to-clear для Timer1) реализуются в target lowering. Контракт прерываний
+и асинхронной видимости глобальных переменных описан в [TIMERS.md](TIMERS.md).
 
 ## Функции и запуск
 
@@ -116,7 +120,7 @@ IR содержит типизированные вызовы, параметр�
 4. Повторные вызовы loop без завершения программы.
 
 Стартовая среда обязана предоставить начальное нулевое глобальное хранение до входа.
-Стек, ABI, соглашение о вызовах и загрузка данных в SRAM относятся к будущему backend/runtime.
+Стек, ABI и загрузку данных в SRAM обслуживают LLVM AVR и стартовая среда AVR.
 Ни размер стека, ни длительность операций текущий IR не обещает.
 
 ## Происхождение и диагностика
@@ -180,3 +184,13 @@ IR содержит типизированные вызовы, параметр�
 с 40-байтным GPIO-примером описаны в [LLVM_PROTOTYPE.md](LLVM_PROTOTYPE.md).
 Путь LLVM получает неоптимизированный Helium IR; собственные passes остаются опциональным
 экспериментом для `--emit ir`. Выбор окончательного backend ещё не сделан.
+
+## Timer lifecycle
+
+A module optionally carries a Timer1 configuration, an ISR function ID and a set of
+ISR-accessible globals. `InterruptDisable` and `TimerStart` are entry-only effects;
+startup disables interrupts before initialization and starts the timer after setup.
+The ISR is an externally reachable root and cannot be called as a normal function.
+Its global accesses, including through helpers, are volatile in LLVM. Global loads
+are conservatively retained by Helium DCE. The verifier checks visibility metadata,
+configuration and lifecycle order. The interpreter does not dispatch asynchronous ISR.

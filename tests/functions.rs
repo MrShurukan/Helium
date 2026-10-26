@@ -9,6 +9,7 @@ fn compile(source: &str, optimize: bool) -> Module {
         source,
         "atmega328p",
         Options {
+            cpu_hz: None,
             verify: true,
             optimize,
         },

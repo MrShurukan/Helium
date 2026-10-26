@@ -24,8 +24,10 @@ lazy_static! {
 
         m.insert("and", KeywordType::And);
         m.insert("else", KeywordType::Else);
-        m.insert("fun", KeywordType::Fun);
         m.insert("fn", KeywordType::Fn);
+        m.insert("noInterrupt", KeywordType::NoInterrupt);
+        m.insert("timer", KeywordType::Timer);
+        m.insert("interrupt", KeywordType::Interrupt);
         m.insert("for", KeywordType::For);
         m.insert("if", KeywordType::If);
         m.insert("or", KeywordType::Or);
@@ -79,8 +81,10 @@ pub enum LiteralType {
 pub enum KeywordType {
     And,
     Else,
-    Fun,
     Fn,
+    NoInterrupt,
+    Timer,
+    Interrupt,
     For,
     If,
     Or,

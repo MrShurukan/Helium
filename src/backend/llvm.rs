@@ -54,6 +54,9 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
 
     let linkage = if export_symbols { "" } else { "internal " };
     let mut out = String::from("; Helium LLVM prototype: wrapping arithmetic, explicit hardware effects\ntarget triple = \"avr-unknown-unknown\"\n\n");
+    if let Some(timer) = &module.timer {
+        writeln!(out, "; {}", timer.report()).unwrap();
+    }
     for (index, storage) in module.globals.iter().enumerate() {
         writeln!(
             out,
@@ -117,6 +120,9 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
         out.push_str("}\n");
     }
 
+    if let Some(handler) = module.interrupt_handler {
+        writeln!(out, "\ndefine avr_signalcc void @__vector_11() addrspace(1) {{\nentry:\n  call addrspace(1) void @helium_f{}()\n  ret void\n}}", handler.0).unwrap();
+    }
     writeln!(out, "\ndefine i16 @main() addrspace(1) {{\nentry:\n  call addrspace(1) void @helium_f{}()\n  ret i16 0\n}}", module.entry.0).unwrap();
     Ok(out)
 }
@@ -237,13 +243,52 @@ impl FunctionEmitter<'_> {
                     )
                 }
             }
+            Op::InterruptDisable => "call void asm sideeffect \"cli\", \"~{memory}\"()".into(),
+            Op::TimerStart => {
+                let timer = self
+                    .module
+                    .timer
+                    .as_ref()
+                    .ok_or("missing timer configuration")?;
+                let compare = timer.ticks - 1;
+                let control = 8 | timer.clock_select();
+                // Stop and mask first. 16-bit registers are written high byte first.
+                self.write_register(0x81, "0");
+                self.write_register(0x6f, "0");
+                self.write_register(0x80, "0");
+                self.write_register(0x82, "0");
+                self.write_register(0x85, "0");
+                self.write_register(0x84, "0");
+                self.write_register(0x89, &(compare >> 8).to_string());
+                self.write_register(0x88, &(compare & 255).to_string());
+                self.write_register(0x36, "39"); // W1C: ICF1, OCF1B/A, TOV1.
+                self.write_register(0x6f, "2");
+                self.write_register(0x81, &control.to_string());
+                "call void asm sideeffect \"sei\", \"~{memory}\"()".into()
+            }
+            Op::InterruptSave => {
+                // Keep save + CLI in one assembly operation. The memory clobber
+                // orders memory accesses across the boundary, not pure arithmetic.
+                "call i8 asm sideeffect \"in $0, 63\\0Acli\", \"=r,~{memory}\"()".into()
+            }
+            Op::InterruptRestore(value) => {
+                format!(
+                    "call void asm sideeffect \"out 63, $0\", \"r,~{{memory}}\"({})",
+                    self.value(*value)
+                )
+            }
             Op::LoadLocal(local) => format!(
                 "load {}, ptr %l{}, align 1",
                 ty(instruction.result.unwrap().1),
                 local.index
             ),
             Op::LoadGlobal(global) => format!(
-                "load {}, ptr @helium_g{}, align 1",
+                "load {}{}, ptr @helium_g{}, align 1",
+                if self.module.interrupt_globals.contains(global) {
+                    "volatile "
+                } else {
+                    ""
+                },
                 ty(self.module.globals[global.0].ty),
                 global.0
             ),
@@ -251,7 +296,12 @@ impl FunctionEmitter<'_> {
                 format!("store {}, ptr %l{}, align 1", self.value(*v), local.index)
             }
             Op::StoreGlobal(global, v) => format!(
-                "store {}, ptr @helium_g{}, align 1",
+                "store {}{}, ptr @helium_g{}, align 1",
+                if self.module.interrupt_globals.contains(global) {
+                    "volatile "
+                } else {
+                    ""
+                },
                 self.value(*v),
                 global.0
             ),

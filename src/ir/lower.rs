@@ -114,8 +114,15 @@ fn checked_integer(
     Ok(Constant::new(expected, value as u64))
 }
 
-pub(crate) fn lower(statements: &[Statement], target: &str) -> Result<Module, Diagnostic> {
+pub(crate) fn lower(
+    statements: &[Statement],
+    target: &str,
+    timer: Option<crate::timer::TimerConfig>,
+) -> Result<Module, Diagnostic> {
     let mut module = Module {
+        timer,
+        interrupt_handler: None,
+        interrupt_globals: Default::default(),
         target: target.into(),
         globals: vec![],
         pins: vec![],
@@ -178,6 +185,12 @@ pub(crate) fn lower(statements: &[Statement], target: &str) -> Result<Module, Di
     }
 
     let mut entry = Builder::new(FunctionId(0), "$entry", &globals, &pins, &functions);
+    if module.timer.is_some() {
+        entry.effect(
+            Op::InterruptDisable,
+            Origin::Generated("startup interrupt mask"),
+        );
+    }
     for statement in statements {
         if let S::VariableDeclaration {
             identifier,
@@ -210,6 +223,12 @@ pub(crate) fn lower(statements: &[Statement], target: &str) -> Result<Module, Di
         Op::Call(FunctionId(1), vec![]),
         Origin::Generated("setup invocation"),
     );
+    if module.timer.is_some() {
+        entry.effect(
+            Op::TimerStart,
+            Origin::Generated("timer startup after setup"),
+        );
+    }
     let repeat = entry.new_block(Origin::Generated("main loop"));
     entry.terminate(Terminator::Jump(repeat));
     entry.current = repeat.index;
@@ -225,7 +244,11 @@ pub(crate) fn lower(statements: &[Statement], target: &str) -> Result<Module, Di
         (FunctionId(2), "$loop", loop_body),
     ] {
         let mut builder = Builder::new(id, name, &globals, &pins, &functions);
-        builder.body(body)?;
+        if id == FunctionId(1) && !body.is_empty() {
+            builder.protected_body(body, Origin::Generated("setup interrupt protection"))?;
+        } else {
+            builder.body(body)?;
+        }
         builder.terminate(Terminator::Return(None));
         module.functions.push(builder.finish()?);
     }
@@ -274,8 +297,29 @@ pub(crate) fn lower(statements: &[Statement], target: &str) -> Result<Module, Di
             builder.terminate(Terminator::Return(None));
         }
         let mut function = builder.finish()?;
+        if let S::FunctionDeclaration { no_interrupt, .. } = &statement.statement_type {
+            function.requires_no_interrupt = no_interrupt.is_some();
+        }
         function.origin = Origin::Source(statement.source_location);
         module.functions.push(function);
+    }
+    for statement in statements {
+        if let S::TimerDeclaration(timer) = &statement.statement_type {
+            let id = FunctionId(module.functions.len());
+            let mut builder = Builder::new(id, "$interrupt", &globals, &pins, &functions);
+            builder.body(&timer.body)?;
+            builder.terminate(Terminator::Return(None));
+            let mut handler = builder.finish()?;
+            handler.requires_no_interrupt = true;
+            handler.origin = Origin::Source(timer.handler_location);
+            module.interrupt_handler = Some(id);
+            module.functions.push(handler);
+        }
+    }
+    for name in crate::middle_end::shared::interrupt_globals(statements) {
+        if let Some((id, _)) = globals.get(&name) {
+            module.interrupt_globals.insert(*id);
+        }
     }
     Ok(module)
 }
@@ -300,6 +344,7 @@ struct Builder<'a> {
     functions: &'a HashMap<String, (FunctionId, Option<Type>)>,
     parameters: Vec<(ValueId, Type)>,
     return_type: Option<Type>,
+    interrupt_states: Vec<ValueId>,
 }
 
 impl<'a> Builder<'a> {
@@ -328,6 +373,7 @@ impl<'a> Builder<'a> {
             functions,
             parameters: vec![],
             return_type: None,
+            interrupt_states: vec![],
         }
     }
 
@@ -355,6 +401,7 @@ impl<'a> Builder<'a> {
         }
 
         Ok(Function {
+            requires_no_interrupt: false,
             id: self.id,
             name: self.name,
             parameters: self.parameters,
@@ -434,6 +481,22 @@ impl<'a> Builder<'a> {
             .find_map(|scope| scope.get(name).copied())
     }
 
+    fn protected_body(
+        &mut self,
+        statements: &[Statement],
+        origin: Origin,
+    ) -> Result<(), Diagnostic> {
+        let saved = self.emit(Op::InterruptSave, Type::U8, origin.clone());
+        self.interrupt_states.push(saved);
+        self.body(statements)?;
+        self.interrupt_states.pop();
+
+        if !self.terminated() {
+            self.effect(Op::InterruptRestore(saved), origin);
+        }
+        Ok(())
+    }
+
     fn body(&mut self, statements: &[Statement]) -> Result<(), Diagnostic> {
         self.scopes.push(HashMap::new());
         for statement in statements {
@@ -451,6 +514,9 @@ impl<'a> Builder<'a> {
         match &statement.statement_type {
             S::Return(value) => {
                 let value = value.as_ref().map(|v| self.value(v)).transpose()?;
+                for saved in self.interrupt_states.clone().into_iter().rev() {
+                    self.effect(Op::InterruptRestore(saved), origin.clone());
+                }
                 self.terminate(Terminator::Return(value));
             }
             S::Expression(Expression {
@@ -491,6 +557,7 @@ impl<'a> Builder<'a> {
                     .insert(identifier.clone(), local);
             }
             S::Block(body) => self.body(body)?,
+            S::NoInterrupt(body) => self.protected_body(body, origin)?,
             S::If {
                 condition,
                 then_body,

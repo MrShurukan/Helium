@@ -24,7 +24,9 @@ impl LocatableInSource for Statement {
 
 #[derive(Debug)]
 pub enum StatementType {
+    TimerDeclaration(TimerDeclaration),
     FunctionDeclaration {
+        no_interrupt: Option<SourceLocation>,
         identifier: String,
         name_location: SourceLocation,
         return_location: Option<SourceLocation>,
@@ -47,6 +49,7 @@ pub enum StatementType {
     SetupDeclaration(Vec<Statement>),
     LoopDeclaration(Vec<Statement>),
     Block(Vec<Statement>),
+    NoInterrupt(Vec<Statement>),
     If {
         condition: Expression,
         then_body: Box<Statement>,
@@ -236,13 +239,26 @@ impl Display for Statement {
 impl Display for StatementType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::TimerDeclaration(timer) => {
+                write!(
+                    f,
+                    "timer {} = {} {{ every: {}ns, tolerance: {}ns, interrupt ",
+                    timer.identifier, timer.hardware, timer.every_ns, timer.tolerance_ns
+                )?;
+                Self::write_block(f, &timer.body)?;
+                write!(f, " }}")
+            }
             Self::FunctionDeclaration {
+                no_interrupt,
                 identifier,
                 parameters,
                 return_type,
                 body,
                 ..
             } => {
+                if no_interrupt.is_some() {
+                    write!(f, "noInterrupt ")?;
+                }
                 write!(f, "fn {identifier}(")?;
                 for (index, parameter) in parameters.iter().enumerate() {
                     if index > 0 {
@@ -292,6 +308,10 @@ impl Display for StatementType {
                 write!(f, "}}")
             }
             StatementType::Block(statements) => Self::write_block(f, statements),
+            Self::NoInterrupt(statements) => {
+                write!(f, "noInterrupt ")?;
+                Self::write_block(f, statements)
+            }
             StatementType::If {
                 condition,
                 then_body,
@@ -332,6 +352,19 @@ impl StatementType {
         }
         write!(f, "}}")
     }
+}
+
+#[derive(Debug)]
+pub struct TimerDeclaration {
+    pub identifier: String,
+    pub name_location: SourceLocation,
+    pub hardware: String,
+    pub hardware_location: SourceLocation,
+    pub period_location: SourceLocation,
+    pub every_ns: u64,
+    pub tolerance_ns: u64,
+    pub body: Vec<Statement>,
+    pub handler_location: SourceLocation,
 }
 
 #[derive(Debug)]

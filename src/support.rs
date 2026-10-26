@@ -151,6 +151,11 @@ pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), 
 
     fn stmt(s: &Statement, machine: bool, errors: &mut Vec<Diagnostic>) {
         match &s.statement_type {
+            S::TimerDeclaration(timer) => {
+                for statement in &timer.body {
+                    stmt(statement, machine, errors);
+                }
+            }
             S::FunctionDeclaration {
                 parameters,
                 return_type,
@@ -188,7 +193,10 @@ pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), 
                     }
                 }
             }
-            S::Block(body) | S::SetupDeclaration(body) | S::LoopDeclaration(body) => {
+            S::Block(body)
+            | S::NoInterrupt(body)
+            | S::SetupDeclaration(body)
+            | S::LoopDeclaration(body) => {
                 for s in body {
                     stmt(s, machine, errors);
                 }

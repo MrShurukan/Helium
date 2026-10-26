@@ -3,6 +3,8 @@
 Helium is a small, statically typed language for AVR microcontrollers, implemented in Rust.
 The current executable target is **ATmega328P**. LLVM is the only machine backend.
 See [supported language features](docs/SUPPORT.md) before using a feature.
+For architecture, decisions, review priorities and current limitations, start with
+the [review handoff](docs/HANDOFF.md).
 
 ## Build and test
 
@@ -71,6 +73,11 @@ Calls may precede declarations. Parameters are mutable local copies. Omit the re
 type for procedures. Recursion and shadowing are forbidden. Global initializer calls
 remain unsupported; use setup for runtime calls. See [the function contract](docs/FUNCTIONS.md).
 
+`noInterrupt { ... }` saves and restores interrupt state, including nested blocks and
+early returns. `noInterrupt fn` declares a checked calling requirement; it does not
+automatically disable interrupts. See [the interrupt contract](docs/INTERRUPTS.md) and
+[the example](examples/no-interrupt.he). Timers and interrupt handlers are not implemented yet.
+
 Diagnostics contain exact primary locations and semantic related labels. Missing-return
 errors identify fallthrough paths; type errors can reference the declaration that required
 the type; name conflicts show the first declaration. The CLI prints file/line/column,
@@ -108,3 +115,13 @@ USB bootloader uploads may need board-specific port and baud settings in AVRDUDE
 Next application: temperature control for one or two brewing tanks, addressed Dallas
 sensors, encoder/menu, LCD, outputs and UART. Wider integer machine support is a separate
 iteration; it is not included in the backend removal and diagnostics work.
+
+## Timer1
+
+See [Timer1 and ISR](docs/TIMERS.md) for syntax, shared-access rules and limitations.
+Programs with a timer require an explicit clock, for example:
+
+```text
+cargo run --locked -- check examples/timer-seconds.he --mcu atmega328p --cpu-hz 16000000
+cargo run --locked -- timer-options --mcu atmega328p --cpu-hz 16000000 --timer Timer1 --every 1s
+```

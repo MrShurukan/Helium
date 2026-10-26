@@ -28,6 +28,7 @@ impl std::error::Error for Error {}
 pub struct Interpreter<'a> {
     module: &'a Module,
     pub globals: Vec<Constant>,
+    pub interrupts_enabled: bool,
     pub events: Vec<Event>,
     /// Scripted physical readings. Writes do not change this input stream.
     pub inputs: HashMap<PinId, VecDeque<bool>>,
@@ -42,6 +43,7 @@ impl<'a> Interpreter<'a> {
 
         Ok(Self {
             module,
+            interrupts_enabled: false,
             globals: module
                 .globals
                 .iter()
@@ -90,6 +92,9 @@ impl<'a> Interpreter<'a> {
             .functions
             .get(function.0)
             .ok_or(Error::InvalidInvocation)?;
+        if function.requires_no_interrupt && self.interrupts_enabled {
+            return Err(Error::InvalidInvocation);
+        }
         if args.len() != function.parameters.len()
             || args
                 .iter()
@@ -123,6 +128,23 @@ impl<'a> Interpreter<'a> {
                         .ok_or_else(|| Error::InvalidIr("unavailable value".into()))
                 };
                 let result = match &instruction.op {
+                    Op::InterruptDisable => {
+                        self.interrupts_enabled = false;
+                        None
+                    }
+                    Op::TimerStart => {
+                        self.interrupts_enabled = true;
+                        None
+                    }
+                    Op::InterruptSave => {
+                        let previous = self.interrupts_enabled;
+                        self.interrupts_enabled = false;
+                        Some(Constant::new(Type::U8, u64::from(previous)))
+                    }
+                    Op::InterruptRestore(value) => {
+                        self.interrupts_enabled = get(value)?.bits != 0;
+                        None
+                    }
                     Op::Const(value) => Some(*value),
                     Op::Unary(op, value) => Some(eval_unary(*op, get(value)?)),
                     Op::Binary(op, left, right) => Some(eval_binary(*op, get(left)?, get(right)?)),

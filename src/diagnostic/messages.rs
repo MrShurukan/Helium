@@ -1,9 +1,31 @@
 //! English presentation. Future locales match the same structured diagnostic kinds.
 use super::DiagnosticKind;
 
+impl crate::timer::TimerError {
+    pub fn message(&self) -> String {
+        match self {
+            Self::InvalidClock { hz } => format!("CPU frequency {hz} Hz is outside the supported ATmega328P range 1..=20000000 Hz; this does not configure the oscillator or fuses"),
+            Self::ZeroPeriod => "Timer period must be greater than zero".into(),
+            Self::MissingClock => "Timer declarations require an explicit --cpu-hz (for example --cpu-hz 16000000); the compiler does not change oscillator settings".into(),
+            Self::Unsupported { hardware } => format!("Unsupported timer '{hardware}'; this target currently supports periodic Timer1 only"),
+            Self::AlreadyReserved => "Timer1 is already reserved by another declaration".into(),
+            Self::NotValue { name } => format!("Timer '{name}' names a hardware resource, not a runtime value; it cannot be copied or assigned"),
+            Self::Unrepresentable { cpu_hz, requested_ns, tolerance_ns, shorter, longer, minimum_tolerance_ns } => {
+                let show = |c: &Option<crate::timer::TimerConfig>| c.as_ref().map(crate::timer::TimerConfig::report).unwrap_or_else(|| "not available".into());
+                format!("Cannot represent every: {requested_ns}ns within tolerance: {tolerance_ns}ns at CPU={cpu_hz} Hz.\nNearest shorter: {}\nNearest longer: {}\nNearest configuration needs tolerance of at least {minimum_tolerance_ns}ns. Use helium timer-options to inspect alternatives.", show(shorter), show(longer))
+            }
+        }
+    }
+}
+
 impl DiagnosticKind {
     pub fn message(&self) -> String {
         match self {
+            Self::InterruptContext { name } => {
+                format!("Function '{name}' requires interrupts to be disabled")
+            }
+            Self::Timer { error } => error.message(),
+            Self::SharedAccess { name } => format!("Access to '{name}' conflicts with an interrupt handler and requires noInterrupt protection"),
             Self::NotCallable { name } => format!("'{name}' is not a function"),
             Self::ArgumentCount {
                 name,
@@ -111,6 +133,10 @@ impl super::LabelKind {
             Self::PreviousDeclaration => "first declared here".into(),
             Self::ExpectedType(ty) => format!("expected type {ty} comes from here"),
             Self::OperandType(ty) => format!("this expression has type {ty}"),
+            Self::InterruptAccess => {
+                "accessed by the interrupt handler or a function it calls".into()
+            }
+            Self::InterruptRequirement => "interrupt requirement declared here".into(),
             Self::FunctionDeclaration => "function declared here".into(),
             Self::Fallthrough => "this path reaches the end without returning a value".into(),
             Self::FalseBranch => {
@@ -130,6 +156,8 @@ impl DiagnosticKind {
         match self {
             Self::MissingReturn { .. } => Some("Return a value on each highlighted path, or add a common return after the conditional."),
             Self::UnsupportedType { machine: true, .. } => Some("Use an explicit 8/16-bit type only if it can represent all required values; wider machine integers are planned separately."),
+            Self::InterruptContext { .. } => Some("Wrap the call in noInterrupt { ... }, or declare the caller as noInterrupt fn to require protection from its callers."),
+            Self::SharedAccess { .. } => Some("Use noInterrupt { ... } for the complete operation, or declare the helper as noInterrupt fn. Protect a multi-field snapshot in one block."),
             Self::GlobalInitializerCall => Some("Initialize the variable in setup. Startup ordering across libraries is not defined yet; the compiler does not move calls automatically."),
             Self::PullDown => Some("Use an external pull-down resistor, or INPUT_PULLUP with inverted input logic."),
             _ => None,

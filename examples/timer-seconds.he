@@ -1,0 +1,32 @@
+// Build with --cpu-hz matching the actual board clock (Nano: normally 16000000).
+// Timer1 starts after setup. No board is flashed by the build command.
+def Led = PortB.5 OUTPUT;
+var seconds: u16 = 0;
+var previous: u16 = 0;
+
+timer clock = Timer1 {
+    every: 1s,
+    tolerance: 1ms,
+
+    interrupt {
+        seconds = seconds + 1;
+    }
+}
+
+fn current_seconds(): u16 {
+    noInterrupt {
+        return seconds;
+    }
+}
+
+setup {
+    Led = LOW;
+}
+
+loop {
+    var now = current_seconds();
+    if now != previous {
+        previous = now;
+        Led = !Led;
+    }
+}

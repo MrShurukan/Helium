@@ -58,6 +58,13 @@ LSP ещё не реализован. Будущий адаптер преобр
 | E_INTERNAL_IR | Ошибки verifier, невозможные состояния после анализа и сбой продвижения parser отделены от неподдержанной пользовательской конструкции. Ошибка эмиттера после успешной проверки исходника считается внутренней. |
 | CLI / внешние инструменты | Проверки аргументов, чтения/записи и ошибок запуска остаются вне исходных диагностик. Сохраняются имя инструмента, его вывод и код завершения. Исходная позиция не придумывается. Тесты проверяют отсутствие инструментов, другой рабочий каталог, неизвестные опции и сохранность существующего результата. |
 
+## Требования прерываний
+
+`E_INTERRUPT_CONTEXT` отмечает вызов, сделанный вне разрешённого контекста, и связывает
+его с диапазоном `noInterrupt` в объявлении функции. Проверяется и код обычных функций,
+вызываемых из защищённого блока: защита не подменяет явный контракт их тела.
+Тесты диапазонов, Unicode, подсказки и незавершённых конструкций: `tests/interrupts.rs`.
+
 ## Анализ возвратов
 
 Анализ структурный, без доказательства значений условий. Цикл может не выполниться;
@@ -76,3 +83,11 @@ LSP ещё не реализован. Будущий адаптер преобр
 Машинные тесты выполняют 45 сценариев сборки/симуляции на профиль. `cargo fmt --check`
 и Clippy с `-D warnings` проходят. Latch собран новым CLI без выбора backend: 184 байта
 секции .text, .data — 0. Плата в этой итерации не прошивалась.
+
+## Timer diagnostics
+
+`E_TIMER` reports missing/invalid clock, unsupported or duplicate timer resources,
+and an unrepresentable period. The period diagnostic includes nearest alternatives
+and the minimum tolerance. Duplicate resources link the earlier declaration.
+`E_SHARED_ACCESS` marks the unsafe access and links an ISR access to the same resource;
+GPIO conflicts are checked per port, including distinct pins. See [TIMERS.md](TIMERS.md).

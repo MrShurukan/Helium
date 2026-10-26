@@ -1,0 +1,27 @@
+// No timer or ISR yet: this demonstrates the checked calling contract.
+var counter: u16 = 0;
+var snapshot: u16 = 0;
+
+noInterrupt fn increment() {
+    counter = counter + 1;
+}
+
+fn read_counter(): u16 {
+    noInterrupt {
+        // The saved interrupt state is restored before returning to the caller.
+        return counter;
+    }
+}
+
+setup {
+    // setup executes with interrupts disabled.
+    increment();
+}
+
+loop {
+    noInterrupt {
+        increment();
+    }
+
+    snapshot = read_counter();
+}

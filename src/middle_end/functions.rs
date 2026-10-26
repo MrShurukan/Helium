@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Clone)]
 pub(super) struct Signature {
+    no_interrupt: Option<SourceLocation>,
     parameters: Vec<T>,
     result: Option<T>,
     pub(super) name_location: SourceLocation,
@@ -13,6 +14,7 @@ impl Analyzer {
     pub(super) fn collect_signatures(&mut self, statements: &[Statement]) {
         for statement in statements {
             let S::FunctionDeclaration {
+                no_interrupt,
                 identifier,
                 parameters,
                 return_type,
@@ -48,6 +50,7 @@ impl Analyzer {
                 self.functions.insert(
                     identifier.clone(),
                     Signature {
+                        no_interrupt: *no_interrupt,
                         parameters: parameters.iter().map(|p| p.static_type).collect(),
                         result: *return_type,
                         name_location: *name_location,
@@ -99,6 +102,18 @@ impl Analyzer {
             self.errors.push(error);
             return Some(T::Unknown);
         };
+        if let Some(requirement) = signature.no_interrupt {
+            if !self.interrupts_disabled {
+                self.errors.push(
+                    Diagnostic::new(
+                        DiagnosticKind::InterruptContext { name: name.into() },
+                        Some(span),
+                    )
+                    .with_label(requirement, LabelKind::InterruptRequirement),
+                );
+            }
+        }
+
         if arguments.len() != signature.parameters.len() {
             self.errors.push(
                 Diagnostic::new(
@@ -193,7 +208,7 @@ pub(super) fn fallthrough(
 
         match &statement.statement_type {
             S::Return(_) => exits.clear(),
-            S::Block(body) => {
+            S::Block(body) | S::NoInterrupt(body) => {
                 let inner = fallthrough(body, statement.source_location.closing());
                 if inner.is_empty() {
                     exits.clear();

@@ -20,7 +20,9 @@ AVRA, the old linear IR and hand-written AVR assembly generation have been remov
 | Internal pull-down on ATmega328P | Recognized | Rejected | Rejected |
 | Stored/computed PinMode values | Basic type checks | Not implemented | Not implemented |
 | Calls in global initializers | Rejected | — | — |
-| Modules, heap, interrupts, peripheral drivers | Not implemented | — | — |
+| `noInterrupt` blocks and function requirements | Checked calls; nested scopes and early returns | Yes | Yes |
+| Timer1 CTC, embedded ISR, shared-access checks | Yes; explicit CPU clock | Verified IR; interpreter has no asynchronous dispatch | Yes |
+| Modules, heap, other timers, peripheral drivers | Not implemented | — | — |
 
 `analyze` parses and type-checks. `compile_typed_ir` also checks the executable Helium IR
 subset. `compile_llvm` and `check` validate the machine subset before emitting LLVM IR.

@@ -2,7 +2,7 @@
 // Usage: node tools/simulate-avr.cjs <build-directory> <input-hex-byte-list>
 const fs = require('node:fs');
 const path = require('node:path');
-const { CPU, avrInstruction } = require(process.env.HELIUM_AVR8JS ||
+const { CPU, avrInstruction, AVRTimer, timer1Config } = require(process.env.HELIUM_AVR8JS ||
     path.resolve(__dirname, '../build/toolchain/avr8js/package'));
 
 const directory = process.argv[2];
@@ -38,7 +38,14 @@ const stop = symbols.get('_exit') || symbols.get('exit');
 if (!stop) throw new Error('Missing avr-libc exit symbol');
 
 const cpu = new CPU(new Uint16Array(flash.buffer), 2048);
+const timerCycles = Number(process.env.HELIUM_TIMER_CYCLES || 0);
+if (timerCycles) new AVRTimer(cpu, timer1Config);
+const interruptCycles = [];
+const interruptAddress = symbols.get('__vector_11')?.address;
+let nestedInterrupt = false;
 const events = [];
+// Optional observation only; the harness never changes interrupt state.
+const interruptStates = [];
 let reads = 0;
 for (const [port, address] of [['B', 0x23], ['C', 0x26], ['D', 0x29]]) {
     cpu.readHooks[address] = () => {
@@ -49,19 +56,27 @@ for (const [port, address] of [['B', 0x23], ['C', 0x26], ['D', 0x29]]) {
     };
     cpu.writeHooks[address + 2] = value => {
         events.push(`write:${port}:${value}`);
+        if (process.env.HELIUM_TRACE_INTERRUPTS) {
+            interruptStates.push((cpu.data[0x5f] & 0x80) !== 0);
+        }
         return false;
     };
 }
 
 let minimumSP = cpu.SP;
 let steps = 0;
-while (cpu.pc * 2 !== stop.address && steps < 1000000) {
+const maximumSteps = timerCycles ? Math.max(1000000, timerCycles) : 1000000;
+while (cpu.pc * 2 !== stop.address && steps < maximumSteps && (!timerCycles || cpu.cycles < timerCycles)) {
+    if (timerCycles && cpu.pc * 2 === interruptAddress) {
+        interruptCycles.push(cpu.cycles);
+        if (cpu.data[0x5f] & 0x80) nestedInterrupt = true;
+    }
     avrInstruction(cpu);
     cpu.tick();
     minimumSP = Math.min(minimumSP, cpu.SP);
     steps++;
 }
-if (steps === 1000000) throw new Error('Simulation instruction limit reached');
+if (steps === maximumSteps) throw new Error('Simulation instruction limit reached');
 if (reads !== input.length) throw new Error(`Expected ${input.length} GPIO reads, observed ${reads}`);
 
 const globals = [...symbols].filter(([name]) => /^helium_g\d+$/.test(name))
@@ -73,5 +88,5 @@ const globals = [...symbols].filter(([name]) => /^helium_g\d+$/.test(name))
         return `${name}:${value}`;
     });
 const directions = [cpu.data[0x24], cpu.data[0x27], cpu.data[0x2a]];
-console.log(JSON.stringify({ globals, events, directions, cycles: cpu.cycles,
+console.log(JSON.stringify({ globals, events, directions, interruptStates, interruptCycles, nestedInterrupt, cycles: cpu.cycles,
     observedStackBytes: 0x8ff - minimumSP, steps }));

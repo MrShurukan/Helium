@@ -7,6 +7,7 @@ fn compile(source: &str) -> Module {
         source,
         "atmega328p",
         Options {
+            cpu_hz: None,
             verify: true,
             optimize: false,
         },
@@ -19,6 +20,7 @@ fn optimized(source: &str) -> Module {
         source,
         "atmega328p",
         Options {
+            cpu_hz: None,
             verify: true,
             optimize: true,
         },
@@ -186,6 +188,7 @@ fn verifier_default_follows_build_profile_and_can_be_forced() {
             source,
             "atmega328p",
             Options {
+                cpu_hz: None,
                 verify: false,
                 optimize: false
             }
@@ -362,6 +365,7 @@ fn function_calls_check_signatures_and_execute_results() {
         index: 0,
     };
     module.functions.push(Function {
+        requires_no_interrupt: false,
         id: FunctionId(1),
         name: "double".into(),
         parameters: vec![(arg, Type::U8)],

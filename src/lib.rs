@@ -5,6 +5,7 @@ pub mod frontend;
 pub mod ir;
 pub mod middle_end;
 mod support;
+pub mod timer;
 
 use diagnostic::Diagnostic;
 use frontend::{statement::Statement, Parser};
@@ -75,7 +76,8 @@ fn typed_ir_from_ast(
 ) -> Result<ir::Module, Vec<Diagnostic>> {
     support::validate_pins(statements, mcu)?;
     support::validate_features(statements, machine)?;
-    let mut module = ir::lower(statements, mcu).map_err(|error| vec![error])?;
+    let timer = timer::resolve(statements, options.cpu_hz)?;
+    let mut module = ir::lower(statements, mcu, timer).map_err(|error| vec![error])?;
     let internal_error = |stage, error: ir::verify::Error| {
         vec![Diagnostic::new(
             diagnostic::DiagnosticKind::InvalidIr {

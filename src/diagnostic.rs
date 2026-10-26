@@ -14,6 +14,9 @@ use unicode_width::UnicodeWidthStr;
 /// Stable public identifiers, independent of wording and presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticCode {
+    Timer,
+    SharedAccess,
+    InterruptContext,
     Call,
     Return,
     Recursion,
@@ -40,6 +43,9 @@ pub enum DiagnosticCode {
 impl DiagnosticCode {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::InterruptContext => "E_INTERRUPT_CONTEXT",
+            Self::Timer => "E_TIMER",
+            Self::SharedAccess => "E_SHARED_ACCESS",
             Self::Call => "E_CALL",
             Self::Return => "E_RETURN",
             Self::Recursion => "E_RECURSION",
@@ -74,6 +80,15 @@ impl fmt::Display for DiagnosticCode {
 /// Structured facts about an error. Add translations at the presentation layer.
 #[derive(Debug, Clone)]
 pub enum DiagnosticKind {
+    Timer {
+        error: crate::timer::TimerError,
+    },
+    SharedAccess {
+        name: String,
+    },
+    InterruptContext {
+        name: String,
+    },
     NotCallable {
         name: String,
     },
@@ -173,6 +188,9 @@ pub enum DiagnosticKind {
 impl DiagnosticKind {
     pub fn code(&self) -> DiagnosticCode {
         match self {
+            Self::Timer { .. } => DiagnosticCode::Timer,
+            Self::SharedAccess { .. } => DiagnosticCode::SharedAccess,
+            Self::InterruptContext { .. } => DiagnosticCode::InterruptContext,
             Self::NotCallable { .. }
             | Self::ArgumentCount { .. }
             | Self::ProcedureValue { .. }
@@ -214,6 +232,8 @@ impl DiagnosticKind {
 /// Semantic labels stay independent of wording and terminal/editor rendering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LabelKind {
+    InterruptAccess,
+    InterruptRequirement,
     OpeningDelimiter,
     PreviousDeclaration,
     ExpectedType(StaticType),

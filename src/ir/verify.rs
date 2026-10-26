@@ -12,6 +12,7 @@ pub enum ErrorKind {
     InvalidEntry,
     InvalidPin,
     RecursiveCall,
+    InterruptState,
 }
 
 #[derive(Debug, Clone)]
@@ -49,11 +50,12 @@ fn failure(
 }
 
 pub fn verify(module: &Module) -> Result<(), Error> {
+    verify_timer(module)?;
     let entry = module
         .functions
         .get(module.entry.0)
         .ok_or_else(|| failure(ErrorKind::InvalidEntry, None, None, "missing module entry"))?;
-    if !entry.parameters.is_empty() || entry.return_type.is_some() {
+    if !entry.parameters.is_empty() || entry.return_type.is_some() || entry.requires_no_interrupt {
         return Err(failure(
             ErrorKind::InvalidEntry,
             None,
@@ -86,6 +88,7 @@ pub fn verify(module: &Module) -> Result<(), Error> {
             ));
         }
         verify_function(module, function)?;
+        verify_interrupts(module, function)?;
     }
 
     // Recursion is deliberately outside v1's contract, including mutually recursive calls.
@@ -123,6 +126,118 @@ pub fn verify(module: &Module) -> Result<(), Error> {
     let mut done = HashSet::new();
     for function in &module.functions {
         visit(function.id, module, &mut HashSet::new(), &mut done)?;
+    }
+
+    if let Some(handler) = module.interrupt_handler {
+        let mut pending = vec![handler];
+        let mut visited = HashSet::new();
+
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+
+            for block in &module.functions[id.0].blocks {
+                for instruction in &block.instructions {
+                    match instruction.op {
+                        Op::Call(callee, _) => pending.push(callee),
+                        Op::LoadGlobal(global) | Op::StoreGlobal(global, _)
+                            if !module.interrupt_globals.contains(&global) =>
+                        {
+                            return Err(failure(
+                                ErrorKind::InterruptState,
+                                Some(id),
+                                Some(block.id),
+                                "ISR global is missing volatile visibility metadata",
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn verify_timer(module: &Module) -> Result<(), Error> {
+    let error = |message| failure(ErrorKind::InterruptState, None, None, message);
+    match (&module.timer, module.interrupt_handler) {
+        (None, None) => {
+            if !module.interrupt_globals.is_empty() {
+                return Err(error("interrupt globals without a handler"));
+            }
+        }
+        (Some(timer), Some(id)) => {
+            let valid = crate::timer::plan(timer.cpu_hz, timer.requested_ns, timer.tolerance_ns)
+                .is_ok_and(|expected| expected == *timer);
+            if !valid {
+                return Err(error("invalid Timer1 configuration"));
+            }
+            let handler = module
+                .functions
+                .get(id.0)
+                .ok_or_else(|| error("missing interrupt handler"))?;
+            if id == module.entry
+                || !handler.requires_no_interrupt
+                || !handler.parameters.is_empty()
+                || handler.return_type.is_some()
+            {
+                return Err(error(
+                    "interrupt handler must be a protected void function with no parameters",
+                ));
+            }
+            if module
+                .interrupt_globals
+                .iter()
+                .any(|id| id.0 >= module.globals.len())
+            {
+                return Err(error("unknown interrupt global"));
+            }
+            let entry = module
+                .functions
+                .get(module.entry.0)
+                .ok_or_else(|| error("missing entry"))?;
+            let first = entry
+                .blocks
+                .iter()
+                .find(|b| b.id == entry.entry)
+                .ok_or_else(|| error("missing entry block"))?;
+            if !first
+                .instructions
+                .first()
+                .is_some_and(|i| matches!(i.op, Op::InterruptDisable))
+            {
+                return Err(error(
+                    "timer startup must disable interrupts before initialization",
+                ));
+            }
+            let starts: Vec<_> = entry
+                .blocks
+                .iter()
+                .flat_map(|b| b.instructions.iter().map(move |i| (b.id, i)))
+                .filter(|(_, i)| matches!(i.op, Op::TimerStart))
+                .collect();
+            if starts.len() != 1 || starts[0].0 != entry.entry {
+                return Err(error("timer must start exactly once in the startup block"));
+            }
+            let start = first
+                .instructions
+                .iter()
+                .position(|i| matches!(i.op, Op::TimerStart))
+                .unwrap();
+            if !first.instructions[..start]
+                .iter()
+                .any(|i| matches!(i.op, Op::Call(FunctionId(1), _)))
+            {
+                return Err(error("timer must start after setup"));
+            }
+        }
+        _ => {
+            return Err(error(
+                "timer and interrupt handler must be declared together",
+            ))
+        }
     }
     Ok(())
 }
@@ -295,6 +410,21 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                 available(operand, position)?;
             }
             let expected = match &instruction.op {
+                Op::InterruptDisable | Op::TimerStart => {
+                    require(
+                        function.id == module.entry && module.timer.is_some(),
+                        "timer lifecycle effect outside entry",
+                    )?;
+                    None
+                }
+                Op::InterruptSave => Some(Type::U8),
+                Op::InterruptRestore(value) => {
+                    require(
+                        value_type(*value)? == Type::U8,
+                        "interrupt state must have type u8",
+                    )?;
+                    None
+                }
                 Op::Const(value) => {
                     require(
                         value.bits & !value.ty.mask() == 0,
@@ -365,6 +495,10 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                     }
                 }
                 Op::Call(callee, args) => {
+                    require(
+                        Some(*callee) != module.interrupt_handler,
+                        "interrupt handler cannot be called as a function",
+                    )?;
                     let callee = module.functions.get(callee.0).ok_or_else(|| {
                         error(ErrorKind::InvalidId, Some(block.id), "unknown callee")
                     })?;
@@ -401,6 +535,102 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
     }
 
     verify_initialization(function, &predecessors, &reachable)
+}
+
+/// Saved states are internal tokens: they may only restore their matching scope.
+/// Every CFG edge must agree on the active stack, including loop back edges.
+fn verify_interrupts(module: &Module, function: &Function) -> Result<(), Error> {
+    let blocks: HashMap<_, _> = function.blocks.iter().map(|b| (b.id, b)).collect();
+    let tokens: HashSet<_> = function
+        .blocks
+        .iter()
+        .flat_map(|b| &b.instructions)
+        .filter(|i| matches!(i.op, Op::InterruptSave))
+        .filter_map(|i| i.result.map(|(id, _)| id))
+        .collect();
+    let error = |block, message| {
+        failure(
+            ErrorKind::InterruptState,
+            Some(function.id),
+            Some(block),
+            message,
+        )
+    };
+
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            if !matches!(instruction.op, Op::InterruptRestore(_))
+                && instruction.op.operands().iter().any(|v| tokens.contains(v))
+            {
+                return Err(error(
+                    block.id,
+                    "saved interrupt state cannot be used as an ordinary value",
+                ));
+            }
+        }
+        if block
+            .terminator
+            .operands()
+            .iter()
+            .any(|v| tokens.contains(v))
+        {
+            return Err(error(
+                block.id,
+                "saved interrupt state cannot escape its function",
+            ));
+        }
+    }
+
+    let mut incoming = HashMap::from([(function.entry, Vec::<ValueId>::new())]);
+    let mut pending = vec![function.entry];
+    while let Some(id) = pending.pop() {
+        let block = blocks[&id];
+        let mut active = incoming[&id].clone();
+        for instruction in &block.instructions {
+            match instruction.op {
+                Op::TimerStart | Op::InterruptDisable if !active.is_empty() => {
+                    return Err(error(
+                        id,
+                        "lifecycle interrupt operation inside a protected scope",
+                    ));
+                }
+                Op::InterruptSave => active.push(instruction.result.unwrap().0),
+                Op::InterruptRestore(saved) => {
+                    if active.pop() != Some(saved) {
+                        return Err(error(
+                            id,
+                            "interrupt restore must match the innermost active save",
+                        ));
+                    }
+                }
+                Op::Call(callee, _)
+                    if module.functions[callee.0].requires_no_interrupt
+                        && !function.requires_no_interrupt
+                        && active.is_empty() =>
+                {
+                    return Err(error(id, "callee requires disabled interrupts"));
+                }
+                _ => {}
+            }
+        }
+        if matches!(block.terminator, Terminator::Return(_)) && !active.is_empty() {
+            return Err(error(id, "return leaves an interrupt scope unrestored"));
+        }
+        for successor in block.terminator.successors() {
+            if let Some(previous) = incoming.get(&successor) {
+                if *previous != active {
+                    return Err(error(
+                        successor,
+                        "control-flow paths have different interrupt scopes",
+                    ));
+                }
+            } else {
+                incoming.insert(successor, active.clone());
+                pending.push(successor);
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn reachable(function: &Function) -> HashSet<BlockId> {

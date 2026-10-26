@@ -1,4 +1,5 @@
 mod functions;
+pub(crate) mod shared;
 
 use crate::diagnostic::{Diagnostic, DiagnosticKind, LabelKind};
 use crate::frontend::{
@@ -24,6 +25,7 @@ pub struct Analyzer {
     return_type: Option<Option<T>>,
     return_location: Option<SourceLocation>,
     global_initializer: bool,
+    interrupts_disabled: bool,
 }
 
 impl Analyzer {
@@ -37,6 +39,7 @@ impl Analyzer {
             return_type: None,
             return_location: None,
             global_initializer: false,
+            interrupts_disabled: false,
         }
     }
 
@@ -55,6 +58,12 @@ impl Analyzer {
             }
         }
         self.global_initializer = false;
+        // Hardware names occupy the same namespace, but are not runtime values.
+        for statement in statements.iter() {
+            if let S::TimerDeclaration(timer) = &statement.statement_type {
+                self.declare(&timer.identifier, T::NoValue, timer.name_location);
+            }
+        }
 
         for statement in statements.iter_mut() {
             if !matches!(
@@ -65,6 +74,7 @@ impl Analyzer {
             }
         }
         self.check_recursion();
+        self.errors.extend(shared::check(statements));
 
         if self.errors.is_empty() {
             Ok(())
@@ -138,7 +148,13 @@ impl Analyzer {
         let span = statement.source_location;
 
         match &mut statement.statement_type {
+            S::TimerDeclaration(timer) => {
+                self.interrupts_disabled = true;
+                self.block(&mut timer.body);
+                self.interrupts_disabled = false;
+            }
             S::FunctionDeclaration {
+                no_interrupt,
                 identifier,
                 parameters,
                 return_type,
@@ -146,6 +162,7 @@ impl Analyzer {
                 body,
                 ..
             } => {
+                self.interrupts_disabled = no_interrupt.is_some();
                 self.current_function = Some(identifier.clone());
                 self.return_type = Some(*return_type);
                 self.return_location = *return_location;
@@ -179,6 +196,7 @@ impl Analyzer {
                 self.return_location = None;
                 self.current_function = None;
                 self.return_type = None;
+                self.interrupts_disabled = false;
             }
             S::Return(value) => {
                 if let Some(value) = value {
@@ -256,9 +274,13 @@ impl Analyzer {
                     self.declare(&pin.identifier, T::Pin, pin.name_location);
                 }
             }
-            S::SetupDeclaration(body) | S::LoopDeclaration(body) | S::Block(body) => {
-                self.block(body)
+            S::NoInterrupt(body) | S::SetupDeclaration(body) => {
+                let previous = self.interrupts_disabled;
+                self.interrupts_disabled = true;
+                self.block(body);
+                self.interrupts_disabled = previous;
             }
+            S::LoopDeclaration(body) | S::Block(body) => self.block(body),
             S::Expression(expr) => {
                 if let E::Call {
                     identifier,
@@ -358,6 +380,15 @@ impl Analyzer {
             },
             E::Identifier(name) if self.functions.contains_key(name) => {
                 self.error(DiagnosticKind::FunctionValue { name: name.clone() }, span);
+                T::Unknown
+            }
+            E::Identifier(name) if self.lookup(name) == Some(T::NoValue) => {
+                self.error(
+                    DiagnosticKind::Timer {
+                        error: crate::timer::TimerError::NotValue { name: name.clone() },
+                    },
+                    span,
+                );
                 T::Unknown
             }
             E::Identifier(name) => self.lookup(name).unwrap_or_else(|| {

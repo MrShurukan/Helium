@@ -13,6 +13,7 @@ fn compile(source: &str) -> Module {
         source,
         "atmega328p",
         Options {
+            cpu_hz: None,
             verify: true,
             optimize: false,
         },
@@ -290,6 +291,7 @@ fn call_fixture() -> Module {
     };
     let origin = Origin::Generated("LLVM call test");
     module.functions.push(Function {
+        requires_no_interrupt: false,
         id,
         name: "sum".into(),
         parameters: vec![(value(0), Type::I16), (value(1), Type::I8)],

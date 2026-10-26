@@ -213,6 +213,7 @@ fn compile(source: &str) -> Module {
         source,
         "atmega328p",
         ir::Options {
+            cpu_hz: None,
             verify: true,
             optimize: false,
         },

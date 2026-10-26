@@ -65,6 +65,8 @@ macro_rules! check_and_consume {
     };
 }
 
+mod timer;
+
 /// This macro is used to automate binary operator parsing.
 /// All binary operators are left-associative with themselves (at least in the moment of
 /// writing, check `grammar.txt`).
@@ -185,7 +187,24 @@ impl Parser<'_> {
 
             let result =
                 match token.token_type {
+                    TT::Keyword(KT::Timer) => self.timer_declaration(tokens),
                     TT::Keyword(KT::Fn) => self.function_declaration(tokens),
+                    TT::Keyword(KT::NoInterrupt) => {
+                        let modifier = token.source_location;
+                        self.modified_function(tokens).map(|mut statement| {
+                            if let StatementType::FunctionDeclaration { no_interrupt, .. } =
+                                &mut statement.statement_type
+                            {
+                                *no_interrupt = Some(modifier);
+                            }
+                            statement.source_location =
+                                crate::frontend::utils::SourceLocation::new_from_start_end(
+                                    modifier,
+                                    statement.source_location,
+                                );
+                            statement
+                        })
+                    }
                     TT::Keyword(KT::Var) if !already_read_setup && !already_read_loop => {
                         self.var_declaration(tokens)
                     }
@@ -282,6 +301,38 @@ impl Parser<'_> {
         }
     }
 
+    fn modified_function(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Keyword(KT::Fn),
+            "Expected 'fn' after global 'noInterrupt'"
+        );
+        self.function_declaration(tokens)
+    }
+
+    fn no_interrupt_block(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
+        let start = self.advance(tokens)?.source_location;
+        check_and_consume!(
+            self,
+            tokens,
+            TT::Punctuation(PT::LeftBrace),
+            "Expected '{' after 'noInterrupt'"
+        );
+        let block = self.block_statement(tokens)?;
+        let StatementType::Block(body) = block.statement_type else {
+            unreachable!()
+        };
+
+        Some(Statement {
+            source_location: crate::frontend::utils::SourceLocation::new_from_start_end(
+                start,
+                block.source_location,
+            ),
+            statement_type: StatementType::NoInterrupt(body),
+        })
+    }
+
     fn function_declaration(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         let start = tokens.previous()?.source_location;
         let name =
@@ -367,6 +418,7 @@ impl Parser<'_> {
                 block.source_location,
             ),
             statement_type: StatementType::FunctionDeclaration {
+                no_interrupt: None,
                 name_location: name.source_location,
                 return_location,
                 identifier,
@@ -648,6 +700,7 @@ impl Parser<'_> {
     fn statement(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         let token = self.peek(tokens)?;
         match token.token_type {
+            TT::Keyword(KT::NoInterrupt) => self.no_interrupt_block(tokens),
             TT::Keyword(KT::Return) => self.return_statement(tokens),
             TT::Keyword(KT::For) => {
                 self.advance(tokens)?;
