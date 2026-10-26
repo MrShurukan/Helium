@@ -320,7 +320,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             cpu_hz: None,
-            verify: cfg!(debug_assertions),
+            verify: true,
             optimize: false,
         }
     }

@@ -102,10 +102,15 @@ pub fn parse_duration(text: &str) -> Result<u64, String> {
         .ok_or_else(|| "Invalid duration unit or duration overflow; use integer ns/us/ms/s".into())
 }
 
-pub fn candidates(cpu_hz: u32, requested_ns: u64) -> Result<Vec<TimerConfig>, TimerError> {
+pub fn validate_clock(cpu_hz: u32) -> Result<(), TimerError> {
     if cpu_hz == 0 || cpu_hz > 20_000_000 {
         return Err(TimerError::InvalidClock { hz: cpu_hz });
     }
+    Ok(())
+}
+
+pub fn candidates(cpu_hz: u32, requested_ns: u64) -> Result<Vec<TimerConfig>, TimerError> {
+    validate_clock(cpu_hz)?;
     if requested_ns == 0 {
         return Err(TimerError::ZeroPeriod);
     }

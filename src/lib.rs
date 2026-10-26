@@ -38,7 +38,17 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Vec<Diagnostic>> {
 
 /// Validate the executable language subset without starting external tools.
 pub fn check(source: &str, mcu: &str) -> Result<(), Vec<Diagnostic>> {
-    compile_llvm(source, mcu, ir::Options::default()).map(|_| ())
+    check_with_options(source, mcu, ir::Options::default())
+}
+
+/// Configurable check, including the CPU clock required by timer programs.
+/// Uses the same compilation path and options as CLI check and compile_llvm.
+pub fn check_with_options(
+    source: &str,
+    mcu: &str,
+    options: ir::Options,
+) -> Result<(), Vec<Diagnostic>> {
+    compile_llvm(source, mcu, options).map(|_| ())
 }
 
 pub fn compile_llvm(
@@ -74,6 +84,14 @@ fn typed_ir_from_ast(
     options: ir::Options,
     machine: bool,
 ) -> Result<ir::Module, Vec<Diagnostic>> {
+    if let Some(cpu_hz) = options.cpu_hz {
+        timer::validate_clock(cpu_hz).map_err(|error| {
+            vec![Diagnostic::new(
+                diagnostic::DiagnosticKind::Timer { error },
+                None,
+            )]
+        })?;
+    }
     support::validate_pins(statements, mcu)?;
     support::validate_features(statements, machine)?;
     let timer = timer::resolve(statements, options.cpu_hz)?;

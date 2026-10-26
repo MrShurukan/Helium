@@ -24,13 +24,19 @@ LLVM with AVR support and the AVR GNU toolchain. On Windows:
 ```powershell
 ./tools/setup-toolchain.ps1
 . ./tools/activate-toolchain.ps1
-cargo test --locked -- --include-ignored
-cargo test --locked --release -- --include-ignored
+./tools/test-all.ps1
 ```
 
 The setup script installs pinned tools under `build/toolchain/`. Machine execution tests
 also require Node.js and AVR8js. Tests never flash hardware. AVRA is no longer a dependency.
 See [toolchain setup and measurements](docs/LLVM_PROTOTYPE.md).
+
+`tools/test-all.ps1` checks every external dependency, formatting and Clippy, then runs
+all tests (including machine tests) sequentially in debug and release. Missing tools
+fail the command. Use `-UseConfiguredEnvironment` to honor existing HELIUM_* overrides
+or PATH instead of the bundled toolchain. No hardware is flashed.
+GitHub Actions runs host tests, formatting and Clippy on Windows and Linux; the full
+machine gate is a separate required local check before a release.
 
 ## Commands
 
@@ -50,9 +56,11 @@ validate the installed toolchain or replace a full build. `build` defaults to HE
 
 `ast`, `ir` and `llvm` output require only Helium; `llvm` uses the `.ll` extension.
 `asm`, `elf` and `hex` invoke external tools. Assembly uses GNU/LLVM AVR syntax.
-The library exposes `analyze`, `compile_typed_ir`, `compile_llvm` and `check`.
+The library exposes `analyze`, `compile_typed_ir`, `compile_llvm`, `check` and
+`check_with_options(source, mcu, Options)` for clock/configuration-aware checks.
 
-`--verify-ir` enables internal IR verification (on by default in debug, off in release).
+Internal IR verification is enabled by default in both debug and release.
+`--verify-ir` remains an explicit assertion of that policy; the library can set `Options.verify=false`.
 Source validation is always enabled. `--optimize-ir` runs experimental Helium passes
 on `--emit ir` only. `--opt none|speed|size` controls machine optimization through LLVM.
 AST/Helium IR inspection can accept features outside the current machine subset.
@@ -76,7 +84,7 @@ remain unsupported; use setup for runtime calls. See [the function contract](doc
 `noInterrupt { ... }` saves and restores interrupt state, including nested blocks and
 early returns. `noInterrupt fn` declares a checked calling requirement; it does not
 automatically disable interrupts. See [the interrupt contract](docs/INTERRUPTS.md) and
-[the example](examples/no-interrupt.he). Timers and interrupt handlers are not implemented yet.
+[the example](examples/no-interrupt.he). Timer1 and ISR support are described below.
 
 Diagnostics contain exact primary locations and semantic related labels. Missing-return
 errors identify fallthrough paths; type errors can reference the declaration that required

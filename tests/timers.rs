@@ -191,6 +191,39 @@ fn lifecycle_roles_and_order_are_verified_without_fixed_function_numbers() {
 }
 
 #[test]
+fn configurable_check_matches_cli_clock_policy() {
+    let source = include_str!("../examples/timer-seconds.he");
+    for cpu_hz in [None, Some(0), Some(16_000_000), Some(20_000_001)] {
+        let result = helium::check_with_options(
+            source,
+            "atmega328p",
+            Options {
+                cpu_hz,
+                ..Options::default()
+            },
+        );
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_helium"));
+        command.args(["check", "examples/timer-seconds.he", "--mcu", "atmega328p"]);
+        if let Some(hz) = cpu_hz {
+            command.args(["--cpu-hz", &hz.to_string()]);
+        }
+        let cli = command.output().unwrap();
+        assert_eq!(result.is_ok(), cli.status.success(), "clock {cpu_hz:?}");
+        assert_eq!(result.is_ok(), cpu_hz == Some(16_000_000));
+    }
+    assert!(helium::check("loop {}", "atmega328p").is_ok());
+    assert!(helium::check_with_options(
+        "loop {}",
+        "atmega328p",
+        Options {
+            cpu_hz: Some(0),
+            ..Options::default()
+        }
+    )
+    .is_err());
+}
+
+#[test]
 fn calculator_and_build_reports_are_available_without_external_tools() {
     use std::process::Command;
     let exe = env!("CARGO_BIN_EXE_helium");

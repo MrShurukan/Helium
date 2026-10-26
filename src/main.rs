@@ -15,7 +15,7 @@ const USAGE: &str = concat!(
     "  helium timer-options --mcu atmega328p --cpu-hz <Hz> --timer Timer1 --every <duration>\n",
     "  --cpu-hz <Hz> (check/build; required for timers, does not change oscillator settings)\n",
     "Options: --color auto|always|never (default: auto; NO_COLOR disables automatic color)\n",
-    "  --verify-ir (check/build; default enabled in debug, disabled in release)\n",
+    "  --verify-ir (check/build; enabled by default in debug and release)\n",
     "  --opt none|speed|size (machine output only; default: none)\n",
     "  --optimize-ir (build --emit ir only; constant folding, CFG cleanup and dead values)"
 );
@@ -115,11 +115,8 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 .map_err(|_| "--cpu-hz must be a positive integer".to_owned())
         })
         .transpose()?;
-    if ir_options
-        .cpu_hz
-        .is_some_and(|hz| hz == 0 || hz > 20_000_000)
-    {
-        return Err("--cpu-hz must be in 1..=20000000 for ATmega328P".into());
+    if let Some(cpu_hz) = ir_options.cpu_hz {
+        helium::timer::validate_clock(cpu_hz).map_err(|e| e.to_string())?;
     }
     if helium::backend::microcontroller::get(&mcu).is_none() {
         return Err(

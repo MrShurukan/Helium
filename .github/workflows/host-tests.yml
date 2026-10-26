@@ -1,0 +1,26 @@
+name: Host checks
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust tools
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Formatting
+        run: cargo +stable fmt --check
+      - name: Lints
+        run: cargo +stable clippy --locked --all-targets -- -D warnings
+      - name: Debug host tests
+        run: cargo +stable test --locked
+      - name: Release host tests
+        run: cargo +stable test --locked --release

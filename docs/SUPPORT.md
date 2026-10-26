@@ -26,6 +26,8 @@ AVRA, the old linear IR and hand-written AVR assembly generation have been remov
 
 `analyze` parses and type-checks. `compile_typed_ir` also checks the executable Helium IR
 subset. `compile_llvm` and `check` validate the machine subset before emitting LLVM IR.
+`check_with_options` accepts the same Options (including cpu_hz) as `compile_llvm`.
+The simple `check` wrapper uses defaults. IR verification defaults to enabled in every profile.
 `check` needs no external tools; a full build still validates LLVM lowering and linking.
 Restrictions apply to unreachable source too, so optimization does not silently determine
 whether an unsupported feature is accepted.

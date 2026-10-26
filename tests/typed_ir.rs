@@ -179,8 +179,8 @@ fn unsupported_features_fail_with_source_diagnostics() {
 }
 
 #[test]
-fn verifier_default_follows_build_profile_and_can_be_forced() {
-    assert_eq!(Options::default().verify, cfg!(debug_assertions));
+fn verifier_defaults_on_in_every_profile_and_can_be_disabled_in_api() {
+    assert!(Options::default().verify);
     let source = "loop {var a:u8=1;}";
     assert_eq!(
         compile(source).dump(),

@@ -5,6 +5,28 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+#[cfg(windows)]
+fn full_test_gate_fails_when_toolchain_is_missing() {
+    let fixture = Fixture::new();
+    let output = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tools/test-all.ps1"))
+        .arg("-UseConfiguredEnvironment")
+        .env("HELIUM_LLVM_BIN", fixture.root.join("missing-toolchain"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("llc.exe"), "{}", stderr(&output));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("Full gate passed"));
+}
 struct Fixture {
     root: PathBuf,
     source: PathBuf,
