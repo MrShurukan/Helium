@@ -1,8 +1,8 @@
 ﻿// Simple LED latch example
 
 def {
-    Button = PortD.2 INPUT;
-    Led    = PortC.5 OUTPUT;
+    Button = PortD.2 INPUT_PULLUP;
+    Led    = PortB.5 OUTPUT;
 }
 
 var button_pressed = false;
