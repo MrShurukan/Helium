@@ -233,6 +233,9 @@ impl DiagnosticKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LabelKind {
     InterruptAccess,
+    MainAccess,
+    MainCall,
+    InterruptCall,
     InterruptRequirement,
     OpeningDelimiter,
     PreviousDeclaration,

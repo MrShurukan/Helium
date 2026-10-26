@@ -239,11 +239,37 @@ impl Program {
                 }
             }
             S::VariableDeclaration {
-                initializer: Some(e),
+                initializer,
+                name_location,
                 ..
+            } => {
+                if let Some(e) = initializer {
+                    Self::expression(e, protection, symbols, body);
+                }
+                Self::access(
+                    s.symbol.unwrap(),
+                    true,
+                    false,
+                    protection,
+                    *name_location,
+                    symbols,
+                    body,
+                );
             }
-            | S::Expression(e)
-            | S::Return(Some(e)) => Self::expression(e, protection, symbols, body),
+            S::DefDeclaration(pins) => {
+                for pin in pins {
+                    Self::access(
+                        pin.symbol.unwrap(),
+                        true,
+                        true,
+                        protection,
+                        pin.name_location,
+                        symbols,
+                        body,
+                    );
+                }
+            }
+            S::Expression(e) | S::Return(Some(e)) => Self::expression(e, protection, symbols, body),
             S::If {
                 condition,
                 then_body,
@@ -289,24 +315,61 @@ impl Program {
         visited
     }
 
-    pub(crate) fn check(&self, symbols: &SymbolTable) -> Vec<Diagnostic> {
-        let mut irq: BTreeMap<ResourceId, Vec<&Access>> = BTreeMap::new();
-        let mut main: BTreeMap<ResourceId, Vec<&Access>> = BTreeMap::new();
-        for (id, body) in &self.bodies {
-            for access in &body.accesses {
-                if self.interrupts.contains(id) {
-                    irq.entry(access.resource).or_default().push(access);
-                }
-                // Preserve existing policy during the identity migration.
-                if self.main.contains(id)
-                    || (self.setup.contains(id) && *id != BodyId::Initialization)
-                {
-                    main.entry(access.resource).or_default().push(access);
+    /// A deterministic source path for diagnostics. Caller protection is recorded
+    /// but never silently promoted into an ordinary helper's contract.
+    fn call_path(
+        &self,
+        roots: impl IntoIterator<Item = BodyId>,
+        target: BodyId,
+    ) -> Vec<SourceLocation> {
+        let mut pending: std::collections::VecDeque<_> =
+            roots.into_iter().map(|id| (id, Vec::new())).collect();
+        let mut visited = BTreeSet::new();
+        while let Some((id, path)) = pending.pop_front() {
+            if id == target {
+                return path;
+            }
+            if !visited.insert(id) {
+                continue;
+            }
+            if let Some(body) = self.bodies.get(&id) {
+                for call in &body.calls {
+                    let mut next = path.clone();
+                    next.push(call.location);
+                    pending.push_back((BodyId::Function(call.callee), next));
                 }
             }
         }
+        Vec::new()
+    }
+
+    pub(crate) fn check(&self, symbols: &SymbolTable) -> Vec<Diagnostic> {
+        let mut irq: BTreeMap<ResourceId, Vec<(BodyId, &Access)>> = BTreeMap::new();
+        let mut main: BTreeMap<ResourceId, Vec<(BodyId, &Access)>> = BTreeMap::new();
+        for (id, body) in &self.bodies {
+            for access in &body.accesses {
+                if self.interrupts.contains(id) {
+                    irq.entry(access.resource).or_default().push((*id, access));
+                }
+                // Setup completes before TimerStart: it cannot race with ISR.
+                if self.main.contains(id) {
+                    main.entry(access.resource).or_default().push((*id, access));
+                }
+            }
+        }
+        let irq_roots = || {
+            self.bodies
+                .keys()
+                .copied()
+                .filter(|id| matches!(id, BodyId::Interrupt(_)))
+        };
         let mut errors = vec![];
-        for body in self.bodies.values() {
+        for (id, body) in &self.bodies {
+            // Uncalled and setup-only bodies are still type/contract checked by
+            // Analyzer, but do not create a concurrent runtime access.
+            if !self.main.contains(id) && !self.interrupts.contains(id) {
+                continue;
+            }
             for access in &body.accesses {
                 if access.protection != Protection::None {
                     continue;
@@ -317,18 +380,55 @@ impl Program {
                 let Some(main) = main.get(&access.resource) else {
                     continue;
                 };
-                if !interrupt.iter().chain(main).any(|a| a.kind.writes()) {
+                if !interrupt.iter().chain(main).any(|(_, a)| a.kind.writes()) {
                     continue;
                 }
-                errors.push(
-                    Diagnostic::new(
-                        DiagnosticKind::SharedAccess {
-                            name: symbols.get(access.symbol).name.clone(),
-                        },
-                        Some(access.location),
-                    )
-                    .with_label(interrupt[0].location, LabelKind::InterruptAccess),
-                );
+                let (irq_body, irq_access) = interrupt
+                    .iter()
+                    .find(|(_, a)| a.kind.writes())
+                    .unwrap_or(&interrupt[0]);
+                let (main_body, main_access) = main
+                    .iter()
+                    .find(|(_, a)| a.kind.writes())
+                    .unwrap_or(&main[0]);
+                let mut error = Diagnostic::new(
+                    DiagnosticKind::SharedAccess {
+                        name: symbols.get(access.symbol).name.clone(),
+                    },
+                    Some(access.location),
+                )
+                .with_label(irq_access.location, LabelKind::InterruptAccess);
+                if main_access.location != access.location {
+                    error = error.with_label(main_access.location, LabelKind::MainAccess);
+                }
+                let mut paths = vec![
+                    (
+                        self.call_path([BodyId::MainLoop], *main_body),
+                        LabelKind::MainCall,
+                    ),
+                    (
+                        self.call_path(irq_roots(), *irq_body),
+                        LabelKind::InterruptCall,
+                    ),
+                ];
+                if self.main.contains(id) {
+                    paths.push((self.call_path([BodyId::MainLoop], *id), LabelKind::MainCall));
+                }
+                if self.interrupts.contains(id) {
+                    paths.push((self.call_path(irq_roots(), *id), LabelKind::InterruptCall));
+                }
+                for (path, kind) in paths {
+                    for location in path {
+                        if !error
+                            .labels
+                            .iter()
+                            .any(|label| label.location == location && label.kind == kind)
+                        {
+                            error = error.with_label(location, kind.clone());
+                        }
+                    }
+                }
+                errors.push(error);
             }
         }
         errors

@@ -281,7 +281,8 @@ fn timer_interrupts_execute_and_resume_main_at_all_optimization_levels() {
         var busy:bool=(false and true) or false; var failure:u8=0;
         noInterrupt fn tick() { seconds=seconds+1; if busy {failure=failure+1;} }
         timer clock=Timer1 {every:1ms, interrupt {tick();}}
-        setup {noInterrupt {busy=true; var i:u16=0; while i<1000 {i=i+1;} busy=false;}}
+        fn initialize_busy() {busy=true; var i:u16=0; while i<1000 {i=i+1;} busy=false;}
+        setup {initialize_busy();}
         loop {noInterrupt {snapshot=seconds;} progress=progress+1;}";
     for optimize in [false, true] {
         let mut settings = options();

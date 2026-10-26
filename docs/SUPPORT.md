@@ -24,7 +24,10 @@ AVRA, the old linear IR and hand-written AVR assembly generation have been remov
 | Timer1 CTC, embedded ISR, shared-access checks | Yes; explicit CPU clock | Verified IR; interpreter has no asynchronous dispatch | Yes |
 | Modules, heap, other timers, peripheral drivers | Not implemented | — | — |
 
-`analyze` parses and type-checks. `compile_typed_ir` also checks the executable Helium IR
+`analyze` parses, type-checks and returns one `AnalyzedProgram` with resolved symbol
+identities and a shared-access graph; use `statements()` to inspect its AST.
+Setup-only and unused functions do not create runtime shared-access conflicts, but
+all source bodies still undergo type and explicit noInterrupt-contract checks. `compile_typed_ir` also checks the executable Helium IR
 subset. `compile_llvm` and `check` validate the machine subset before emitting LLVM IR.
 `check_with_options` accepts the same Options (including cpu_hz) as `compile_llvm`.
 The simple `check` wrapper uses defaults. IR verification defaults to enabled in every profile.

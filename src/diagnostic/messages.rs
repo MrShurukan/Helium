@@ -133,6 +133,9 @@ impl super::LabelKind {
             Self::PreviousDeclaration => "first declared here".into(),
             Self::ExpectedType(ty) => format!("expected type {ty} comes from here"),
             Self::OperandType(ty) => format!("this expression has type {ty}"),
+            Self::MainAccess => "accessed by the main loop or a function it calls".into(),
+            Self::MainCall => "this call is reachable from the main loop".into(),
+            Self::InterruptCall => "this call is reachable from the interrupt handler".into(),
             Self::InterruptAccess => {
                 "accessed by the interrupt handler or a function it calls".into()
             }
