@@ -77,6 +77,12 @@ impl Analyzer {
         self.errors.extend(shared::check(statements));
 
         if self.errors.is_empty() {
+            for statement in statements {
+                statement.for_each_expression_mut(&mut |e| self.finalize_expression(e));
+            }
+        }
+
+        if self.errors.is_empty() {
             Ok(())
         } else {
             Err(self.errors)
@@ -85,6 +91,25 @@ impl Analyzer {
 
     fn error(&mut self, kind: DiagnosticKind, span: SourceLocation) {
         self.errors.push(Diagnostic::new(kind, Some(span)));
+    }
+
+    fn finalize_expression(&mut self, expr: &mut Expression) {
+        let target = default_type(expr.static_type);
+        if integer_literal(expr).is_some() {
+            // A signed literal is one semantic atom: the positive token in -128:i8
+            // need not independently fit i8. Lowering consumes the complete atom.
+            self.coerce(expr, target);
+            fn stamp(expr: &mut Expression, target: T) {
+                expr.static_type = target;
+                expr.for_each_child_mut(|child| stamp(child, target));
+            }
+            stamp(expr, target);
+            return;
+        }
+        if literal_type(expr.static_type) {
+            self.coerce(expr, target);
+        }
+        expr.for_each_child_mut(|child| self.finalize_expression(child));
     }
 
     fn lookup(&self, name: &str) -> Option<T> {

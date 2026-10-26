@@ -37,7 +37,8 @@ fn ty(ty: T, location: SourceLocation) -> Result<Type, Diagnostic> {
         T::Boolean => Type::Bool,
         T::PinState => Type::PinState,
         T::Integer(integer) => match integer {
-            I::Literal | I::Signed(SI::Int32) => Type::I32,
+            I::Literal => return Err(invalid("unresolved integer literal type", location)),
+            I::Signed(SI::Int32) => Type::I32,
             I::Signed(SI::Int8) => Type::I8,
             I::Signed(SI::Int16) => Type::I16,
             I::Signed(SI::Int64) => Type::I64,

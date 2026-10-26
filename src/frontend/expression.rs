@@ -61,6 +61,56 @@ pub enum ExpressionType {
 // TODO: (like `PinRef`)
 // I'm not sure of the solution as of right now
 impl Expression {
+    /// Visit immediate operands in source evaluation order (not recursively).
+    pub fn for_each_child(&self, mut visit: impl FnMut(&Expression)) {
+        match &self.expression_type {
+            ExpressionType::Call { arguments, .. } => arguments.iter().for_each(visit),
+            ExpressionType::Binary { left, right, .. } => {
+                visit(left);
+                visit(right);
+            }
+            ExpressionType::Ternary {
+                first,
+                second,
+                third,
+            } => {
+                visit(first);
+                visit(second);
+                visit(third);
+            }
+            ExpressionType::Grouping { expression }
+            | ExpressionType::Assignment { expression, .. } => visit(expression),
+            ExpressionType::Unary { right, .. } => visit(right),
+            ExpressionType::Identifier(_) | ExpressionType::Literal { .. } => {}
+        }
+    }
+
+    /// Mutable counterpart for type finalization.
+    pub fn for_each_child_mut(&mut self, mut visit: impl FnMut(&mut Expression)) {
+        match &mut self.expression_type {
+            ExpressionType::Call { arguments, .. } => arguments.iter_mut().for_each(visit),
+            ExpressionType::Binary { left, right, .. } => {
+                visit(left);
+                visit(right);
+            }
+            ExpressionType::Ternary {
+                first,
+                second,
+                third,
+            } => {
+                visit(first);
+                visit(second);
+                visit(third);
+            }
+            ExpressionType::Grouping { expression }
+            | ExpressionType::Assignment { expression, .. } => visit(expression),
+            ExpressionType::Unary { right, .. } => visit(right),
+            ExpressionType::Identifier(_) | ExpressionType::Literal { .. } => {}
+        }
+    }
+}
+
+impl Expression {
     pub fn new_assignment(identifier: &Expression, expression: Expression) -> Self {
         if let ExpressionType::Identifier(name) = &identifier.expression_type {
             Self {

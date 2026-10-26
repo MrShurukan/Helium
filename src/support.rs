@@ -93,49 +93,13 @@ pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), 
         }
     }
 
-    fn expr(e: &Expression, machine: bool, errors: &mut Vec<Diagnostic>) {
-        use crate::frontend::token_type::{PunctuationType as P, TokenType};
+    // Only statement-position constant mode expressions are executable. Modes
+    // used as values (comparisons, arguments, ternaries) are not IR values.
+    fn mode_expr(e: &Expression, errors: &mut Vec<Diagnostic>) {
+        use crate::frontend::token_type::LiteralType;
         match &e.expression_type {
-            E::Binary {
-                left,
-                operator,
-                right,
-                operator_location,
-                ..
-            } => {
-                if matches!(operator, TokenType::Punctuation(P::Slash)) {
-                    errors.push(Diagnostic::new(
-                        DiagnosticKind::TypedIrUnsupported {
-                            feature:
-                                "division (rounding and zero-divisor semantics are not defined yet)"
-                                    .into(),
-                        },
-                        Some(*operator_location),
-                    ));
-                }
-                expr(left, machine, errors);
-                expr(right, machine, errors);
-            }
-            E::Unary { right, .. } => expr(right, machine, errors),
-            E::Grouping { expression } | E::Assignment { expression, .. } => {
-                expr(expression, machine, errors)
-            }
-            E::Ternary {
-                first,
-                second,
-                third,
-            } => {
-                expr(first, machine, errors);
-                expr(second, machine, errors);
-                expr(third, machine, errors);
-            }
-            E::Call { arguments, .. } => {
-                for a in arguments {
-                    expr(a, machine, errors);
-                }
-            }
             E::Literal {
-                value: crate::frontend::token_type::LiteralType::PinMode(mode),
+                value: LiteralType::PinMode(mode),
             } => {
                 if *mode == M::InputPullDown {
                     errors.push(Diagnostic::new(
@@ -144,9 +108,44 @@ pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), 
                     ));
                 }
             }
-            E::Identifier(_) => {}
-            E::Literal { .. } => check_type(e.static_type, e.source_location, machine, errors),
+            E::Grouping { expression } | E::Assignment { expression, .. } => {
+                mode_expr(expression, errors)
+            }
+            _ => errors.push(Diagnostic::new(
+                DiagnosticKind::TypedIrUnsupported {
+                    feature: "first-class or computed PinMode values".into(),
+                },
+                Some(e.source_location),
+            )),
         }
+    }
+
+    fn expr(e: &Expression, machine: bool, errors: &mut Vec<Diagnostic>) {
+        use crate::frontend::token_type::{PunctuationType as P, TokenType};
+        if let E::Binary {
+            operator: TokenType::Punctuation(P::Slash),
+            operator_location,
+            ..
+        } = &e.expression_type
+        {
+            errors.push(Diagnostic::new(
+                DiagnosticKind::TypedIrUnsupported {
+                    feature: "division (rounding and zero-divisor semantics are not defined yet)"
+                        .into(),
+                },
+                Some(*operator_location),
+            ));
+        }
+        // Direct/grouped pins are physical reads. Selecting a first-class pin is
+        // not supported, even if the whole expression will later be discarded.
+        if e.static_type != T::Pin || matches!(e.expression_type, E::Ternary { .. }) {
+            let before = errors.len();
+            check_type(e.static_type, e.source_location, machine, errors);
+            if errors.len() != before {
+                return;
+            }
+        }
+        e.for_each_child(|child| expr(child, machine, errors));
     }
 
     fn stmt(s: &Statement, machine: bool, errors: &mut Vec<Diagnostic>) {
@@ -201,6 +200,7 @@ pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), 
                     stmt(s, machine, errors);
                 }
             }
+            S::Expression(e) if e.static_type == T::PinMode => mode_expr(e, errors),
             S::Expression(e) | S::Return(Some(e)) => expr(e, machine, errors),
             S::If {
                 condition,

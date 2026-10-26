@@ -30,6 +30,13 @@ subset. `compile_llvm` and `check` validate the machine subset before emitting L
 Restrictions apply to unreachable source too, so optimization does not silently determine
 whether an unsupported feature is accepted.
 
+After analysis, all expression types are concrete, including operands of comparisons
+and statements after return. Unconstrained integer expressions default to i32 before
+the machine support check and receive located unsupported-type diagnostics. A signed
+literal such as -128:i8 is validated as a whole, not as a separate positive i8 token.
+Computed PinMode expressions and first-class pin selection are rejected before lowering;
+constant (including grouped/chained) pin mode statements remain supported.
+
 ## Semantic rules
 
 - Names cannot shadow a visible variable, parameter, pin or function. Separate sibling scopes

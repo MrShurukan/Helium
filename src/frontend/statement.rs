@@ -69,6 +69,55 @@ pub enum StatementType {
 }
 
 impl Statement {
+    /// Visit expression roots throughout nested statements, including unreachable
+    /// statements. The visitor chooses how to descend into expression operands.
+    pub fn for_each_expression_mut(&mut self, visit: &mut impl FnMut(&mut Expression)) {
+        use StatementType as S;
+        match &mut self.statement_type {
+            S::TimerDeclaration(timer) => {
+                for s in &mut timer.body {
+                    s.for_each_expression_mut(visit);
+                }
+            }
+            S::FunctionDeclaration { body, .. }
+            | S::SetupDeclaration(body)
+            | S::LoopDeclaration(body)
+            | S::Block(body)
+            | S::NoInterrupt(body) => {
+                for s in body {
+                    s.for_each_expression_mut(visit);
+                }
+            }
+            S::VariableDeclaration { initializer, .. } | S::Return(initializer) => {
+                if let Some(e) = initializer {
+                    visit(e);
+                }
+            }
+            S::Expression(e) => visit(e),
+            S::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                visit(condition);
+                then_body.for_each_expression_mut(visit);
+                if let Some(s) = else_body {
+                    s.for_each_expression_mut(visit);
+                }
+            }
+            S::While { condition, body } => {
+                visit(condition);
+                body.for_each_expression_mut(visit);
+            }
+            S::For { from, to, body, .. } => {
+                visit(from);
+                visit(to);
+                body.for_each_expression_mut(visit);
+            }
+            S::DefDeclaration(_) => {}
+        }
+    }
+
     pub fn new_expression(expression: Expression) -> Self {
         Self {
             source_location: expression.source_location,
