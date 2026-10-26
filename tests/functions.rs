@@ -19,6 +19,7 @@ fn compile(source: &str, optimize: bool) -> Module {
 
 fn run(source: &str, optimize: bool) -> Vec<u64> {
     let mut module = compile(source, optimize);
+    module.lifecycle = None;
     module.functions[0].blocks[1].terminator = Terminator::Return(None);
     let mut runner = Interpreter::new(&module, 10000).unwrap();
     runner.run_entry().unwrap();

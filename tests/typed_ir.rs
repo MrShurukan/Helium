@@ -200,6 +200,7 @@ fn verifier_default_follows_build_profile_and_can_be_forced() {
 
 fn bare() -> Module {
     let mut module = compile("loop {}");
+    module.lifecycle = None;
     module.entry = FunctionId(0);
     module.functions.truncate(1);
     module.functions[0].blocks.truncate(1);

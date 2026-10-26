@@ -194,3 +194,13 @@ The ISR is an externally reachable root and cannot be called as a normal functio
 Its global accesses, including through helpers, are volatile in LLVM. Global loads
 are conservatively retained by Helium DCE. The verifier checks visibility metadata,
 configuration and lifecycle order. The interpreter does not dispatch asynchronous ISR.
+# Lifecycle verification (A1)
+
+Source modules carry explicit `Lifecycle` roles: initialize, setup and loop body.
+The entry wrapper calls a separate initializer (globals in source order, then GPIO),
+then setup, then the repeating loop. With Timer1 it first disables interrupts and
+starts the timer only after setup. Initializers may contain arbitrary expression CFG.
+The verifier checks the wrapper order, distinct role IDs, a single startup path and
+no lifecycle calls from helpers or ISR. It does not assume setup has function ID 1.
+Standalone IR test modules may omit lifecycle metadata; timer modules may not.
+

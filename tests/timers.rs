@@ -137,6 +137,60 @@ fn ir_and_llvm_preserve_handler_visibility_and_startup_order() {
 }
 
 #[test]
+fn branching_initializers_preserve_startup_and_verification_policy() {
+    let source = "var flag:bool=true; var value:u8=flag ? 7 : 9;
+        var a:bool=flag and false; var b:bool=a or flag;
+        timer clock=Timer1 {every:1s, interrupt {}}
+        setup {value=value+1;} loop {}";
+    for verify in [false, true] {
+        for optimize in [false, true] {
+            let settings = Options {
+                verify,
+                optimize,
+                ..options()
+            };
+            let module = compile_typed_ir(source, "atmega328p", settings).unwrap();
+            helium::compile_llvm(source, "atmega328p", settings).unwrap();
+            ir::verify::verify(&module).unwrap();
+            let mut runner = ir::interpret::Interpreter::new(&module, 200).unwrap();
+            assert_eq!(runner.run_entry(), Err(ir::interpret::Error::StepLimit));
+            assert_eq!(
+                runner.globals.iter().map(|v| v.bits).collect::<Vec<_>>(),
+                [1, 8, 0, 1]
+            );
+        }
+    }
+}
+
+#[test]
+fn lifecycle_roles_and_order_are_verified_without_fixed_function_numbers() {
+    let source = "var x:u8=true ? 1 : 2; timer t=Timer1 {every:1s, interrupt {}} loop {}";
+    let module = compile(source);
+    for mutation in 0..5 {
+        let mut broken = module.clone();
+        let entry = &mut broken.functions[broken.entry.0];
+        match mutation {
+            0 => entry.blocks[0].instructions.swap(1, 2),
+            1 => entry.blocks[0].instructions.swap(2, 3),
+            2 => {
+                let start = entry.blocks[0].instructions[3].clone();
+                entry.blocks[1].instructions.push(start);
+            }
+            3 => entry.blocks[1].terminator = ir::Terminator::Jump(entry.entry),
+            _ => broken.lifecycle.as_mut().unwrap().initialize = broken.entry,
+        }
+        assert!(ir::verify::verify(&broken).is_err(), "mutation {mutation}");
+    }
+    let mut relocated = module.clone();
+    let roles = relocated.lifecycle.as_mut().unwrap();
+    std::mem::swap(&mut roles.setup, &mut roles.loop_body);
+    let entry = &mut relocated.functions[relocated.entry.0];
+    entry.blocks[0].instructions[2].op = ir::Op::Call(roles.setup, vec![]);
+    entry.blocks[1].instructions[0].op = ir::Op::Call(roles.loop_body, vec![]);
+    ir::verify::verify(&relocated).unwrap();
+}
+
+#[test]
 fn calculator_and_build_reports_are_available_without_external_tools() {
     use std::process::Command;
     let exe = env!("CARGO_BIN_EXE_helium");
@@ -190,8 +244,8 @@ fn timer_interrupts_execute_and_resume_main_at_all_optimization_levels() {
     use std::{fs, path::Path, process::Command};
 
     // Start near a byte carry to exercise protected 16-bit snapshots.
-    let source = "var seconds:u16=254; var snapshot:u16=0; var progress:u16=0;
-        var busy:bool=false; var failure:u8=0;
+    let source = "var seconds:u16=true ? 254 : 0; var snapshot:u16=0; var progress:u16=0;
+        var busy:bool=(false and true) or false; var failure:u8=0;
         noInterrupt fn tick() { seconds=seconds+1; if busy {failure=failure+1;} }
         timer clock=Timer1 {every:1ms, interrupt {tick();}}
         setup {noInterrupt {busy=true; var i:u16=0; while i<1000 {i=i+1;} busy=false;}}

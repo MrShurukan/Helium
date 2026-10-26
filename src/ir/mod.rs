@@ -289,7 +289,16 @@ pub struct Function {
 }
 
 #[derive(Debug, Clone)]
+pub struct Lifecycle {
+    pub initialize: FunctionId,
+    pub setup: FunctionId,
+    pub loop_body: FunctionId,
+}
+
+#[derive(Debug, Clone)]
 pub struct Module {
+    /// Present for source programs; absent for standalone IR test functions.
+    pub lifecycle: Option<Lifecycle>,
     pub timer: Option<crate::timer::TimerConfig>,
     pub interrupt_handler: Option<FunctionId>,
     pub interrupt_globals: std::collections::HashSet<GlobalId>,

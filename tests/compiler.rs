@@ -242,6 +242,7 @@ fn repeated_pin_reads_are_not_cached_in_or_across_branches() {
 
 fn evaluate(source: &str) -> HashMap<String, u64> {
     let mut module = compile(source);
+    module.lifecycle = None;
     module.functions[0].blocks[1].terminator = Terminator::Return(None);
     let mut runner = Interpreter::new(&module, 10000).unwrap();
     runner.run_entry().unwrap();

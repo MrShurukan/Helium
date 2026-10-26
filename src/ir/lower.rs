@@ -120,6 +120,7 @@ pub(crate) fn lower(
     timer: Option<crate::timer::TimerConfig>,
 ) -> Result<Module, Diagnostic> {
     let mut module = Module {
+        lifecycle: None,
         timer,
         interrupt_handler: None,
         interrupt_globals: Default::default(),
@@ -184,13 +185,25 @@ pub(crate) fn lower(
         }
     }
 
-    let mut entry = Builder::new(FunctionId(0), "$entry", &globals, &pins, &functions);
+    let lifecycle = Lifecycle {
+        initialize: FunctionId(functions.len() + 3),
+        setup: FunctionId(1),
+        loop_body: FunctionId(2),
+    };
+    let mut entry = Builder::new(module.entry, "$entry", &globals, &pins, &functions);
     if module.timer.is_some() {
         entry.effect(
             Op::InterruptDisable,
             Origin::Generated("startup interrupt mask"),
         );
     }
+    let mut initialize = Builder::new(
+        lifecycle.initialize,
+        "$initialize",
+        &globals,
+        &pins,
+        &functions,
+    );
     for statement in statements {
         if let S::VariableDeclaration {
             identifier,
@@ -198,8 +211,8 @@ pub(crate) fn lower(
             ..
         } = &statement.statement_type
         {
-            let value = entry.value(expr)?;
-            entry.effect(
+            let value = initialize.value(expr)?;
+            initialize.effect(
                 Op::StoreGlobal(globals[identifier].0, value),
                 Origin::Source(statement.source_location),
             );
@@ -208,7 +221,7 @@ pub(crate) fn lower(
     for statement in statements {
         if let S::DefDeclaration(declarations) = &statement.statement_type {
             for declaration in declarations {
-                entry.effect(
+                initialize.effect(
                     Op::SetPinMode(
                         pins[&declaration.identifier],
                         mode(&declaration.pin_mode, declaration.source_location)?,
@@ -219,8 +232,13 @@ pub(crate) fn lower(
         }
     }
 
+    initialize.terminate(Terminator::Return(None));
     entry.effect(
-        Op::Call(FunctionId(1), vec![]),
+        Op::Call(lifecycle.initialize, vec![]),
+        Origin::Generated("global and GPIO initialization"),
+    );
+    entry.effect(
+        Op::Call(lifecycle.setup, vec![]),
         Origin::Generated("setup invocation"),
     );
     if module.timer.is_some() {
@@ -233,18 +251,18 @@ pub(crate) fn lower(
     entry.terminate(Terminator::Jump(repeat));
     entry.current = repeat.index;
     entry.effect(
-        Op::Call(FunctionId(2), vec![]),
+        Op::Call(lifecycle.loop_body, vec![]),
         Origin::Generated("loop invocation"),
     );
     entry.terminate(Terminator::Jump(repeat));
     module.functions.push(entry.finish()?);
 
     for (id, name, body) in [
-        (FunctionId(1), "$setup", setup),
-        (FunctionId(2), "$loop", loop_body),
+        (lifecycle.setup, "$setup", setup),
+        (lifecycle.loop_body, "$loop", loop_body),
     ] {
         let mut builder = Builder::new(id, name, &globals, &pins, &functions);
-        if id == FunctionId(1) && !body.is_empty() {
+        if id == lifecycle.setup && !body.is_empty() {
             builder.protected_body(body, Origin::Generated("setup interrupt protection"))?;
         } else {
             builder.body(body)?;
@@ -303,6 +321,8 @@ pub(crate) fn lower(
         function.origin = Origin::Source(statement.source_location);
         module.functions.push(function);
     }
+    module.functions.push(initialize.finish()?);
+    module.lifecycle = Some(lifecycle);
     for statement in statements {
         if let S::TimerDeclaration(timer) = &statement.statement_type {
             let id = FunctionId(module.functions.len());

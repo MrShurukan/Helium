@@ -23,6 +23,7 @@ fn compile(source: &str) -> Module {
 
 fn finite(mut module: Module) -> Module {
     // Test exactly one full lifecycle, including global and GPIO initialization.
+    module.lifecycle = None;
     module.functions[0].blocks[1].terminator = Terminator::Return(None);
     verify::verify(&module).unwrap();
     module
@@ -280,7 +281,7 @@ fn source_functions_execute_on_avr_with_register_and_stack_arguments() {
 
 fn call_fixture() -> Module {
     let mut module = finite(compile("var result:i16=0; loop {}"));
-    let id = FunctionId(3);
+    let id = FunctionId(module.functions.len());
     let value = |index| ValueId {
         function: id,
         index,

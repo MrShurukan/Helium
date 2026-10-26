@@ -51,6 +51,7 @@ fn failure(
 
 pub fn verify(module: &Module) -> Result<(), Error> {
     verify_timer(module)?;
+    verify_lifecycle(module)?;
     let entry = module
         .functions
         .get(module.entry.0)
@@ -160,6 +161,81 @@ pub fn verify(module: &Module) -> Result<(), Error> {
     Ok(())
 }
 
+/// Source programs have a small, explicit startup wrapper. Initializer CFG lives
+/// in its own function, so branching expressions cannot bypass lifecycle checks.
+fn verify_lifecycle(module: &Module) -> Result<(), Error> {
+    let Some(roles) = &module.lifecycle else {
+        return Ok(());
+    };
+    let error = |message| failure(ErrorKind::InvalidEntry, None, None, message);
+    let ids = [module.entry, roles.initialize, roles.setup, roles.loop_body];
+    if ids.iter().collect::<HashSet<_>>().len() != ids.len() {
+        return Err(error("lifecycle roles must be distinct"));
+    }
+    for id in ids {
+        let function = module
+            .functions
+            .get(id.0)
+            .ok_or_else(|| error("missing lifecycle function"))?;
+        if !function.parameters.is_empty()
+            || function.return_type.is_some()
+            || function.requires_no_interrupt
+        {
+            return Err(error("lifecycle functions must be ordinary void functions"));
+        }
+    }
+    let entry = &module.functions[module.entry.0];
+    let first = entry
+        .blocks
+        .iter()
+        .find(|b| b.id == entry.entry)
+        .ok_or_else(|| error("missing startup block"))?;
+    let Terminator::Jump(repeat_id) = first.terminator else {
+        return Err(error("startup must lead to the main loop"));
+    };
+    let repeat = entry
+        .blocks
+        .iter()
+        .find(|b| b.id == repeat_id)
+        .ok_or_else(|| error("missing main loop block"))?;
+    if entry.blocks.len() != 2
+        || repeat_id == entry.entry
+        || !matches!(repeat.terminator, Terminator::Jump(id) if id == repeat_id)
+    {
+        return Err(error("main loop must repeat without reentering startup"));
+    }
+    let is_call = |i: &Instruction, id| {
+        i.result.is_none()
+            && matches!(&i.op, Op::Call(callee, args) if *callee == id && args.is_empty())
+    };
+    let startup = &first.instructions;
+    let offset = usize::from(module.timer.is_some());
+    if startup.len() != 2 + 2 * offset
+        || !is_call(&startup[offset], roles.initialize)
+        || !is_call(&startup[offset + 1], roles.setup)
+        || (module.timer.is_some()
+            && (!matches!(startup[0].op, Op::InterruptDisable)
+                || !matches!(startup[3].op, Op::TimerStart)))
+        || repeat.instructions.len() != 1
+        || !is_call(&repeat.instructions[0], roles.loop_body)
+    {
+        return Err(error(
+            "expected interrupt mask, initialization, setup, timer start, then loop",
+        ));
+    }
+    // Lifecycle routines must not be invoked again by helpers or handlers.
+    for function in &module.functions {
+        for instruction in function.blocks.iter().flat_map(|b| &b.instructions) {
+            if let Op::Call(id, _) = instruction.op {
+                if id == module.entry || (ids.contains(&id) && function.id != module.entry) {
+                    return Err(error("lifecycle call outside startup wrapper"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn verify_timer(module: &Module) -> Result<(), Error> {
     let error = |message| failure(ErrorKind::InterruptState, None, None, message);
     match (&module.timer, module.interrupt_handler) {
@@ -194,43 +270,8 @@ fn verify_timer(module: &Module) -> Result<(), Error> {
             {
                 return Err(error("unknown interrupt global"));
             }
-            let entry = module
-                .functions
-                .get(module.entry.0)
-                .ok_or_else(|| error("missing entry"))?;
-            let first = entry
-                .blocks
-                .iter()
-                .find(|b| b.id == entry.entry)
-                .ok_or_else(|| error("missing entry block"))?;
-            if !first
-                .instructions
-                .first()
-                .is_some_and(|i| matches!(i.op, Op::InterruptDisable))
-            {
-                return Err(error(
-                    "timer startup must disable interrupts before initialization",
-                ));
-            }
-            let starts: Vec<_> = entry
-                .blocks
-                .iter()
-                .flat_map(|b| b.instructions.iter().map(move |i| (b.id, i)))
-                .filter(|(_, i)| matches!(i.op, Op::TimerStart))
-                .collect();
-            if starts.len() != 1 || starts[0].0 != entry.entry {
-                return Err(error("timer must start exactly once in the startup block"));
-            }
-            let start = first
-                .instructions
-                .iter()
-                .position(|i| matches!(i.op, Op::TimerStart))
-                .unwrap();
-            if !first.instructions[..start]
-                .iter()
-                .any(|i| matches!(i.op, Op::Call(FunctionId(1), _)))
-            {
-                return Err(error("timer must start after setup"));
+            if module.lifecycle.is_none() {
+                return Err(error("timer requires lifecycle roles"));
             }
         }
         _ => {
