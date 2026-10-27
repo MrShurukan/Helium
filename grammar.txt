@@ -45,7 +45,7 @@ arguments       -> expression ( "," expression )* ;
 primary         -> INTEGER | FLOAT | STRING | BOOLEAN | PINSTATE | PINMODE
                  | IDENTIFIER | "(" expression ")" ;
 
-// fun, alias and not remain reserved, but have no implemented productions.
+// alias and not remain reserved, but have no implemented productions.
 // Only named functions and methods of named devices can be called; no chained calls,
 // computed receivers or method values. Functions are top-level or extension members;
 // hardware devices are declared only at application top level, never in libraries.
