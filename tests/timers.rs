@@ -167,7 +167,7 @@ fn ir_and_llvm_preserve_handler_visibility_and_startup_order() {
     let module = compile(include_str!("../examples/timer-seconds.he"));
     let entry = &module.functions[0].blocks[0].instructions;
     assert!(matches!(entry[0].op, ir::Op::InterruptDisable));
-    assert!(matches!(entry.last().unwrap().op, ir::Op::TimerStart));
+    assert!(matches!(entry.last().unwrap().op, ir::Op::InterruptEnable));
     let text = helium::backend::llvm::emit(&module, false).unwrap();
     assert!(text.contains("define avr_signalcc void @__vector_11()"));
     assert!(text.contains("load volatile i16, ptr @helium_g0"));
@@ -178,7 +178,7 @@ fn ir_and_llvm_preserve_handler_visibility_and_startup_order() {
         .unwrap()
         .contains("@__vector_11"));
     let mut broken = module.clone();
-    broken.timer.as_mut().unwrap().ticks = 0;
+    broken.devices[0].timer_mut().ticks = 0;
     assert!(ir::verify::verify(&broken).is_err());
     let mut broken = module.clone();
     broken.functions[0].blocks[0].instructions.swap(0, 1);

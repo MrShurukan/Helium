@@ -119,13 +119,13 @@ fn checked_integer(
 pub(crate) fn lower(
     program: &AnalyzedProgram,
     target: &'static crate::backend::microcontroller::Microcontroller,
-    timer: Option<crate::timer::TimerConfig>,
+    timer_config: Option<crate::timer::TimerConfig>,
 ) -> Result<Module, Diagnostic> {
     let statements = program.statements();
     let mut module = Module {
         lifecycle: None,
-        timer,
-        interrupt_handler: None,
+        devices: Vec::new(),
+        interrupts: Vec::new(),
         interrupt_globals: Default::default(),
         target,
         globals: vec![],
@@ -189,12 +189,6 @@ pub(crate) fn lower(
         loop_body: FunctionId(2),
     };
     let mut entry = Builder::new(module.entry, "$entry", &globals, &pins, &functions);
-    if module.timer.is_some() {
-        entry.effect(
-            Op::InterruptDisable,
-            Origin::Generated("startup interrupt mask"),
-        );
-    }
     let mut initialize = Builder::new(
         lifecycle.initialize,
         "$initialize",
@@ -230,28 +224,8 @@ pub(crate) fn lower(
     }
 
     initialize.terminate(Terminator::Return(None));
-    entry.effect(
-        Op::Call(lifecycle.initialize, vec![]),
-        Origin::Generated("global and GPIO initialization"),
-    );
-    entry.effect(
-        Op::Call(lifecycle.setup, vec![]),
-        Origin::Generated("setup invocation"),
-    );
-    if module.timer.is_some() {
-        entry.effect(
-            Op::TimerStart,
-            Origin::Generated("timer startup after setup"),
-        );
-    }
-    let repeat = entry.new_block(Origin::Generated("main loop"));
-    entry.terminate(Terminator::Jump(repeat));
-    entry.current = repeat.index;
-    entry.effect(
-        Op::Call(lifecycle.loop_body, vec![]),
-        Origin::Generated("loop invocation"),
-    );
-    entry.terminate(Terminator::Jump(repeat));
+    // Reserve the entry slot; fill its startup sequence after device bindings exist.
+    entry.terminate(Terminator::Return(None));
     module.functions.push(entry.finish()?);
 
     for (id, name, body) in [
@@ -314,7 +288,6 @@ pub(crate) fn lower(
         module.functions.push(function);
     }
     module.functions.push(initialize.finish()?);
-    module.lifecycle = Some(lifecycle);
     for statement in statements {
         if let S::TimerDeclaration(timer) = &statement.statement_type {
             let id = FunctionId(module.functions.len());
@@ -324,13 +297,44 @@ pub(crate) fn lower(
             let mut handler = builder.finish()?;
             handler.requires_no_interrupt = true;
             handler.origin = Origin::Source(timer.handler_location);
-            module.interrupt_handler = Some(id);
+            let config = timer_config
+                .as_ref()
+                .ok_or_else(|| invalid("missing timer configuration", statement.source_location))?;
+            let device = DeviceId(module.devices.len());
+            module.devices.push(Device {
+                config: DeviceConfig::PeriodicTimer(config.clone()),
+                phase: StartupPhase::AfterSetup,
+                origin: Origin::Source(statement.source_location),
+            });
+            module.interrupts.push(InterruptBinding {
+                device,
+                vector: config.hardware.vector,
+                handler: id,
+            });
             module.functions.push(handler);
         }
     }
     for symbol in program.shared_analysis().interrupt_globals() {
         module.interrupt_globals.insert(globals[symbol].0);
     }
+    let mut entry = Builder::new(module.entry, "$entry", &globals, &pins, &functions);
+    for op in module.startup_operations(&lifecycle) {
+        let origin = match &op {
+            Op::DeviceStart(id) => module.devices[id.0].origin.clone(),
+            _ => Origin::Generated("hardware lifecycle"),
+        };
+        entry.effect(op, origin);
+    }
+    let repeat = entry.new_block(Origin::Generated("main loop"));
+    entry.terminate(Terminator::Jump(repeat));
+    entry.current = repeat.index;
+    entry.effect(
+        Op::Call(lifecycle.loop_body, vec![]),
+        Origin::Generated("loop invocation"),
+    );
+    entry.terminate(Terminator::Jump(repeat));
+    module.functions[module.entry.0] = entry.finish()?;
+    module.lifecycle = Some(lifecycle);
     Ok(module)
 }
 

@@ -6,7 +6,7 @@ pub fn inventory(module: &Module) -> Vec<String> {
     let mut lines = vec!["Timing inventory: retained IR before LLVM; may include unused functions/unreachable branches; removed source is not included; durations unknown".into()];
     for f in &module.functions {
         let mut sites = Vec::new();
-        if module.interrupt_handler == Some(f.id) {
+        if module.is_interrupt_handler(f.id) {
             sites.push("ISR".to_string());
         }
         if f.requires_no_interrupt {

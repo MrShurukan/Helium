@@ -1,4 +1,5 @@
 //! Explicit AVR support boundary. Unsupported language features never reach code generation.
+use crate::resources::{HardwareResource, Reservations};
 use crate::{
     diagnostic::{Diagnostic, DiagnosticKind},
     frontend::{
@@ -8,14 +9,13 @@ use crate::{
         token_type::PinModeConstantType as M,
     },
 };
-use std::collections::HashMap;
 
 pub fn validate_pins(
     statements: &[Statement],
     target: &crate::backend::microcontroller::Microcontroller,
+    reservations: &mut Reservations<crate::frontend::utils::SourceLocation>,
 ) -> Result<(), Vec<Diagnostic>> {
     let mut errors = vec![];
-    let mut pins = HashMap::new();
 
     for statement in statements {
         if let S::DefDeclaration(declarations) = &statement.statement_type {
@@ -33,17 +33,18 @@ pub fn validate_pins(
                     ));
                 }
 
-                let key = (pin.port.clone(), pin.pin_number);
-                if let Some(previous) = pins.get(&key) {
+                let key = HardwareResource::Pin {
+                    port: pin.port.clone(),
+                    bit: pin.pin_number,
+                };
+                if let Err(previous) = reservations.claim(key, declaration.pin_location) {
                     errors.push(
                         Diagnostic::new(
                             DiagnosticKind::DuplicatePin,
                             Some(declaration.pin_location),
                         )
-                        .with_label(*previous, crate::diagnostic::LabelKind::PreviousDeclaration),
+                        .with_label(previous, crate::diagnostic::LabelKind::PreviousDeclaration),
                     );
-                } else {
-                    pins.insert(key, declaration.pin_location);
                 }
 
                 if declaration.pin_mode == M::InputPullDown {

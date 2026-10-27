@@ -132,10 +132,11 @@ impl<'a> Interpreter<'a> {
                         self.interrupts_enabled = false;
                         None
                     }
-                    Op::TimerStart => {
+                    Op::InterruptEnable => {
                         self.interrupts_enabled = true;
                         None
                     }
+                    Op::DeviceStart(_) => None, // Peripherals are modeled by machine tests.
                     Op::InterruptSave => {
                         let previous = self.interrupts_enabled;
                         self.interrupts_enabled = false;

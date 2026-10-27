@@ -401,7 +401,7 @@ impl Program {
                 if self.interrupts.contains(id) {
                     irq.entry(access.resource).or_default().push((*id, access));
                 }
-                // Setup completes before TimerStart: it cannot race with ISR.
+                // Setup completes before lifecycle IRQ enable: it cannot race with ISR.
                 if self.main.contains(id) {
                     main.entry(access.resource).or_default().push((*id, access));
                 }

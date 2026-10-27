@@ -50,7 +50,7 @@ fn failure(
 }
 
 pub fn verify(module: &Module) -> Result<(), Error> {
-    verify_timer(module)?;
+    verify_devices(module)?;
     verify_lifecycle(module)?;
     let entry = module
         .functions
@@ -128,8 +128,12 @@ pub fn verify(module: &Module) -> Result<(), Error> {
         visit(function.id, module, &mut HashSet::new(), &mut done)?;
     }
 
-    if let Some(handler) = module.interrupt_handler {
-        let mut pending = vec![handler];
+    if !module.interrupts.is_empty() {
+        let mut pending: Vec<_> = module
+            .interrupts
+            .iter()
+            .map(|binding| binding.handler)
+            .collect();
         let mut visited = HashSet::new();
 
         while let Some(id) = pending.pop() {
@@ -208,18 +212,23 @@ fn verify_lifecycle(module: &Module) -> Result<(), Error> {
             && matches!(&i.op, Op::Call(callee, args) if *callee == id && args.is_empty())
     };
     let startup = &first.instructions;
-    let offset = usize::from(module.timer.is_some());
-    if startup.len() != 2 + 2 * offset
-        || !is_call(&startup[offset], roles.initialize)
-        || !is_call(&startup[offset + 1], roles.setup)
-        || (module.timer.is_some()
-            && (!matches!(startup[0].op, Op::InterruptDisable)
-                || !matches!(startup[3].op, Op::TimerStart)))
+    let expected = module.startup_operations(roles);
+    if startup.len() != expected.len()
+        || !startup.iter().zip(&expected).all(|(actual, expected)| {
+            actual.result.is_none()
+                && match (&actual.op, expected) {
+                    (Op::InterruptDisable, Op::InterruptDisable)
+                    | (Op::InterruptEnable, Op::InterruptEnable) => true,
+                    (Op::DeviceStart(a), Op::DeviceStart(b)) => a == b,
+                    (_, Op::Call(id, _)) => is_call(actual, *id),
+                    _ => false,
+                }
+        })
         || repeat.instructions.len() != 1
         || !is_call(&repeat.instructions[0], roles.loop_body)
     {
         return Err(error(
-            "expected interrupt mask, initialization, setup, timer start, then loop",
+            "expected interrupt mask, initialization, phased device starts, setup, IRQ enable, then loop",
         ));
     }
     // Lifecycle routines must not be invoked again by helpers or handlers.
@@ -235,59 +244,93 @@ fn verify_lifecycle(module: &Module) -> Result<(), Error> {
     Ok(())
 }
 
-fn verify_timer(module: &Module) -> Result<(), Error> {
+fn verify_devices(module: &Module) -> Result<(), Error> {
+    use crate::resources::{HardwareResource, Reservations};
     let error = |message| failure(ErrorKind::InterruptState, None, None, message);
-    match (&module.timer, module.interrupt_handler) {
-        (None, None) => {
-            if !module.interrupt_globals.is_empty() {
-                return Err(error("interrupt globals without a handler"));
-            }
-        }
-        (Some(timer), Some(id)) => {
-            let valid = crate::timer::plan_with_direction(
-                module.target,
-                timer.cpu_hz,
-                timer.requested_ns,
-                timer.tolerance_ns,
-                timer.direction,
+    if !module.devices.is_empty() && module.lifecycle.is_none() {
+        return Err(error("devices require lifecycle roles"));
+    }
+    if module.interrupts.is_empty() && !module.interrupt_globals.is_empty() {
+        return Err(error("interrupt globals without a handler"));
+    }
+    if module
+        .interrupt_globals
+        .iter()
+        .any(|id| id.0 >= module.globals.len())
+    {
+        return Err(error("unknown interrupt global"));
+    }
+    let mut reservations = Reservations::default();
+    for pin in &module.pins {
+        reservations
+            .claim(
+                HardwareResource::Pin {
+                    port: pin.port.clone(),
+                    bit: pin.bit,
+                },
+                (),
             )
-            .is_ok_and(|expected| expected == *timer);
-            if !valid {
-                return Err(error("invalid Timer1 configuration"));
-            }
-            let handler = module
-                .functions
-                .get(id.0)
-                .ok_or_else(|| error("missing interrupt handler"))?;
-            if id == module.entry
-                || !handler.requires_no_interrupt
-                || !handler.parameters.is_empty()
-                || handler.return_type.is_some()
-            {
-                return Err(error(
-                    "interrupt handler must be a protected void function with no parameters",
-                ));
-            }
-            if module
-                .interrupt_globals
-                .iter()
-                .any(|id| id.0 >= module.globals.len())
-            {
-                return Err(error("unknown interrupt global"));
-            }
-            if module.lifecycle.is_none() {
-                return Err(error("timer requires lifecycle roles"));
+            .map_err(|_| error("duplicate physical pin"))?;
+    }
+    for (index, device) in module.devices.iter().enumerate() {
+        match &device.config {
+            DeviceConfig::PeriodicTimer(timer) => {
+                let valid = crate::timer::plan_with_direction(
+                    module.target,
+                    timer.cpu_hz,
+                    timer.requested_ns,
+                    timer.tolerance_ns,
+                    timer.direction,
+                )
+                .is_ok_and(|expected| expected == *timer);
+                if !valid || device.phase != StartupPhase::AfterSetup {
+                    return Err(error(
+                        "invalid periodic timer configuration or startup phase",
+                    ));
+                }
+                reservations
+                    .claim(HardwareResource::Peripheral(timer.hardware.name.into()), ())
+                    .map_err(|_| error("hardware peripheral is already reserved"))?;
+                let bindings: Vec<_> = module
+                    .interrupts
+                    .iter()
+                    .filter(|binding| binding.device == DeviceId(index))
+                    .collect();
+                if bindings.len() != 1 || bindings[0].vector != timer.hardware.vector {
+                    return Err(error(
+                        "periodic timer requires its compare interrupt binding",
+                    ));
+                }
             }
         }
-        _ => {
+    }
+    let mut handlers = HashSet::new();
+    for binding in &module.interrupts {
+        if binding.device.0 >= module.devices.len() {
+            return Err(error("unknown interrupt device"));
+        }
+        reservations
+            .claim(HardwareResource::InterruptVector(binding.vector.into()), ())
+            .map_err(|_| error("interrupt vector is already reserved"))?;
+        if !handlers.insert(binding.handler) {
+            return Err(error("interrupt handler is bound more than once"));
+        }
+        let handler = module
+            .functions
+            .get(binding.handler.0)
+            .ok_or_else(|| error("missing interrupt handler"))?;
+        if binding.handler == module.entry
+            || !handler.requires_no_interrupt
+            || !handler.parameters.is_empty()
+            || handler.return_type.is_some()
+        {
             return Err(error(
-                "timer and interrupt handler must be declared together",
-            ))
+                "interrupt handler must be a protected void function with no parameters",
+            ));
         }
     }
     Ok(())
 }
-
 type Definitions = HashMap<ValueId, (Type, Option<(BlockId, usize)>)>;
 
 fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
@@ -456,9 +499,9 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                 available(operand, position)?;
             }
             let expected = match &instruction.op {
-                Op::InterruptDisable | Op::TimerStart => {
+                Op::InterruptDisable | Op::InterruptEnable | Op::DeviceStart(_) => {
                     require(
-                        function.id == module.entry && module.timer.is_some(),
+                        function.id == module.entry && !module.devices.is_empty(),
                         "timer lifecycle effect outside entry",
                     )?;
                     None
@@ -542,7 +585,7 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                 }
                 Op::Call(callee, args) => {
                     require(
-                        Some(*callee) != module.interrupt_handler,
+                        !module.is_interrupt_handler(*callee),
                         "interrupt handler cannot be called as a function",
                     )?;
                     let callee = module.functions.get(callee.0).ok_or_else(|| {
@@ -634,7 +677,9 @@ fn verify_interrupts(module: &Module, function: &Function) -> Result<(), Error> 
         let mut active = incoming[&id].clone();
         for instruction in &block.instructions {
             match instruction.op {
-                Op::TimerStart | Op::InterruptDisable if !active.is_empty() => {
+                Op::DeviceStart(_) | Op::InterruptEnable | Op::InterruptDisable
+                    if !active.is_empty() =>
+                {
                     return Err(error(
                         id,
                         "lifecycle interrupt operation inside a protected scope",

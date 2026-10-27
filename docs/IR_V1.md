@@ -183,13 +183,14 @@ LLVM — единственный машинный путь. Он всегда �
 вычисления 8/16 бит, вызовы, стартовая среда и получение HEX. Машинные тесты и сравнение
 с 40-байтным GPIO-примером описаны в [LLVM_PROTOTYPE.md](LLVM_PROTOTYPE.md).
 Путь LLVM получает неоптимизированный Helium IR; собственные passes остаются опциональным
-экспериментом для `--emit ir`. Выбор окончательного backend ещё не сделан.
+экспериментом для `--emit ir`. LLVM — единственный машинный backend.
 
 ## Timer lifecycle
 
-A module optionally carries a Timer1 configuration, an ISR function ID and a set of
-ISR-accessible globals. `InterruptDisable` and `TimerStart` are entry-only effects;
-startup disables interrupts before initialization and starts the timer after setup.
+A module carries device and interrupt-binding tables and a set of ISR-accessible
+globals. `InterruptDisable`, `DeviceStart(DeviceId)` and `InterruptEnable` are
+entry-only effects. Device startup does not enable CPU interrupts. Startup disables
+interrupts before initialization, starts Timer1 after setup, then enables IRQs.
 The ISR is an externally reachable root and cannot be called as a normal function.
 Its global accesses, including through helpers, are volatile in LLVM. Global loads
 are conservatively retained by Helium DCE. The verifier checks visibility metadata,
@@ -202,7 +203,8 @@ then setup, then the repeating loop. With Timer1 it first disables interrupts an
 starts the timer only after setup. Initializers may contain arbitrary expression CFG.
 The verifier checks the wrapper order, distinct role IDs, a single startup path and
 no lifecycle calls from helpers or ISR. It does not assume setup has function ID 1.
-Standalone IR test modules may omit lifecycle metadata; timer modules may not.
+Standalone IR test modules may omit lifecycle metadata; device modules may not.
+Device phases and static resource claims are described in [HARDWARE_LIFECYCLE.md](HARDWARE_LIFECYCLE.md).
 
 
 ## GPIO effect contract (B2a)

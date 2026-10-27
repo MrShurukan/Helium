@@ -17,6 +17,7 @@ macro_rules! module_id {
 module_id!(FunctionId);
 module_id!(GlobalId);
 module_id!(PinId);
+module_id!(DeviceId);
 
 macro_rules! function_id {
     ($name:ident) => {
@@ -183,7 +184,8 @@ pub struct Pin {
 pub enum Op {
     /// Lifecycle-only effects, not exposed as source-language operations.
     InterruptDisable,
-    TimerStart,
+    DeviceStart(DeviceId),
+    InterruptEnable,
     /// Save target interrupt state and disable interrupts; an ordered memory effect.
     InterruptSave,
     /// Restore the matching saved state, not unconditionally enable interrupts.
@@ -295,12 +297,50 @@ pub struct Lifecycle {
     pub loop_body: FunctionId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupPhase {
+    BeforeSetup,
+    AfterSetup,
+}
+
+#[derive(Debug, Clone)]
+pub enum DeviceConfig {
+    PeriodicTimer(crate::timer::TimerConfig),
+}
+
+#[derive(Debug, Clone)]
+pub struct Device {
+    pub config: DeviceConfig,
+    pub phase: StartupPhase,
+    pub origin: Origin,
+}
+
+impl Device {
+    pub fn timer(&self) -> &crate::timer::TimerConfig {
+        match &self.config {
+            DeviceConfig::PeriodicTimer(config) => config,
+        }
+    }
+    pub fn timer_mut(&mut self) -> &mut crate::timer::TimerConfig {
+        match &mut self.config {
+            DeviceConfig::PeriodicTimer(config) => config,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InterruptBinding {
+    pub device: DeviceId,
+    pub vector: &'static str,
+    pub handler: FunctionId,
+}
+
 #[derive(Debug, Clone)]
 pub struct Module {
     /// Present for source programs; absent for standalone IR test functions.
     pub lifecycle: Option<Lifecycle>,
-    pub timer: Option<crate::timer::TimerConfig>,
-    pub interrupt_handler: Option<FunctionId>,
+    pub devices: Vec<Device>,
+    pub interrupts: Vec<InterruptBinding>,
     pub interrupt_globals: std::collections::HashSet<GlobalId>,
     pub target: &'static crate::backend::microcontroller::Microcontroller,
     pub globals: Vec<Storage>,
@@ -329,18 +369,54 @@ impl Default for Options {
 pub(crate) use lower::lower;
 
 impl Module {
+    pub fn is_interrupt_handler(&self, id: FunctionId) -> bool {
+        self.interrupts.iter().any(|binding| binding.handler == id)
+    }
+
+    /// One explicit startup sequence for lowering and verification. Device
+    /// configuration never changes the CPU interrupt-enable state itself.
+    pub(crate) fn startup_operations(&self, roles: &Lifecycle) -> Vec<Op> {
+        let mut operations = Vec::new();
+        if !self.devices.is_empty() {
+            operations.push(Op::InterruptDisable);
+        }
+        operations.push(Op::Call(roles.initialize, vec![]));
+        for phase in [StartupPhase::BeforeSetup, StartupPhase::AfterSetup] {
+            if phase == StartupPhase::AfterSetup {
+                operations.push(Op::Call(roles.setup, vec![]));
+            }
+            for (id, device) in self.devices.iter().enumerate() {
+                if device.phase == phase {
+                    operations.push(Op::DeviceStart(DeviceId(id)));
+                }
+            }
+        }
+        if !self.interrupts.is_empty() {
+            operations.push(Op::InterruptEnable);
+        }
+        operations
+    }
+
     /// Stable ordering, no addresses or hash-map iteration in the inspection output.
     pub fn dump(&self) -> String {
         let mut text = format!(
             "helium-ir v1 target={} entry=f{}\n",
             self.target.name, self.entry.0
         );
-        if let Some(timer) = &self.timer {
+        for (id, device) in self.devices.iter().enumerate() {
             writeln!(
                 text,
-                "{} handler=f{}",
-                timer.report(),
-                self.interrupt_handler.unwrap().0
+                "device d{id} {:?}: {}",
+                device.phase,
+                device.timer().report()
+            )
+            .unwrap();
+        }
+        for binding in &self.interrupts {
+            writeln!(
+                text,
+                "interrupt {} device=d{} handler=f{}",
+                binding.vector, binding.device.0, binding.handler.0
             )
             .unwrap();
         }
@@ -400,7 +476,8 @@ impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InterruptDisable => f.write_str("interrupt_disable"),
-            Self::TimerStart => f.write_str("timer_start"),
+            Self::DeviceStart(id) => write!(f, "device_start d{}", id.0),
+            Self::InterruptEnable => f.write_str("interrupt_enable"),
             Self::InterruptSave => f.write_str("interrupt_save"),
             Self::InterruptRestore(value) => write!(f, "interrupt_restore v{}", value.index),
             Self::Const(value) => match value.ty {

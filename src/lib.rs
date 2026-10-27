@@ -4,6 +4,7 @@ pub mod diagnostic;
 pub mod frontend;
 pub mod ir;
 pub mod middle_end;
+pub mod resources;
 pub mod semantic;
 mod support;
 pub use semantic::AnalyzedProgram;
@@ -120,9 +121,10 @@ fn typed_ir_from_ast(
         })?;
     }
     let statements = program.statements();
-    support::validate_pins(statements, target)?;
+    let mut reservations = resources::Reservations::default();
+    support::validate_pins(statements, target, &mut reservations)?;
     support::validate_features(statements, machine)?;
-    let timer = timer::resolve(target, statements, options.cpu_hz)?;
+    let timer = timer::resolve(target, statements, options.cpu_hz, &mut reservations)?;
     let mut module = ir::lower(program, target, timer).map_err(|error| vec![error])?;
     let internal_error = |stage, error: ir::verify::Error| {
         vec![Diagnostic::new(

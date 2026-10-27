@@ -34,10 +34,8 @@ fn selected_descriptor_controls_planning_validation_and_emission() {
     )
     .unwrap();
     assert!(std::ptr::eq(module.target, descriptor));
-    assert!(module
-        .timer
-        .as_ref()
-        .unwrap()
+    assert!(module.devices[0]
+        .timer()
         .report()
         .contains("TEST_COMPARE=255"));
     assert!(llvm::emit(&module, false)
@@ -146,7 +144,7 @@ fn timer_limits_encodings_and_register_write_order_remain_exact() {
             },
         )
         .unwrap();
-        let config = module.timer.as_ref().unwrap();
+        let config = module.devices[0].timer();
         assert_eq!(u64::from(config.prescaler), divisor);
         assert_eq!(config.ticks, 65_536);
         let text = llvm::emit(&module, false).unwrap();
@@ -174,7 +172,7 @@ fn timer_limits_encodings_and_register_write_order_remain_exact() {
         });
         assert_eq!(writes, expected);
         let mut broken = module;
-        broken.timer.as_mut().unwrap().prescaler = 2;
+        broken.devices[0].timer_mut().prescaler = 2;
         assert!(ir::verify::verify(&broken).is_err());
         assert!(llvm::emit(&broken, false).is_err());
     }

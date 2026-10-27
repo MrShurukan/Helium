@@ -183,11 +183,11 @@ fn signed_tolerance_survives_source_ir_reports_and_verification() {
                 },
             )
             .unwrap();
-            let config = module.timer.as_ref().unwrap();
+            let config = module.devices[0].timer();
             assert_eq!((config.ticks, config.direction), (expected, direction));
             assert!(config.report().contains(&format!("tolerance={sign}38ns")));
             if direction == D::NotLonger {
-                module.timer.as_mut().unwrap().ticks = 2;
+                module.devices[0].timer_mut().ticks = 2;
                 assert!(ir::verify::verify(&module).is_err());
             }
         }

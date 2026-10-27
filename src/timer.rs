@@ -233,9 +233,9 @@ pub(crate) fn resolve(
     target: &'static Microcontroller,
     statements: &[Statement],
     cpu_hz: Option<u32>,
+    reservations: &mut crate::resources::Reservations<SourceLocation>,
 ) -> Result<Option<TimerConfig>, Vec<Diagnostic>> {
     let mut selected = None;
-    let mut previous: Option<SourceLocation> = None;
     let mut errors = Vec::new();
     for statement in statements {
         let StatementType::TimerDeclaration(timer) = &statement.statement_type else {
@@ -257,7 +257,14 @@ pub(crate) fn resolve(
             );
             continue;
         }
-        if let Some(location) = previous {
+        use crate::resources::HardwareResource;
+        let conflict = [
+            HardwareResource::Peripheral(timer.hardware.clone()),
+            HardwareResource::InterruptVector(target.timer.vector.into()),
+        ]
+        .into_iter()
+        .find_map(|key| reservations.claim(key, timer.hardware_location).err());
+        if let Some(location) = conflict {
             errors.push(
                 Diagnostic::new(
                     DiagnosticKind::Timer {
@@ -271,7 +278,6 @@ pub(crate) fn resolve(
             );
             continue;
         }
-        previous = Some(timer.hardware_location);
         let Some(cpu_hz) = cpu_hz else {
             fail(TimerError::MissingClock, timer.period_location);
             continue;

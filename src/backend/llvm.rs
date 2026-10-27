@@ -24,9 +24,9 @@ fn result_type(value: Option<Type>) -> &'static str {
 pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
     let target = module.target;
     if module
-        .timer
-        .as_ref()
-        .is_some_and(|timer| timer.hardware != &target.timer)
+        .devices
+        .iter()
+        .any(|device| device.timer().hardware != &target.timer)
     {
         return Err("Timer configuration belongs to a different target description".into());
     }
@@ -60,8 +60,8 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
 
     let linkage = if export_symbols { "" } else { "internal " };
     let mut out = format!("; Helium LLVM prototype: wrapping arithmetic, explicit hardware effects\ntarget triple = \"{}\"\n\n", target.llvm_triple);
-    if let Some(timer) = &module.timer {
-        writeln!(out, "; {}", timer.report()).unwrap();
+    for device in &module.devices {
+        writeln!(out, "; {}", device.timer().report()).unwrap();
     }
     for line in super::timing::inventory(module) {
         writeln!(out, "; helium-timing: {line}").unwrap();
@@ -130,8 +130,8 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
         out.push_str("}\n");
     }
 
-    if let Some(handler) = module.interrupt_handler {
-        writeln!(out, "\ndefine avr_signalcc void @{}() addrspace(1) {{\nentry:\n  call addrspace(1) void @helium_f{}()\n  ret void\n}}", target.timer.vector, handler.0).unwrap();
+    for binding in &module.interrupts {
+        writeln!(out, "\ndefine avr_signalcc void @{}() addrspace(1) {{\nentry:\n  call addrspace(1) void @helium_f{}()\n  ret void\n}}", binding.vector, binding.handler.0).unwrap();
     }
     writeln!(out, "\ndefine i16 @main() addrspace(1) {{\nentry:\n  call addrspace(1) void @helium_f{}()\n  ret i16 0\n}}", module.entry.0).unwrap();
     Ok(out)
@@ -250,12 +250,14 @@ impl FunctionEmitter<'_> {
                 }
             }
             Op::InterruptDisable => "call void asm sideeffect \"cli\", \"~{memory}\"()".into(),
-            Op::TimerStart => {
+            Op::InterruptEnable => "call void asm sideeffect \"sei\", \"~{memory}\"()".into(),
+            Op::DeviceStart(id) => {
                 let timer = self
                     .module
-                    .timer
-                    .as_ref()
-                    .ok_or("missing timer configuration")?;
+                    .devices
+                    .get(id.0)
+                    .ok_or("missing device configuration")?
+                    .timer();
                 let compare = timer.ticks - 1;
                 let hardware = &self.target.timer;
                 let control = hardware.ctc_mode
@@ -277,7 +279,7 @@ impl FunctionEmitter<'_> {
                     &hardware.compare_interrupt.to_string(),
                 );
                 self.write_register(hardware.control_b, &control.to_string());
-                "call void asm sideeffect \"sei\", \"~{memory}\"()".into()
+                return Ok(());
             }
             Op::InterruptSave => {
                 // Keep save + CLI in one assembly operation. The memory clobber
