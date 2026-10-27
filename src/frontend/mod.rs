@@ -362,6 +362,30 @@ impl Parser<'_> {
         })
     }
 
+    fn type_token(&mut self, tokens: &mut TokenIterator) -> Option<Token> {
+        if matches!(
+            self.peek(tokens)?.token_type,
+            TT::Punctuation(PT::Ampersand)
+        ) {
+            let start = self.advance(tokens)?.source_location;
+            let end = check_and_consume!(self, tokens, TT::Identifier(_), "Expected str after '&'")
+                .clone();
+            if !matches!(&end.token_type, TT::Identifier(name) if name == "str") {
+                self.errors
+                    .push(self.missing_token_error("Only &str references are supported", tokens));
+                return None;
+            }
+            return Some(Token {
+                token_type: TT::Type(&static_type::StaticType::Text),
+                source_location: crate::frontend::utils::SourceLocation::new_from_start_end(
+                    start,
+                    end.source_location,
+                ),
+            });
+        }
+        Some(check_and_consume!(self, tokens, TT::Type(_), "Expected type").clone())
+    }
+
     fn function_declaration(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
         let start = tokens.previous()?.source_location;
         let name =
@@ -412,9 +436,7 @@ impl Parser<'_> {
                         kind.source_location,
                     )
                 } else {
-                    let kind =
-                        check_and_consume!(self, tokens, TT::Type(_), "Expected parameter type")
-                            .clone();
+                    let kind = self.type_token(tokens)?;
                     let TT::Type(kind_type) = kind.token_type else {
                         unreachable!()
                     };
@@ -444,8 +466,7 @@ impl Parser<'_> {
         let mut return_location = None;
         let return_type = if matches!(self.peek(tokens)?.token_type, TT::Punctuation(PT::Colon)) {
             tokens.advance();
-            let kind =
-                check_and_consume!(self, tokens, TT::Type(_), "Expected return type").clone();
+            let kind = self.type_token(tokens)?;
             return_location = Some(kind.source_location);
             let TT::Type(kind) = kind.token_type else {
                 unreachable!()
@@ -536,20 +557,7 @@ impl Parser<'_> {
 
         if let TT::Punctuation(PT::Colon) = self.peek(tokens)?.token_type {
             self.advance(tokens)?;
-            let token = self.peek(tokens)?;
-            if let TT::Type(_) = token.token_type {
-                static_type = Some(token.clone());
-            } else {
-                self.errors.push(self.get_error_marked_line(
-                    ParserErrorType::IncorrectToken(format!(
-                        "Expected type after ':', got '{:?}'",
-                        token.token_type
-                    )),
-                    token.clone(),
-                ));
-                return None;
-            }
-            self.advance(tokens)?;
+            static_type = Some(self.type_token(tokens)?);
         }
 
         let mut initializer = None;

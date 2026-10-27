@@ -35,6 +35,7 @@ function_id!(ValueId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Type {
+    Text,
     Bool,
     PinState,
     U8,
@@ -66,6 +67,7 @@ impl Type {
         match self.integer() {
             Some((64, _)) => u64::MAX,
             Some((bits, _)) => (1u64 << bits) - 1,
+            None if self == Self::Text => u64::MAX,
             None => 1,
         }
     }
@@ -96,6 +98,7 @@ impl Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
+            Self::Text => "&str",
             Self::Bool => "bool",
             Self::PinState => "PinState",
             Self::U8 => "u8",
@@ -180,8 +183,26 @@ pub struct Pin {
     pub origin: Origin,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TextSpace {
+    Flash,
+    Sram,
+}
+
 #[derive(Debug, Clone)]
 pub enum Op {
+    /// Immutable UTF-8 storage. Source literals always use Flash; SRAM is also
+    /// available to IR producers and machine fixtures. No raw pointers are exposed.
+    TextLiteral {
+        text: String,
+        space: TextSpace,
+    },
+    TextLen(ValueId),
+    TextByteOr {
+        text: ValueId,
+        index: ValueId,
+        fallback: ValueId,
+    },
     Intrinsic {
         device: DeviceId,
         operation: crate::intrinsics::Intrinsic,
@@ -212,6 +233,12 @@ pub enum Op {
 impl Op {
     pub fn operands(&self) -> Vec<ValueId> {
         match self {
+            Self::TextLen(v) => vec![*v],
+            Self::TextByteOr {
+                text,
+                index,
+                fallback,
+            } => vec![*text, *index, *fallback],
             Self::Intrinsic { arguments, .. } => arguments.clone(),
             Self::InterruptRestore(a)
             | Self::Unary(_, a)
@@ -488,6 +515,17 @@ impl Module {
 impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::TextLiteral { text, space } => write!(f, "text {space:?} {text:?}"),
+            Self::TextLen(v) => write!(f, "text_len v{}", v.index),
+            Self::TextByteOr {
+                text,
+                index,
+                fallback,
+            } => write!(
+                f,
+                "text_byte_or v{}, v{}, v{}",
+                text.index, index.index, fallback.index
+            ),
             Self::InterruptDisable => f.write_str("interrupt_disable"),
             Self::Intrinsic {
                 device,

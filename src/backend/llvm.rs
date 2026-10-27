@@ -7,6 +7,7 @@ use std::fmt::Write;
 
 fn ty(value: Type) -> &'static str {
     match value {
+        Type::Text => super::text::LLVM_TYPE,
         Type::Bool | Type::PinState => "i1",
         Type::U8 | Type::I8 => "i8",
         Type::U16 | Type::I16 => "i16",
@@ -73,10 +74,11 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
     for line in super::timing::inventory(module) {
         writeln!(out, "; helium-timing: {line}").unwrap();
     }
+    super::text::emit(module, &mut out);
     for (index, storage) in module.globals.iter().enumerate() {
         writeln!(
             out,
-            "@helium_g{index} = {linkage}global {} 0, align 1",
+            "@helium_g{index} = {linkage}global {} zeroinitializer, align 1",
             ty(storage.ty)
         )
         .unwrap();
@@ -262,6 +264,30 @@ impl FunctionEmitter<'_> {
 
     fn instruction(&mut self, instruction: &Instruction) -> Result<(), String> {
         let expression = match &instruction.op {
+            Op::TextLiteral { text, space } => {
+                let id = super::text::literals(self.module)
+                    .iter()
+                    .position(|(t, s)| t == text && s == space)
+                    .unwrap();
+                let pointer = if *space == TextSpace::Flash {
+                    "ptr addrspace(1)"
+                } else {
+                    "ptr"
+                };
+                let flag = u8::from(*space == TextSpace::Flash);
+                format!("select i1 true, {{ i16, i16, i8 }} {{ i16 ptrtoint ({pointer} @helium_text{id} to i16), i16 {}, i8 {flag} }}, {{ i16, i16, i8 }} zeroinitializer", text.len())
+            }
+            Op::TextLen(v) => format!("extractvalue {}, 1", self.value(*v)),
+            Op::TextByteOr {
+                text,
+                index,
+                fallback,
+            } => format!(
+                "call i8 @helium_text_byte({}, {}, {})",
+                self.value(*text),
+                self.value(*index),
+                self.value(*fallback)
+            ),
             Op::Const(c) => format!("or {} 0, {}", ty(c.ty), c.bits),
             Op::Unary(Unary::Negate, v) => format!("sub {} 0, %v{}", ty(self.types[v]), v.index),
             Op::Unary(Unary::Not, v) => format!("xor {}, 1", self.value(*v)),

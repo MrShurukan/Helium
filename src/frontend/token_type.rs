@@ -150,6 +150,7 @@ pub enum PunctuationType {
     Star,
     Question,
     Colon,
+    Ampersand,
 
     // One or two character tokens.
     Bang,
@@ -177,6 +178,7 @@ impl Display for PunctuationType {
             PunctuationType::Slash => "/",
             PunctuationType::Star => "*",
             PunctuationType::Question => "?",
+            PunctuationType::Ampersand => "&",
             PunctuationType::Colon => ":",
             PunctuationType::Bang => "!",
             PunctuationType::BangEqual => "!=",

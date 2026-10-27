@@ -516,6 +516,33 @@ impl Expander {
             arguments,
         } = &mut e.expression_type
         {
+            if let Some((name, method)) = identifier.split_once('.') {
+                if !bindings.contains_key(name) && !self.devices.contains_key(name) {
+                    use crate::frontend::expression::TextOperation;
+                    let operation = match method {
+                        "len" => Some(TextOperation::Len),
+                        "byte_or" => Some(TextOperation::ByteOr),
+                        _ => None,
+                    };
+                    if let Some(operation) = operation {
+                        let mut args = vec![Expression {
+                            symbol: None,
+                            expression_type: E::Identifier(name.into()),
+                            source_location: e.source_location.name(name),
+                            static_type: StaticType::Unknown,
+                        }];
+                        args.append(arguments);
+                        for a in &mut args {
+                            self.expression(a, module, own, bindings, locals)?;
+                        }
+                        e.expression_type = E::Text {
+                            operation,
+                            arguments: args,
+                        };
+                        return Ok(());
+                    }
+                }
+            }
             let mut receiver = None;
             let target = if let Some((device, method)) = identifier.split_once('.') {
                 let d = self.device(device, module, bindings, e.source_location)?;

@@ -35,6 +35,7 @@ fn invalid(detail: &str, location: SourceLocation) -> Diagnostic {
 
 fn ty(ty: T, location: SourceLocation) -> Result<Type, Diagnostic> {
     Ok(match ty {
+        T::Text => Type::Text,
         T::Boolean => Type::Bool,
         T::PinState => Type::PinState,
         T::Integer(integer) => match integer {
@@ -748,6 +749,34 @@ impl<'a> Builder<'a> {
         }
 
         let value = match &expr.expression_type {
+            E::Literal {
+                value: L::String(text),
+            } => self.emit(
+                Op::TextLiteral {
+                    text: text.clone(),
+                    space: TextSpace::Flash,
+                },
+                Type::Text,
+                origin.clone(),
+            ),
+            E::Text {
+                operation,
+                arguments,
+            } => {
+                let values = arguments
+                    .iter()
+                    .map(|a| self.value(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let op = match operation {
+                    crate::frontend::expression::TextOperation::Len => Op::TextLen(values[0]),
+                    crate::frontend::expression::TextOperation::ByteOr => Op::TextByteOr {
+                        text: values[0],
+                        index: values[1],
+                        fallback: values[2],
+                    },
+                };
+                self.emit(op, expected, origin.clone())
+            }
             E::Call { arguments, .. } => self
                 .call(expr.symbol.unwrap(), arguments, origin.clone())?
                 .ok_or_else(|| invalid("procedure used as a value", expr.source_location))?,

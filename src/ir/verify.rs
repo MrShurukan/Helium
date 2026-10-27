@@ -601,7 +601,35 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                     )?;
                     None
                 }
+                Op::TextLiteral { text, .. } => {
+                    require(
+                        text.len() <= u16::MAX as usize,
+                        "text exceeds u16 byte length",
+                    )?;
+                    Some(Type::Text)
+                }
+                Op::TextLen(v) => {
+                    require(value_type(*v)? == Type::Text, "text_len requires text")?;
+                    Some(Type::U16)
+                }
+                Op::TextByteOr {
+                    text,
+                    index,
+                    fallback,
+                } => {
+                    require(
+                        value_type(*text)? == Type::Text
+                            && value_type(*index)? == Type::U16
+                            && value_type(*fallback)? == Type::U8,
+                        "invalid text_byte_or operands",
+                    )?;
+                    Some(Type::U8)
+                }
                 Op::Const(value) => {
+                    require(
+                        value.ty != Type::Text,
+                        "text cannot be forged from scalar bits",
+                    )?;
                     require(
                         value.bits & !value.ty.mask() == 0,
                         "constant has a non-canonical bit pattern",
@@ -626,14 +654,16 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                         "binary operands must have identical types",
                     )?;
                     require(
-                        ty.integer().is_some() || matches!(op, Binary::Equal | Binary::NotEqual),
+                        ty != Type::Text
+                            && (ty.integer().is_some()
+                                || matches!(op, Binary::Equal | Binary::NotEqual)),
                         "invalid binary operand type",
                     )?;
                     Some(if op.comparison() { Type::Bool } else { ty })
                 }
                 Op::Widen(value, target) => {
                     require(
-                        value_type(*value)?.can_widen_to(*target),
+                        *target != Type::Text && value_type(*value)?.can_widen_to(*target),
                         "conversion is not lossless widening",
                     )?;
                     Some(*target)

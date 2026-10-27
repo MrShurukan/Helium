@@ -172,3 +172,6 @@ See [the runnable example](examples/uart-extensions.he) and
 to the entry file, not the shell working directory. Static `device output: UartTx`
 parameters preserve hardware identity without runtime pointers. Strings, arrays
 and owning wrapper structs remain future work.
+
+Текстовый вывод: [пример print_n](examples/uart-text.he), [контракт &str и результаты](docs/TEXT.md).
+UTF-8 литералы находятся во Flash; std::uart::UartText предоставляет print/println.

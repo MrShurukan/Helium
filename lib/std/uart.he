@@ -3,4 +3,18 @@ pub extension UartText for UartTx {
     pub fn newline() {
         self.write_byte(10);
     }
+
+    pub fn print(text: &str) {
+        var index: u16 = 0;
+        while index < text.len() {
+            self.write_byte(text.byte_or(index, 0));
+            index = index + 1;
+        }
+    }
+
+    pub fn println(text: &str) {
+        self.print(text);
+        self.newline();
+    }
+
 }

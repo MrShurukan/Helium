@@ -166,6 +166,7 @@ impl Scanner<'_> {
                 None
             }
 
+            "&" => Some(Self::produce_token(P(PT::Ampersand), position_info)),
             // Literals
             "\"" => Some(Self::parse_string_literal(peekable, position_info, source)?),
 
@@ -246,24 +247,43 @@ impl Scanner<'_> {
     ) -> Result<Token, ScannerError> {
         let start_string_position = position_info.clone();
         let mut closed = false;
+        let mut escaped = false;
+        let mut text = String::new();
         for current_char in peekable.by_ref() {
             position_info.advance();
-            match current_char {
-                "\n" | "\r\n" => {
-                    return Err(SE::new(
-                        SET::MultilineStringNotSupported,
-                        position_info,
-                        source,
-                    ))
-                }
-                "\"" => {
-                    closed = true;
-                    break;
-                }
-                _ => {}
+            if Self::is_newline(current_char) {
+                return Err(SE::new(
+                    SET::MultilineStringNotSupported,
+                    position_info,
+                    source,
+                ));
+            }
+            if escaped {
+                text.push_str(match current_char {
+                    "n" => "\n",
+                    "r" => "\r",
+                    "t" => "\t",
+                    "0" => "\0",
+                    "\\" => "\\",
+                    "\"" => "\"",
+                    _ => {
+                        return Err(SE::new(
+                            SET::UnknownToken(format!("unsupported string escape: {current_char}")),
+                            position_info,
+                            source,
+                        ))
+                    }
+                });
+                escaped = false;
+            } else if current_char == "\\" {
+                escaped = true;
+            } else if current_char == "\"" {
+                closed = true;
+                break;
+            } else {
+                text.push_str(current_char);
             }
         }
-
         if !closed {
             return Err(SE::new(
                 SET::UnterminatedString,
@@ -272,15 +292,8 @@ impl Scanner<'_> {
             ));
         }
 
-        // Get the string value
-        let str = source
-            .grapheme_peekable()
-            .skip(position_info.start + 1)
-            .take(position_info.current - position_info.start - 2)
-            .collect();
-
         Ok(Self::produce_token(
-            TokenType::Literal(LiteralType::String(str)),
+            TokenType::Literal(LiteralType::String(text)),
             position_info,
         ))
     }

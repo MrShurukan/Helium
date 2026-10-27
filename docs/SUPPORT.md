@@ -8,7 +8,9 @@ AVRA, the old linear IR and hand-written AVR assembly generation have been remov
 | bool, PinState | Yes | Yes | Yes |
 | i8/u8, i16/u16 | Yes | Yes | Yes |
 | i32/u32, i64/u64 | Yes | Yes | Located unsupported-type diagnostic |
-| Float and string | Basic type checks | Not implemented | Not implemented |
+| Float and legacy `string` type | Basic type checks | Not implemented | Not implemented |
+| UTF-8 literals, `&str` parameters/locals, len/byte_or | Yes; no escaping references | Universal Flash/SRAM text; byte interpreter | Yes; source literals in Flash |
+| std::uart print/println | Ordinary Helium extension functions | UART requires machine simulator | Yes |
 | Variables, assignment, widening, + / - / * | Yes | Yes | Yes for supported types |
 | Comparisons, short-circuit and/or, ternary, if, while | Yes | Yes | Yes |
 | fn, arguments by value, explicit return | Yes | Yes | Yes for supported types |

@@ -139,6 +139,29 @@ pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), 
                 return;
             }
         }
+        if let E::Literal {
+            value: crate::frontend::token_type::LiteralType::String(text),
+        } = &e.expression_type
+        {
+            if text.len() > u16::MAX as usize {
+                errors.push(Diagnostic::new(
+                    DiagnosticKind::TypedIrUnsupported {
+                        feature: "text longer than 65535 bytes".into(),
+                    },
+                    Some(e.source_location),
+                ));
+            }
+        }
+        if let E::Binary { left, .. } = &e.expression_type {
+            if left.static_type == T::Text {
+                errors.push(Diagnostic::new(
+                    DiagnosticKind::TypedIrUnsupported {
+                        feature: "text operators; use byte-oriented methods".into(),
+                    },
+                    Some(e.source_location),
+                ));
+            }
+        }
         e.for_each_child(|child| expr(child, machine, errors));
     }
 
@@ -159,6 +182,16 @@ pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), 
                 for p in parameters {
                     check_type(p.static_type, p.type_location, machine, errors);
                 }
+                if *return_type == Some(T::Text) {
+                    errors.push(Diagnostic::new(
+                        DiagnosticKind::TypedIrUnsupported {
+                            feature:
+                                "returning borrowed text (lifetime analysis is not implemented)"
+                                    .into(),
+                        },
+                        *return_location,
+                    ));
+                }
                 if let Some(t) = return_type {
                     check_type(*t, return_location.unwrap(), machine, errors);
                 }
@@ -173,6 +206,16 @@ pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), 
                 initializer,
                 ..
             } => {
+                if *static_type == Some(T::Text) && initializer.is_none() {
+                    errors.push(Diagnostic::new(
+                        DiagnosticKind::TypedIrUnsupported {
+                            feature:
+                                "uninitialized text references; provide a literal or another &str"
+                                    .into(),
+                        },
+                        Some(*name_location),
+                    ));
+                }
                 let before = errors.len();
                 check_type(
                     static_type.unwrap(),
@@ -227,6 +270,20 @@ pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), 
 
     let mut errors = Vec::new();
     for s in statements {
+        if matches!(
+            &s.statement_type,
+            S::VariableDeclaration {
+                static_type: Some(T::Text),
+                ..
+            }
+        ) {
+            errors.push(Diagnostic::new(
+                DiagnosticKind::TypedIrUnsupported {
+                    feature: "global text references (escaping borrows)".into(),
+                },
+                Some(s.source_location),
+            ));
+        }
         stmt(s, machine, &mut errors);
     }
 

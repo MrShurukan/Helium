@@ -24,6 +24,10 @@ impl LocatableInSource for Expression {
 
 #[derive(Debug, Clone)]
 pub enum ExpressionType {
+    Text {
+        operation: TextOperation,
+        arguments: Vec<Expression>,
+    },
     Call {
         identifier: String,
         arguments: Vec<Expression>,
@@ -58,6 +62,12 @@ pub enum ExpressionType {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextOperation {
+    Len,
+    ByteOr,
+}
+
 // TODO: Code inconsistency! These functions panic instead of returning a result like similar parts
 // TODO: (like `PinRef`)
 // I'm not sure of the solution as of right now
@@ -65,7 +75,9 @@ impl Expression {
     /// Visit immediate operands in source evaluation order (not recursively).
     pub fn for_each_child(&self, mut visit: impl FnMut(&Expression)) {
         match &self.expression_type {
-            ExpressionType::Call { arguments, .. } => arguments.iter().for_each(visit),
+            ExpressionType::Call { arguments, .. } | ExpressionType::Text { arguments, .. } => {
+                arguments.iter().for_each(visit)
+            }
             ExpressionType::Binary { left, right, .. } => {
                 visit(left);
                 visit(right);
@@ -89,7 +101,9 @@ impl Expression {
     /// Mutable counterpart for type finalization.
     pub fn for_each_child_mut(&mut self, mut visit: impl FnMut(&mut Expression)) {
         match &mut self.expression_type {
-            ExpressionType::Call { arguments, .. } => arguments.iter_mut().for_each(visit),
+            ExpressionType::Call { arguments, .. } | ExpressionType::Text { arguments, .. } => {
+                arguments.iter_mut().for_each(visit)
+            }
             ExpressionType::Binary { left, right, .. } => {
                 visit(left);
                 visit(right);
@@ -290,6 +304,10 @@ impl Display for Expression {
                 identifier,
                 expression,
             } => write!(f, "{identifier} = {expression}"),
+            ExpressionType::Text {
+                operation,
+                arguments,
+            } => write!(f, "{operation:?}({arguments:?})"),
             ExpressionType::Identifier(name) => write!(f, "{name}"),
         }
     }

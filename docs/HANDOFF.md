@@ -1,6 +1,6 @@
 # Helium — handoff для ревью и следующей итерации
 
-Срез: **27 октября 2026**, после реализации статических параметров, extension/import и первой функции std.
+Срез: **27 октября 2026**, после первого этапа универсального &str, Flash-литералов и текстового std.
 Репозиторий: `C:\Users\ilyuz\Documents\Review\Helium`.
 Ветка: `codex/reliable-compiler-base`. Ревью REVIEW_2026-10-27 принято.
 B3-review — `322cadc`, R02 — `dcfd151`, общий lifecycle — `3889b8c`.
@@ -53,12 +53,17 @@ SourceLocation теперь хранит file ID; ошибки и labels пок�
 не получают hardware resources и не попадают в IR/машинный код. Детали и пределы —
 [STD_EXTENSIONS_PROPOSAL.md](STD_EXTENSIONS_PROPOSAL.md).
 
-Следующий шаг — обсуждение Flash-строк и общих с массивами правил: длина, индексация,
-bounds checks, передача без копирования, Flash/SRAM и UTF-8. Строки, массивы, пользовательские
-структуры, общий writer-interface и интерполяция пока не реализованы.
+Первый этап текста реализован: UTF-8 литералы во Flash, универсальный &str, параметры
+и локальные ссылки, len/byte_or, std::uart print/println. Контракт и границы — [TEXT.md](TEXT.md).
+SRAM и runtime-выбор области проверяются через IR fixtures; исходного String/массива ещё нет.
+Оптимизация известного размещения выполняется LLVM; отдельного прохода клонирования
+и гарантированного вынесения проверки области из циклов пока нет.
+Следующий этап — массивы/слайсы, владельцы SRAM-буферов и ограниченные заимствования.
+Пользовательские структуры, общий writer-interface и интерполяция пока не реализованы.
 Для будущих hardware-wrapper структур принято исключительное владение: ресурс
 передаётся владельцу, исходное имя недоступно, копирование запрещено (F15). Обычный
-вызов статического helper не передаёт владение. Borrow checker пока не вводится.
+вызов статического helper не передаёт владение. Направление на безопасные ограниченные
+заимствования принято; общий borrow checker пока не реализован.
 RX/очереди, interrupt-driven UART, runtime reconfiguration и software UART отдельно.
 
 ### Контекст, который нужно сохранить
@@ -86,7 +91,8 @@ RX/очереди, interrupt-driven UART, runtime reconfiguration и software UA
 3. ir/lower.rs, ir/verify.rs, backend/llvm.rs: lifecycle, intrinsics и реализация.
 4. modules.rs, modules/expand.rs, frontend/modules.rs, lib/std/uart.he; tests/extensions.rs.
 5. tests/uart.rs, tests/cli.rs, unit tests effects.rs, tools/simulate-avr.cjs.
-6. CALL_EFFECTS.md, UART_API_PROPOSAL.md, STD_EXTENSIONS_PROPOSAL.md, SUPPORT.md и статусы ROADMAP/DEVELOPMENT_PLAN.
+6. backend/text.rs, Text-операции в IR/verifier/interpreter, tests/text.rs и TEXT.md.
+7. CALL_EFFECTS.md, UART_API_PROPOSAL.md, STD_EXTENSIONS_PROPOSAL.md, SUPPORT.md и статусы ROADMAP/DEVELOPMENT_PLAN.
 
 ## 1. Контекст и статус
 
@@ -392,3 +398,7 @@ cargo run --locked -- timer-options --mcu atmega328p --cpu-hz 16000000 --timer T
 с любой стороны. Направление хранится в AST/TimerConfig и проверяется verifier;
 публичный timer::plan остаётся двусторонним, добавлен plan_with_direction.
 Изменение не затрагивает GPIO/backend и не требует повторной прошивки платы.
+
+Итоговый gate текстового этапа: **180 тестов debug + 180 release**, fmt и Clippy,
+включая 15 машинных сочетаний текстового сценария/оптимизации. Лог:
+`build/text-full-gate-final.log`. Плата не прошивалась.

@@ -34,6 +34,7 @@ pub struct Interpreter<'a> {
     pub inputs: HashMap<PinId, VecDeque<bool>>,
     /// Physical level used when the scripted readings are exhausted; defaults to LOW.
     pub levels: HashMap<PinId, bool>,
+    texts: Vec<String>,
     remaining: usize,
 }
 
@@ -53,6 +54,7 @@ impl<'a> Interpreter<'a> {
             inputs: HashMap::new(),
             levels: HashMap::new(),
             remaining: step_limit,
+            texts: vec![],
         })
     }
 
@@ -150,6 +152,41 @@ impl<'a> Interpreter<'a> {
                     Op::InterruptRestore(value) => {
                         self.interrupts_enabled = get(value)?.bits != 0;
                         None
+                    }
+                    Op::TextLiteral { text, .. } => {
+                        let index = if let Some(i) = self.texts.iter().position(|s| s == text) {
+                            i
+                        } else {
+                            self.texts.push(text.clone());
+                            self.texts.len() - 1
+                        };
+                        Some(Constant {
+                            ty: Type::Text,
+                            bits: index as u64,
+                        })
+                    }
+                    Op::TextLen(v) => {
+                        let text = self
+                            .texts
+                            .get(get(v)?.bits as usize)
+                            .ok_or(Error::InvalidInvocation)?;
+                        Some(Constant::new(Type::U16, text.len() as u64))
+                    }
+                    Op::TextByteOr {
+                        text,
+                        index,
+                        fallback,
+                    } => {
+                        let text = self
+                            .texts
+                            .get(get(text)?.bits as usize)
+                            .ok_or(Error::InvalidInvocation)?;
+                        let byte = text
+                            .as_bytes()
+                            .get(get(index)?.bits as usize)
+                            .copied()
+                            .unwrap_or(get(fallback)?.bits as u8);
+                        Some(Constant::new(Type::U8, u64::from(byte)))
                     }
                     Op::Const(value) => Some(*value),
                     Op::Unary(op, value) => Some(eval_unary(*op, get(value)?)),

@@ -64,6 +64,7 @@ pub enum StaticType {
     PinMode,
 
     Boolean,
+    Text,
     String,
 
     Array(&'static StaticType),
@@ -146,6 +147,7 @@ impl Display for StaticType {
             StaticType::PinState => write!(f, "PinState"),
             StaticType::PinMode => write!(f, "PinMode"),
             StaticType::Boolean => write!(f, "bool"),
+            StaticType::Text => write!(f, "&str"),
             StaticType::String => write!(f, "string"),
             StaticType::Array(array_type) => write!(f, "Arr<{array_type}>"),
             StaticType::Function => write!(f, "Func"),

@@ -3,9 +3,10 @@ program         -> topLevelDecl* ( setupDecl lateDecl* )? loopDecl lateDecl* EOF
 libraryModule   -> ( importDecl | functionDecl | extensionDecl )* EOF ;
 lateDecl        -> functionDecl | timerDecl | deviceDecl | importDecl | extensionDecl ;
 topLevelDecl    -> defDecl | varDecl | lateDecl ;
-functionDecl    -> "pub"? "noInterrupt"? "fn" IDENTIFIER "(" parameters? ")" ( ":" TYPE )? block ;
+functionDecl    -> "pub"? "noInterrupt"? "fn" IDENTIFIER "(" parameters? ")" ( ":" sourceType )? block ;
+sourceType      -> TYPE | "&" "str" ;
 parameters      -> parameter ( "," parameter )* ;
-parameter       -> IDENTIFIER ":" TYPE | "device" IDENTIFIER ":" IDENTIFIER ;
+parameter       -> IDENTIFIER ":" sourceType | "device" IDENTIFIER ":" IDENTIFIER ;
 importDecl      -> "import" "extension"? qualifiedName ";" ;
 extensionDecl   -> "pub"? "extension" IDENTIFIER "for" IDENTIFIER "{" functionDecl* "}" ;
 qualifiedName   -> IDENTIFIER ( "::" IDENTIFIER )* ;
@@ -14,7 +15,7 @@ qualifiedName   -> IDENTIFIER ( "::" IDENTIFIER )* ;
 // Static device parameters and extension receivers currently support UartTx only.
 // Extension methods have implicit static self. No state, nested extensions or device copies.
 declaration     -> varDecl | statement ;
-varDecl         -> "var" IDENTIFIER ( ":" TYPE ( "=" expression )? | "=" expression ) ";" ;
+varDecl         -> "var" IDENTIFIER ( ":" sourceType ( "=" expression )? | "=" expression ) ";" ;
 defDecl         -> "def" ( alias | "{" alias+ "}" ) ;
 alias           -> IDENTIFIER "=" pin_ref PINMODE ";" ;
 pin_ref         -> PORT "." INTEGER ;
@@ -46,11 +47,17 @@ primary         -> INTEGER | FLOAT | STRING | BOOLEAN | PINSTATE | PINMODE
                  | IDENTIFIER | "(" expression ")" ;
 
 // alias and not remain reserved, but have no implemented productions.
-// Only named functions and methods of named devices can be called; no chained calls,
+// Only named functions and methods of named devices/text references can be called; no chained calls,
 // computed receivers or method values. Functions are top-level or extension members;
 // hardware devices are declared only at application top level, never in libraries.
 // No trailing commas in function parameters or call arguments.
-// Signature types: integers, bool, PinState. Omitted result type means no value.
+// Signature types: integers, bool, PinState; &str is additionally allowed as a parameter.
+// &str results and globals are parsed but rejected until escaping-borrow analysis exists.
+// Local &str requires an initializer. Assignment copies the view, not its bytes.
+// Text methods: len():u16; byte_or(index:u16, fallback:u8):u8 (fallback outside bounds).
+// STRING is UTF-8, not NUL-terminated. Escapes: \n \r \t \0 \\ and \".
+// Other escapes and physical newlines inside STRING are rejected.
+// Omitted result type means no value. See docs/TEXT.md for representation and limits.
 // return is legal only inside fn. Every value-returning function must have an explicit
 // return on every structural path; loops alone do not establish this guarantee.
 // Global initializers cannot call functions. See docs/FUNCTIONS.md for the full contract.

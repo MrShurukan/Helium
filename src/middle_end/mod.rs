@@ -489,6 +489,40 @@ impl Analyzer {
         };
         let error_start = self.errors.len();
         let ty = match &mut expr.expression_type {
+            E::Text {
+                operation,
+                arguments,
+            } => {
+                use crate::frontend::expression::TextOperation;
+                let u16ty = T::Integer(I::Unsigned(UI::Uns16));
+                let u8ty = T::Integer(I::Unsigned(UI::Uns8));
+                let expected = if *operation == TextOperation::Len {
+                    vec![T::Text]
+                } else {
+                    vec![T::Text, u16ty, u8ty]
+                };
+                if arguments.len() != expected.len() {
+                    self.error(
+                        DiagnosticKind::ArgumentCount {
+                            name: format!("{operation:?}"),
+                            expected: expected.len() - 1,
+                            actual: arguments.len().saturating_sub(1),
+                        },
+                        span,
+                    );
+                }
+                for (i, a) in arguments.iter_mut().enumerate() {
+                    self.expression(a);
+                    if let Some(t) = expected.get(i) {
+                        self.coerce_with_origin(a, *t, span);
+                    }
+                }
+                if *operation == TextOperation::Len {
+                    u16ty
+                } else {
+                    u8ty
+                }
+            }
             E::Call {
                 identifier,
                 arguments,
@@ -505,7 +539,7 @@ impl Analyzer {
                 L::Integer(_) => T::Integer(I::Literal),
                 L::Float(_) => T::Float(F::Literal),
                 L::Boolean(_) => T::Boolean,
-                L::String(_) => T::String,
+                L::String(_) => T::Text,
                 L::PinState(_) => T::PinState,
                 L::PinMode(_) => T::PinMode,
             },

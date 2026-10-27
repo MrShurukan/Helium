@@ -1,0 +1,19 @@
+import extension std::uart::UartText;
+
+device debug = UART0 { baud: 38400, mode: TX, }
+
+fn print_n(device uart: UartTx, text: &str, n: u16) {
+    var i: u16 = 0;
+    while i < n {
+        uart.println(text);
+        i = i + 1;
+    }
+}
+
+setup {
+    print_n(debug, "Hello", 3);
+    print_n(debug, "Привет", 2);
+    print_n(debug, "", 1);
+    debug.flush();
+}
+loop {}

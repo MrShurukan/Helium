@@ -79,7 +79,7 @@ impl DiagnosticKind {
             }
             Self::FunctionSignatureType { ty } => {
                 format!(
-                    "Function signatures currently support integers, bool and PinState, not {ty}"
+                    "Function signatures support integers, bool and PinState; parameters also support &str, not {ty}"
                 )
             }
             Self::UnsupportedType { ty, machine } => {

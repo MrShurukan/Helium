@@ -77,7 +77,7 @@ impl Analyzer {
                 .map(|p| (p.static_type, p.type_location))
                 .chain(return_type.map(|t| (t, return_location.unwrap())))
             {
-                if !matches!(ty, T::Integer(_) | T::Boolean | T::PinState) {
+                if !matches!(ty, T::Integer(_) | T::Boolean | T::PinState | T::Text) {
                     self.error(DiagnosticKind::FunctionSignatureType { ty }, span);
                 }
             }
