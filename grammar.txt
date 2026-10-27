@@ -1,6 +1,6 @@
 // Current implemented syntax. Semantic and backend support are documented in docs/SUPPORT.md.
-program         -> topLevelDecl* ( setupDecl ( functionDecl | timerDecl )* )? loopDecl ( functionDecl | timerDecl )* EOF ;
-topLevelDecl    -> defDecl | varDecl | functionDecl | timerDecl ;
+program         -> topLevelDecl* ( setupDecl ( functionDecl | timerDecl | deviceDecl )* )? loopDecl ( functionDecl | timerDecl | deviceDecl )* EOF ;
+topLevelDecl    -> defDecl | varDecl | functionDecl | timerDecl | deviceDecl ;
 functionDecl    -> "noInterrupt"? "fn" IDENTIFIER "(" parameters? ")" ( ":" TYPE )? block ;
 parameters      -> parameter ( "," parameter )* ;
 parameter       -> IDENTIFIER ":" TYPE ;
@@ -31,13 +31,15 @@ comparison      -> term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
 term            -> factor ( ( "-" | "+" ) factor )* ;
 factor          -> unary ( ( "*" | "/" ) unary )* ;
 unary           -> ( "!" | "-" ) unary | call ;
-call            -> IDENTIFIER "(" arguments? ")" | primary ;
+call            -> IDENTIFIER ( "." IDENTIFIER )? "(" arguments? ")" | primary ;
 arguments       -> expression ( "," expression )* ;
 primary         -> INTEGER | FLOAT | STRING | BOOLEAN | PINSTATE | PINMODE
                  | IDENTIFIER | "(" expression ")" ;
 
 // fun, alias and not remain reserved, but have no implemented productions.
-// Only top-level named functions; no nested functions, function values or trailing commas.
+// Only named functions and methods of named devices can be called; no chained calls,
+// computed receivers or method values. Functions and devices are top-level only.
+// No trailing commas in function parameters or call arguments.
 // Signature types: integers, bool, PinState. Omitted result type means no value.
 // return is legal only inside fn. Every value-returning function must have an explicit
 // return on every structural path; loops alone do not establish this guarantee.
@@ -47,3 +49,15 @@ timerDecl       -> "timer" IDENTIFIER "=" IDENTIFIER "{" timerField* "}" ;
 timerField      -> "every" ":" duration "," | "tolerance" ":" ( "+" | "-" )? duration "," | "interrupt" block ;
 duration        -> INTEGER ( "ns" | "us" | "ms" | "s" ) ;
 // Require exactly one every and interrupt; at most one tolerance. Timer1 only.
+
+deviceDecl      -> "device" IDENTIFIER "=" IDENTIFIER "{" deviceFields "}" ;
+deviceFields    -> baudField modeField | modeField baudField ;
+baudField       -> "baud" ":" INTEGER "," ;
+modeField       -> "mode" ":" "TX" "," ;
+// Exactly one baud and mode, in either order. The comma after each field is required;
+// no semicolon follows the closing brace. baud, mode and TX are contextual identifiers.
+// The hardware identifier currently resolves only to UART0. Its methods are
+// try_write_byte(u8): bool, write_byte(u8): void and flush(): void.
+// Device declarations may precede setup/loop, occur between them, or follow loop.
+// Devices are static resources, not runtime values. Clock, baud, resource ownership
+// and call effects are semantic checks; see docs/UART_API_PROPOSAL.md and docs/CALL_EFFECTS.md.
