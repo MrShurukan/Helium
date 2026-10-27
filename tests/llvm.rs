@@ -186,6 +186,29 @@ fn compare_machine(
             .join("\n");
     }
     let build = llvm_toolchain::build(&text, &destination, "hex", level).unwrap();
+    let memory = build.memory.as_ref().expect("linked builds report memory");
+    let sizes = build
+        .sections
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some((fields.next()?, fields.next()?.parse::<u32>().ok()?))
+        })
+        .collect::<HashMap<_, _>>();
+    assert_eq!(
+        memory.flash_extent,
+        sizes.get(".text").unwrap_or(&0) + sizes.get(".data").unwrap_or(&0)
+    );
+    assert_eq!(
+        memory.static_sram,
+        sizes.get(".data").unwrap_or(&0)
+            + sizes.get(".bss").unwrap_or(&0)
+            + sizes.get(".noinit").unwrap_or(&0)
+    );
+    assert_eq!(
+        fs::read_to_string(build.directory.join("memory.txt")).unwrap(),
+        memory.render()
+    );
     if matches!(level, Optimization::Size) {
         let raw = fs::read_to_string(build.directory.join("module.ll")).unwrap();
         assert!(raw

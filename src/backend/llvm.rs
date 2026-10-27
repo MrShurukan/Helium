@@ -57,6 +57,9 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
     if let Some(timer) = &module.timer {
         writeln!(out, "; {}", timer.report()).unwrap();
     }
+    for line in super::timing::inventory(module) {
+        writeln!(out, "; helium-timing: {line}").unwrap();
+    }
     for (index, storage) in module.globals.iter().enumerate() {
         writeln!(
             out,

@@ -40,6 +40,7 @@ pub struct Build {
     pub directory: PathBuf,
     pub elapsed_ms: u128,
     pub sections: String,
+    pub memory: Option<super::memory::MemoryReport>,
 }
 
 /// Overrides are directories containing the executable and its DLL dependencies.
@@ -140,6 +141,12 @@ pub fn build(
     } else {
         ir.to_owned()
     };
+    let timing = ir
+        .lines()
+        .filter_map(|line| line.strip_prefix("; helium-timing: "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(directory.join("timing.txt"), timing).map_err(|e| e.to_string())?;
     fs::write(&raw, ir).map_err(|e| e.to_string())?;
     let targets = run("llc", &[arg("--version")])?;
     if !targets
@@ -177,6 +184,7 @@ pub fn build(
     run("llc", &arguments)?;
 
     let mut sections = String::new();
+    let mut memory = None;
     let artifact = if emit == "asm" {
         &assembly
     } else {
@@ -198,6 +206,10 @@ pub fn build(
             ],
         )?;
 
+        let report =
+            super::memory::from_elf(&fs::read(&elf).map_err(|e| e.to_string())?, &ATMEGA328P)?;
+        fs::write(directory.join("memory.txt"), report.render()).map_err(|e| e.to_string())?;
+        memory = Some(report);
         sections = run("avr-size", &[arg("-A"), arg(&elf)])?;
         fs::write(directory.join("sections.txt"), &sections).map_err(|e| e.to_string())?;
         let symbols = run("avr-nm", &[arg("-S"), arg("-n"), arg(&elf)])?;
@@ -229,5 +241,6 @@ pub fn build(
         directory,
         elapsed_ms: started.elapsed().as_millis(),
         sections,
+        memory,
     })
 }

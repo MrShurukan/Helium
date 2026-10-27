@@ -209,7 +209,9 @@ fn run(args: Vec<String>) -> Result<String, String> {
             destination.display(),
             result.elapsed_ms,
             result.directory.display(),
-            result.sections + &report
+            result.memory.map(|m| m.render()).unwrap_or_else(|| {
+                "Memory: unavailable for assembly output; link ELF/HEX for a final report\n".into()
+            }) + &report
         ));
     }
 

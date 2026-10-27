@@ -6,6 +6,9 @@ pub struct Microcontroller {
     pub avr_dude_name: &'static str,
     pub llvm_triple: &'static str,
     pub max_cpu_hz: u32,
+    pub flash_bytes: u32,
+    pub sram_start: u32,
+    pub sram_bytes: u32,
     pub sreg_io: u8,
     pub gpio: &'static [GpioPort],
     pub timer: Timer1,
@@ -57,6 +60,9 @@ pub const ATMEGA328P: Microcontroller = Microcontroller {
     avr_dude_name: "m328p",
     llvm_triple: "avr-unknown-unknown",
     max_cpu_hz: 20_000_000,
+    flash_bytes: 32_768,
+    sram_start: 0x100,
+    sram_bytes: 2_048,
     sreg_io: 0x3f,
     gpio: &[
         GpioPort {

@@ -73,6 +73,11 @@ AST/Helium IR inspection can accept features outside the current machine subset.
 Outputs default to `build/` beside the source; `-o path/to/output.hex` selects another path.
 Machine builds retain intermediate artifacts in a unique directory reported by the command.
 Failed external stages do not replace an existing destination firmware.
+ELF/HEX builds report Flash occupation, static SRAM reservation and remaining SRAM
+for the stack using the linked ELF and target capacities. Maximum stack and ISR
+latency remain explicitly unknown. The artifact directory retains `memory.txt` and
+`timing.txt` (source IRQ-mask/call inventory, not a timing bound). See
+[memory and timing](docs/MEMORY_AND_TIMING.md) for accounting and limitations.
 
 ## Language and diagnostics
 
