@@ -11,14 +11,14 @@ use crate::{
 use std::collections::HashMap;
 
 pub fn validate_pins(statements: &[Statement], mcu: &str) -> Result<(), Vec<Diagnostic>> {
-    if crate::backend::microcontroller::get(mcu).is_none() {
+    let Some(target) = crate::backend::microcontroller::get(mcu) else {
         return Err(vec![Diagnostic::new(
             DiagnosticKind::UnsupportedTarget {
                 mcu: mcu.to_owned(),
             },
             None,
         )]);
-    }
+    };
 
     let mut errors = vec![];
     let mut pins = HashMap::new();
@@ -27,8 +27,7 @@ pub fn validate_pins(statements: &[Statement], mcu: &str) -> Result<(), Vec<Diag
         if let S::DefDeclaration(declarations) = &statement.statement_type {
             for declaration in declarations {
                 let pin = &declaration.pin;
-                let valid = crate::backend::microcontroller::ATMEGA328P
-                    .has_digital_pin(&pin.port, pin.pin_number);
+                let valid = target.has_digital_pin(&pin.port, pin.pin_number);
 
                 if !valid {
                     errors.push(Diagnostic::new(

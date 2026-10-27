@@ -255,8 +255,13 @@ fn timer_options(args: &[String]) -> Result<String, String> {
             .copied()
             .ok_or_else(|| format!("{key} is required"))
     };
-    if required("--mcu")? != "atmega328p" || required("--timer")? != "Timer1" {
-        return Err("timer-options currently supports atmega328p Timer1 only".into());
+    let target = helium::backend::microcontroller::get(required("--mcu")?)
+        .ok_or("Unsupported MCU for timer-options")?;
+    if required("--timer")? != target.timer.name {
+        return Err(format!(
+            "timer-options currently supports {} {} only",
+            target.name, target.timer.name
+        ));
     }
     let hz = required("--cpu-hz")?
         .parse()

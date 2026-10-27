@@ -1,4 +1,5 @@
 //! Exact Timer1 CTC planning. Floating point is used only to present the report.
+use crate::backend::microcontroller::ATMEGA328P;
 use crate::diagnostic::{Diagnostic, DiagnosticKind, LabelKind};
 use crate::frontend::{
     statement::{Statement, StatementType},
@@ -52,14 +53,10 @@ impl TimerConfig {
     }
 
     pub fn clock_select(&self) -> u8 {
-        match self.prescaler {
-            1 => 1,
-            8 => 2,
-            64 => 3,
-            256 => 4,
-            1024 => 5,
-            _ => unreachable!(),
-        }
+        ATMEGA328P
+            .timer
+            .clock_select(self.prescaler)
+            .expect("TimerConfig must contain a supported prescaler")
     }
 
     fn numerator(&self) -> u128 {
@@ -76,8 +73,16 @@ impl TimerConfig {
         let delta =
             self.numerator() as i128 - i128::from(self.requested_ns) * i128::from(self.cpu_hz);
         let error = delta as f64 / f64::from(self.cpu_hz) / 1e9;
-        format!("Timer1: CPU={} Hz, period={actual:.12}s, error={:+.6}ns ({:+.6}%), prescaler={}, OCR1A={}",
-            self.cpu_hz, error * 1e9, error * 1e11 / self.requested_ns as f64, self.prescaler, self.ticks - 1)
+        format!(
+            "{}: CPU={} Hz, period={actual:.12}s, error={:+.6}ns ({:+.6}%), prescaler={}, {}={}",
+            ATMEGA328P.timer.name,
+            self.cpu_hz,
+            error * 1e9,
+            error * 1e11 / self.requested_ns as f64,
+            self.prescaler,
+            ATMEGA328P.timer.compare_name,
+            self.ticks - 1
+        )
     }
 }
 
@@ -103,7 +108,7 @@ pub fn parse_duration(text: &str) -> Result<u64, String> {
 }
 
 pub fn validate_clock(cpu_hz: u32) -> Result<(), TimerError> {
-    if cpu_hz == 0 || cpu_hz > 20_000_000 {
+    if cpu_hz == 0 || cpu_hz > ATMEGA328P.max_cpu_hz {
         return Err(TimerError::InvalidClock { hz: cpu_hz });
     }
     Ok(())
@@ -116,7 +121,7 @@ pub fn candidates(cpu_hz: u32, requested_ns: u64) -> Result<Vec<TimerConfig>, Ti
     }
     let desired = u128::from(requested_ns) * u128::from(cpu_hz);
     let mut result = Vec::new();
-    for prescaler in [1, 8, 64, 256, 1024] {
+    for &(prescaler, _) in ATMEGA328P.timer.prescalers {
         let quantum = u128::from(prescaler) * 1_000_000_000;
         let lower = desired / quantum;
         for ticks in [lower, lower + 1] {
@@ -125,7 +130,7 @@ pub fn candidates(cpu_hz: u32, requested_ns: u64) -> Result<Vec<TimerConfig>, Ti
                 requested_ns,
                 tolerance_ns: 0,
                 prescaler,
-                ticks: ticks.clamp(1, 65536) as u32,
+                ticks: ticks.clamp(1, u128::from(ATMEGA328P.timer.max_ticks)) as u32,
             };
             if !result.contains(&config) {
                 result.push(config);
@@ -181,7 +186,7 @@ pub(crate) fn resolve(
                 Some(location),
             ))
         };
-        if timer.hardware != "Timer1" {
+        if timer.hardware != ATMEGA328P.timer.name {
             fail(
                 TimerError::Unsupported {
                     hardware: timer.hardware.clone(),

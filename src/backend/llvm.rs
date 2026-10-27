@@ -1,5 +1,6 @@
 //! Textual LLVM adapter. The caller owns IR verification policy.
 //! Hardware accesses are volatile; ordinary storage remains optimizable.
+use super::microcontroller::{self, GpioPort, Microcontroller};
 use crate::ir::*;
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -21,9 +22,8 @@ fn result_type(value: Option<Type>) -> &'static str {
 /// Produce unoptimized LLVM IR from a well-formed Helium module.
 /// `export_symbols` is for differential tests, not a public C ABI contract.
 pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
-    if module.target != "atmega328p" {
-        return Err("LLVM prototype supports only atmega328p".into());
-    }
+    let target = microcontroller::get(&module.target)
+        .ok_or_else(|| format!("Unsupported LLVM target {}", module.target))?;
 
     // Reject wider integers until their machine-level behavior is covered by tests.
     let types = module
@@ -53,7 +53,7 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
     }
 
     let linkage = if export_symbols { "" } else { "internal " };
-    let mut out = String::from("; Helium LLVM prototype: wrapping arithmetic, explicit hardware effects\ntarget triple = \"avr-unknown-unknown\"\n\n");
+    let mut out = format!("; Helium LLVM prototype: wrapping arithmetic, explicit hardware effects\ntarget triple = \"{}\"\n\n", target.llvm_triple);
     if let Some(timer) = &module.timer {
         writeln!(out, "; {}", timer.report()).unwrap();
     }
@@ -69,6 +69,7 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
     for function in &module.functions {
         let mut emitter = FunctionEmitter {
             module,
+            target,
             types: HashMap::new(),
             out: String::new(),
             temporary: 0,
@@ -121,7 +122,7 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
     }
 
     if let Some(handler) = module.interrupt_handler {
-        writeln!(out, "\ndefine avr_signalcc void @__vector_11() addrspace(1) {{\nentry:\n  call addrspace(1) void @helium_f{}()\n  ret void\n}}", handler.0).unwrap();
+        writeln!(out, "\ndefine avr_signalcc void @{}() addrspace(1) {{\nentry:\n  call addrspace(1) void @helium_f{}()\n  ret void\n}}", target.timer.vector, handler.0).unwrap();
     }
     writeln!(out, "\ndefine i16 @main() addrspace(1) {{\nentry:\n  call addrspace(1) void @helium_f{}()\n  ret i16 0\n}}", module.entry.0).unwrap();
     Ok(out)
@@ -129,6 +130,7 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
 
 struct FunctionEmitter<'a> {
     module: &'a Module,
+    target: &'static Microcontroller,
     types: HashMap<ValueId, Type>,
     out: String,
     temporary: usize,
@@ -150,18 +152,13 @@ impl FunctionEmitter<'_> {
         format!("{} %v{}", ty(self.types[&id]), id.index)
     }
 
-    fn address(&self, id: PinId) -> Result<(u16, u8), String> {
+    fn address(&self, id: PinId) -> Result<(&'static GpioPort, u8), String> {
         let pin = &self.module.pins[id.0];
-        let base = match pin.port.as_str() {
-            "B" => 0x23,
-            "C" => 0x26,
-            "D" => 0x29,
-            _ => return Err(format!("Unsupported GPIO port {}", pin.port)),
-        };
-        if pin.bit > 7 {
-            return Err("Invalid GPIO bit".into());
+        if !self.target.has_digital_pin(&pin.port, pin.bit) {
+            return Err(format!("Invalid GPIO pin {}.{}", pin.port, pin.bit));
         }
-        Ok((base, 1 << pin.bit))
+        let port = self.target.port(&pin.port).unwrap();
+        Ok((port, 1 << pin.bit))
     }
 
     fn read_register(&mut self, address: u16) -> String {
@@ -251,29 +248,40 @@ impl FunctionEmitter<'_> {
                     .as_ref()
                     .ok_or("missing timer configuration")?;
                 let compare = timer.ticks - 1;
-                let control = 8 | timer.clock_select();
+                let hardware = &self.target.timer;
+                let control = hardware.ctc_mode
+                    | hardware
+                        .clock_select(timer.prescaler)
+                        .ok_or("invalid timer prescaler")?;
                 // Stop and mask first. 16-bit registers are written high byte first.
-                self.write_register(0x81, "0");
-                self.write_register(0x6f, "0");
-                self.write_register(0x80, "0");
-                self.write_register(0x82, "0");
-                self.write_register(0x85, "0");
-                self.write_register(0x84, "0");
-                self.write_register(0x89, &(compare >> 8).to_string());
-                self.write_register(0x88, &(compare & 255).to_string());
-                self.write_register(0x36, "39"); // W1C: ICF1, OCF1B/A, TOV1.
-                self.write_register(0x6f, "2");
-                self.write_register(0x81, &control.to_string());
+                self.write_register(hardware.control_b, "0");
+                self.write_register(hardware.interrupt_mask, "0");
+                self.write_register(hardware.control_a, "0");
+                self.write_register(hardware.control_c, "0");
+                self.write_register(hardware.counter_high, "0");
+                self.write_register(hardware.counter_low, "0");
+                self.write_register(hardware.compare_high, &(compare >> 8).to_string());
+                self.write_register(hardware.compare_low, &(compare & 255).to_string());
+                self.write_register(hardware.interrupt_flags, &hardware.clear_flags.to_string()); // W1C.
+                self.write_register(
+                    hardware.interrupt_mask,
+                    &hardware.compare_interrupt.to_string(),
+                );
+                self.write_register(hardware.control_b, &control.to_string());
                 "call void asm sideeffect \"sei\", \"~{memory}\"()".into()
             }
             Op::InterruptSave => {
                 // Keep save + CLI in one assembly operation. The memory clobber
                 // orders memory accesses across the boundary, not pure arithmetic.
-                "call i8 asm sideeffect \"in $0, 63\\0Acli\", \"=r,~{memory}\"()".into()
+                format!(
+                    "call i8 asm sideeffect \"in $0, {}\\0Acli\", \"=r,~{{memory}}\"()",
+                    self.target.sreg_io
+                )
             }
             Op::InterruptRestore(value) => {
                 format!(
-                    "call void asm sideeffect \"out 63, $0\", \"r,~{{memory}}\"({})",
+                    "call void asm sideeffect \"out {}, $0\", \"r,~{{memory}}\"({})",
+                    self.target.sreg_io,
                     self.value(*value)
                 )
             }
@@ -306,27 +314,27 @@ impl FunctionEmitter<'_> {
                 global.0
             ),
             Op::ReadPin(pin) => {
-                let (address, mask) = self.address(*pin)?;
-                let read = self.read_register(address);
+                let (port, mask) = self.address(*pin)?;
+                let read = self.read_register(port.input);
                 let masked = self.temp(&format!("and i8 {read}, {mask}"));
                 format!("icmp ne i8 {masked}, 0")
             }
             Op::WritePin(pin, v) => {
-                let (base, mask) = self.address(*pin)?;
+                let (port, mask) = self.address(*pin)?;
                 // PORT is the output latch; PIN is the sampled physical input.
-                let old = self.read_register(base + 2);
+                let old = self.read_register(port.output);
                 let cleared = self.temp(&format!("and i8 {old}, {}", !mask));
                 let bit = self.temp(&format!("zext {} to i8", self.value(*v)));
                 let shifted = self.temp(&format!("mul i8 {bit}, {mask}"));
                 let new = self.temp(&format!("or i8 {cleared}, {shifted}"));
-                self.write_register(base + 2, &new);
+                self.write_register(port.output, &new);
                 return Ok(());
             }
             Op::SetPinMode(pin, mode) => {
-                let (base, mask) = self.address(*pin)?;
-                self.set_bit(base + 1, mask, *mode == PinMode::Output);
+                let (port, mask) = self.address(*pin)?;
+                self.set_bit(port.direction, mask, *mode == PinMode::Output);
                 if *mode != PinMode::Output {
-                    self.set_bit(base + 2, mask, *mode == PinMode::InputPullUp);
+                    self.set_bit(port.output, mask, *mode == PinMode::InputPullUp);
                 }
                 return Ok(());
             }

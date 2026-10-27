@@ -1,4 +1,5 @@
 //! Optional external toolchain. No tools are needed to emit textual LLVM IR.
+use super::microcontroller::ATMEGA328P;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -152,8 +153,8 @@ pub fn build(
         "opt",
         &[
             arg("-S"),
-            arg("-mtriple=avr-unknown-unknown"),
-            arg("-mcpu=atmega328p"),
+            arg(format!("-mtriple={}", ATMEGA328P.llvm_triple)),
+            arg(format!("-mcpu={}", ATMEGA328P.name)),
             arg(format!("-passes={}", optimization.pipeline())),
             arg(&raw),
             arg("-o"),
@@ -166,8 +167,8 @@ pub fn build(
         "-O2"
     };
     let machine_args = [
-        arg("-mtriple=avr-unknown-unknown"),
-        arg("-mcpu=atmega328p"),
+        arg(format!("-mtriple={}", ATMEGA328P.llvm_triple)),
+        arg(format!("-mcpu={}", ATMEGA328P.name)),
         arg(level),
         arg(&optimized),
     ];
@@ -185,7 +186,7 @@ pub fn build(
         run(
             "avr-gcc",
             &[
-                arg("-mmcu=atmega328p"),
+                arg(format!("-mmcu={}", ATMEGA328P.name)),
                 arg(&object),
                 arg("-Wl,--gc-sections"),
                 arg(format!(

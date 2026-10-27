@@ -117,6 +117,10 @@ USB bootloader uploads may need board-specific port and baud settings in AVRDUDE
 
 ## Development
 
+- [Development plan](docs/DEVELOPMENT_PLAN.md)
+- [Roadmap, technical debt and accepted limitations](docs/ROADMAP.md)
+- [Current target description and B2 validation](docs/TARGET.md)
+
 - [Support and semantic rules](docs/SUPPORT.md)
 - [Typed IR contract](docs/IR_V1.md)
 - [LLVM toolchain and historical measurements](docs/LLVM_PROTOTYPE.md)

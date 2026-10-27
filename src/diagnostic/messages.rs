@@ -1,10 +1,11 @@
 //! English presentation. Future locales match the same structured diagnostic kinds.
 use super::DiagnosticKind;
+use crate::backend::microcontroller::ATMEGA328P;
 
 impl crate::timer::TimerError {
     pub fn message(&self) -> String {
         match self {
-            Self::InvalidClock { hz } => format!("CPU frequency {hz} Hz is outside the supported ATmega328P range 1..=20000000 Hz; this does not configure the oscillator or fuses"),
+            Self::InvalidClock { hz } => format!("CPU frequency {hz} Hz is outside the supported ATmega328P range 1..={} Hz; this does not configure the oscillator or fuses", ATMEGA328P.max_cpu_hz),
             Self::ZeroPeriod => "Timer period must be greater than zero".into(),
             Self::MissingClock => "Timer declarations require an explicit --cpu-hz (for example --cpu-hz 16000000); the compiler does not change oscillator settings".into(),
             Self::Unsupported { hardware } => format!("Unsupported timer '{hardware}'; this target currently supports periodic Timer1 only"),
