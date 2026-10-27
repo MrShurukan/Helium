@@ -214,6 +214,7 @@ fn terminal_width_and_byte_offsets_are_separate() {
     use helium::frontend::utils::SourceLocation;
     let text = "界e\u{301}\tX";
     let span = SourceLocation {
+        file: 0,
         line_start: 1,
         line_end: 1,
         start_offset: 3,

@@ -14,6 +14,7 @@ use unicode_width::UnicodeWidthStr;
 /// Stable public identifiers, independent of wording and presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticCode {
+    Module,
     IsrBlocking,
     IrqRequirement,
     Device,
@@ -46,6 +47,7 @@ pub enum DiagnosticCode {
 impl DiagnosticCode {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Module => "E_MODULE",
             Self::IsrBlocking => "W_ISR_BLOCKING",
             Self::IrqRequirement => "E_IRQ_REQUIREMENT",
             Self::Device => "E_DEVICE",
@@ -95,6 +97,9 @@ pub enum SharedAccessReason {
 /// Structured facts about an error. Add translations at the presentation layer.
 #[derive(Debug, Clone)]
 pub enum DiagnosticKind {
+    Module {
+        detail: String,
+    },
     IsrBlocking {
         name: String,
         reason: crate::effects::Reason,
@@ -215,6 +220,7 @@ pub enum DiagnosticKind {
 impl DiagnosticKind {
     pub fn code(&self) -> DiagnosticCode {
         match self {
+            Self::Module { .. } => DiagnosticCode::Module,
             Self::IsrBlocking { .. } => DiagnosticCode::IsrBlocking,
             Self::IrqRequirement { .. } => DiagnosticCode::IrqRequirement,
             Self::Device { .. } => DiagnosticCode::Device,
@@ -288,6 +294,7 @@ pub struct Label {
 /// A diagnostic is data; rendering and process exit belong to the caller.
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
+    pub sources: Option<std::sync::Arc<source::SourceSet>>,
     pub kind: Box<DiagnosticKind>,
     pub location: Option<SourceLocation>,
     pub labels: Vec<Label>,
@@ -309,6 +316,7 @@ impl Diagnostic {
     }
     pub fn new(kind: DiagnosticKind, location: Option<SourceLocation>) -> Self {
         Self {
+            sources: None,
             kind: Box::new(kind),
             location,
             labels: Vec::new(),
@@ -333,6 +341,9 @@ impl Diagnostic {
     }
 
     pub fn render_in(&self, source: &source::SourceFile<'_>, options: RenderOptions) -> String {
+        if let Some(sources) = &self.sources {
+            return self.render_sources(sources, options);
+        }
         let position = self
             .location
             .map(|s| format!("{}:{}:{}", source.name, s.line_start, s.start_offset + 1))
@@ -340,7 +351,34 @@ impl Diagnostic {
         format!("--> {position}\n{}", self.render_with(source.text, options))
     }
 
+    pub fn render_sources(&self, sources: &source::SourceSet, options: RenderOptions) -> String {
+        let file = self.location.map_or(0, |s| s.file);
+        let Some(primary) = sources.get(file) else {
+            return self.to_string();
+        };
+        let mut diagnostic = self.clone();
+        diagnostic.sources = None;
+        diagnostic.labels.clear();
+        let mut output = diagnostic.render_in(&primary, options);
+        for label in &self.labels {
+            output.push_str(&format!("\n  = {}", label.kind.message()));
+            if let Some(file) = sources.get(label.location.file) {
+                output.push_str(&format!(
+                    "\n--> {}:{}:{}",
+                    file.name,
+                    label.location.line_start,
+                    label.location.start_offset + 1
+                ));
+                render_span(&mut output, file.text, label.location, options);
+            }
+        }
+        output
+    }
+
     pub fn render_with(&self, source: &str, options: RenderOptions) -> String {
+        if let Some(sources) = &self.sources {
+            return self.render_sources(sources, options);
+        }
         let label = if self.code() == DiagnosticCode::Internal {
             "internal compiler error"
         } else if self.severity() == Severity::Warning {

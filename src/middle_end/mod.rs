@@ -123,6 +123,8 @@ impl Analyzer {
             return Err(diagnostics);
         }
         Ok(AnalyzedProgram {
+            sources: Default::default(),
+            template_checks: vec![],
             warnings: diagnostics,
             effects,
             statements,
@@ -227,6 +229,12 @@ impl Analyzer {
         let span = statement.source_location;
 
         match &mut statement.statement_type {
+            S::Import { .. } | S::Extension { .. } => self.error(
+                DiagnosticKind::Module {
+                    detail: "Unresolved module declaration".into(),
+                },
+                span,
+            ),
             S::DeviceDeclaration(_) => {}
             S::TimerDeclaration(timer) => {
                 if let Some(id) = statement.symbol {

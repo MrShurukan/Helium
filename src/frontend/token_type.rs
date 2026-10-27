@@ -28,6 +28,9 @@ lazy_static! {
         m.insert("noInterrupt", KeywordType::NoInterrupt);
         m.insert("timer", KeywordType::Timer);
         m.insert("device", KeywordType::Device);
+        m.insert("pub", KeywordType::Pub);
+        m.insert("extension", KeywordType::Extension);
+        m.insert("import", KeywordType::Import);
         m.insert("interrupt", KeywordType::Interrupt);
         m.insert("for", KeywordType::For);
         m.insert("if", KeywordType::If);
@@ -86,6 +89,9 @@ pub enum KeywordType {
     NoInterrupt,
     Timer,
     Device,
+    Pub,
+    Extension,
+    Import,
     Interrupt,
     For,
     If,

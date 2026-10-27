@@ -6,6 +6,7 @@ pub mod frontend;
 pub mod intrinsics;
 pub mod ir;
 pub mod middle_end;
+pub mod modules;
 pub mod resources;
 pub mod semantic;
 mod support;
@@ -15,7 +16,6 @@ pub mod uart;
 
 use backend::microcontroller::{self, Microcontroller};
 use diagnostic::Diagnostic;
-use frontend::Parser;
 
 #[derive(Debug)]
 pub struct Compilation {
@@ -40,26 +40,7 @@ fn target_named(mcu: &str) -> Result<&'static Microcontroller, Vec<Diagnostic>> 
 
 /// Parse and type-check the language, including constructs not yet lowered to AVR.
 pub fn analyze(source: &str) -> Result<AnalyzedProgram, Vec<Diagnostic>> {
-    let statements = Parser::new(source).parse().map_err(|errors| {
-        use unicode_segmentation::UnicodeSegmentation;
-        let line = source.rsplit('\n').next().unwrap_or("");
-        let eof = frontend::utils::SourceLocation {
-            line_start: source.split('\n').count(),
-            line_end: source.split('\n').count(),
-            start_offset: line.graphemes(true).count(),
-            end_offset: line.graphemes(true).count(),
-        };
-        let mut diagnostics: Vec<Diagnostic> = errors.into_iter().map(Diagnostic::from).collect();
-        for error in &mut diagnostics {
-            if error.location.is_none() {
-                error.location = Some(eof);
-            }
-        }
-        diagnostics.dedup_by(|a, b| a.location == b.location && a.message() == b.message());
-        diagnostics
-    })?;
-
-    middle_end::Analyzer::new(source).analyze(statements)
+    modules::Project::memory("<input>", source).analyze()
 }
 
 /// Validate the executable language subset without starting external tools.
@@ -92,7 +73,7 @@ pub fn compile_llvm_with_target(
     options: ir::Options,
 ) -> Result<Compilation, Vec<Diagnostic>> {
     let statements = analyze(source)?;
-    let module = typed_ir_from_ast(&statements, target, options, true)?;
+    let module = project_ir(&statements, target, options, true)?;
     backend::llvm::emit(&module, false)
         .map(|output| Compilation {
             output,
@@ -123,7 +104,7 @@ pub fn compile_typed_ir_with_target(
     options: ir::Options,
 ) -> Result<ir::Module, Vec<Diagnostic>> {
     let statements = analyze(source)?;
-    typed_ir_from_ast(&statements, target, options, false)
+    project_ir(&statements, target, options, false)
 }
 
 fn typed_ir_from_ast(
@@ -144,6 +125,7 @@ fn typed_ir_from_ast(
     let mut reservations = resources::Reservations::default();
     support::validate_pins(statements, target, &mut reservations)?;
     support::validate_features(statements, machine)?;
+    support::validate_features(&program.template_checks, machine)?;
     let timer = timer::resolve(target, statements, options.cpu_hz, &mut reservations)?;
     let uarts = uart::resolve(target, statements, options.cpu_hz, &mut reservations)?;
     let mut module = ir::lower(program, target, timer, uarts).map_err(|error| vec![error])?;
@@ -165,4 +147,51 @@ fn typed_ir_from_ast(
             .map_err(|error| internal_error("optimization", error))?;
     }
     Ok(module)
+}
+
+/// Compile an explicit project/module graph with file-aware diagnostics.
+pub fn compile_project_llvm(
+    project: &mut modules::Project,
+    target: &'static Microcontroller,
+    options: ir::Options,
+) -> Result<Compilation, Vec<Diagnostic>> {
+    let program = project.analyze()?;
+    let module = project_ir(&program, target, options, true)?;
+    backend::llvm::emit(&module, false)
+        .map(|output| Compilation {
+            output,
+            warnings: module.warnings.clone(),
+        })
+        .map_err(|detail| {
+            vec![Diagnostic::new(
+                diagnostic::DiagnosticKind::InvalidIr {
+                    stage: "LLVM emission",
+                    detail,
+                },
+                None,
+            )]
+        })
+}
+pub fn compile_project_ir(
+    project: &mut modules::Project,
+    target: &'static Microcontroller,
+    options: ir::Options,
+) -> Result<ir::Module, Vec<Diagnostic>> {
+    let program = project.analyze()?;
+    project_ir(&program, target, options, false)
+}
+fn project_ir(
+    program: &AnalyzedProgram,
+    target: &'static Microcontroller,
+    options: ir::Options,
+    machine: bool,
+) -> Result<ir::Module, Vec<Diagnostic>> {
+    typed_ir_from_ast(program, target, options, machine).map_err(|mut errors| {
+        if program.sources.files.len() > 1 {
+            for d in &mut errors {
+                d.sources = Some(program.sources.clone());
+            }
+        }
+        errors
+    })
 }

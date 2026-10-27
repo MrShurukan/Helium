@@ -62,6 +62,7 @@ impl Scanner<'_> {
         tokens.push(Token {
             token_type: TokenType::Eof,
             source_location: SourceLocation {
+                file: 0,
                 line_start: self.position_info.line,
                 line_end: self.position_info.line,
                 start_offset: self.position_info.current_from_line_start,
@@ -469,6 +470,7 @@ impl Scanner<'_> {
         Token {
             token_type,
             source_location: SourceLocation {
+                file: 0,
                 line_start: position_info.line,
                 line_end: position_info.line,
                 start_offset: position_info.start_from_line_start,
@@ -507,6 +509,7 @@ impl ScannerError {
         ScannerError {
             error_type,
             location: SourceLocation {
+                file: 0,
                 line_start: position_info.start_line,
                 line_end: position_info.line,
                 start_offset: position_info.start_from_line_start,

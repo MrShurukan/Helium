@@ -77,6 +77,37 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
+fn project_imports_resolve_from_entry_directory_and_diagnostics_name_library_files() {
+    let fixture = Fixture::new();
+    let helper = fixture.source.parent().unwrap().join("helper.he");
+    fs::write(
+        &helper,
+        "import extension std::uart::UartText;\npub fn send(device d:UartTx){d.newline();}\n",
+    )
+    .unwrap();
+    fs::write(&fixture.source,"import app::helper; device debug=UART0{baud:38400,mode:TX,} timer t=Timer1{every:1ms,interrupt{app::helper::send(debug);}} loop{}").unwrap();
+    let output = fixture.run("check", &["--cpu-hz", "16000000"], false);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let message = stderr(&output);
+    assert_eq!(message.matches("warning[W_ISR_BLOCKING]").count(), 1);
+    assert!(message.contains("helper.he:2:"), "{message}");
+    assert!(message.contains("<std>/uart.he:4:"), "{message}");
+    fs::write(
+        &helper,
+        "pub fn send(device d:UartTx){\n d.write_byte(true);\n}",
+    )
+    .unwrap();
+    let output = fixture.run("check", &["--cpu-hz", "16000000"], false);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("helper.he:2:"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stderr(&output).contains("internal compiler error"));
+}
+
+#[test]
 fn warnings_preserve_success_and_are_emitted_once_on_stderr() {
     let fixture = Fixture::new();
     fs::write(&fixture.source,"device debug=UART0{baud:38400,mode:TX,} fn send(){debug.write_byte(65);} timer t=Timer1{every:1ms,interrupt{send();}} loop{}").unwrap();

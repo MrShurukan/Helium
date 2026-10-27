@@ -1,0 +1,6 @@
+// Byte-oriented conveniences. No hidden UART reservation or startup code.
+pub extension UartText for UartTx {
+    pub fn newline() {
+        self.write_byte(10);
+    }
+}

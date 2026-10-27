@@ -43,3 +43,25 @@ impl Intrinsic {
         }
     }
 }
+
+/// Semantic receiver kind, independent of the physical target peripheral.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceKind {
+    UartTx,
+}
+impl DeviceKind {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "UartTx" => Some(Self::UartTx),
+            _ => None,
+        }
+    }
+    pub fn methods(self) -> &'static [Intrinsic] {
+        match self {
+            Self::UartTx => &Intrinsic::ALL,
+        }
+    }
+    pub fn method(self, name: &str) -> Option<Intrinsic> {
+        self.methods().iter().copied().find(|m| m.name() == name)
+    }
+}

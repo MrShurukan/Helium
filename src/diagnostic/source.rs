@@ -54,10 +54,41 @@ impl super::Diagnostic {
     /// Bind a single-source compilation's primary and related locations to a file.
     /// Invalid locations are rejected rather than silently moved to other text.
     pub fn source_spans(&self, source: &SourceFile<'_>) -> Option<Vec<SourceSpan>> {
+        if let Some(sources) = &self.sources {
+            return self
+                .location
+                .into_iter()
+                .chain(self.labels.iter().map(|l| l.location))
+                .map(|s| sources.span(s))
+                .collect();
+        }
         self.location
             .into_iter()
             .chain(self.labels.iter().map(|l| l.location))
             .map(|location| source.span(location))
             .collect()
+    }
+}
+
+/// Owned, stable source identities for a complete module graph.
+#[derive(Debug, Clone, Default)]
+pub struct SourceSet {
+    pub files: Vec<SourceText>,
+}
+#[derive(Debug, Clone)]
+pub struct SourceText {
+    pub name: String,
+    pub text: String,
+}
+impl SourceSet {
+    pub fn get(&self, id: usize) -> Option<SourceFile<'_>> {
+        self.files.get(id).map(|s| SourceFile {
+            id: FileId(id),
+            name: &s.name,
+            text: &s.text,
+        })
+    }
+    pub fn span(&self, location: SourceLocation) -> Option<SourceSpan> {
+        self.get(location.file)?.span(location)
     }
 }

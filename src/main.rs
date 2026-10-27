@@ -1,8 +1,7 @@
 use helium::diagnostic::{Diagnostic, DiagnosticKind, RenderOptions};
 use helium::{
-    analyze,
     backend::{flash, llvm_toolchain},
-    compile_llvm_with_target, compile_typed_ir_with_target, ir,
+    compile_project_ir, compile_project_llvm, ir,
 };
 use std::io::IsTerminal;
 use std::{env, fs, path::PathBuf, process::ExitCode};
@@ -144,6 +143,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
         return Err("--verify-ir requires typed IR or AVR compilation".into());
     }
 
+    let mut project = helium::modules::Project::from_file(&input).map_err(|e| e.to_string())?;
     let source_name = input.display().to_string();
     let source_file = helium::diagnostic::source::SourceFile {
         id: helium::diagnostic::source::FileId(0),
@@ -169,7 +169,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
     }
     let level = llvm_toolchain::Optimization::parse(optimization.as_deref().unwrap_or("none"))?;
     if command == "check" {
-        let llvm = compile_llvm_with_target(&source, target, ir_options).map_err(diagnostics)?;
+        let llvm = compile_project_llvm(&mut project, target, ir_options).map_err(diagnostics)?;
         if !llvm.warnings.is_empty() {
             eprintln!("{}", diagnostics(llvm.warnings.clone()));
         }
@@ -182,7 +182,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
 
     let content = match emit {
         "ast" => {
-            let program = analyze(&source).map_err(diagnostics)?;
+            let program = project.analyze().map_err(diagnostics)?;
             if !program.warnings().is_empty() {
                 eprintln!("{}", diagnostics(program.warnings().to_vec()));
             }
@@ -190,7 +190,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
         }
         "ir" => {
             let module =
-                compile_typed_ir_with_target(&source, target, ir_options).map_err(diagnostics)?;
+                compile_project_ir(&mut project, target, ir_options).map_err(diagnostics)?;
             if !module.warnings.is_empty() {
                 eprintln!("{}", diagnostics(module.warnings.clone()));
             }
@@ -198,7 +198,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
         }
         _ => {
             let result =
-                compile_llvm_with_target(&source, target, ir_options).map_err(diagnostics)?;
+                compile_project_llvm(&mut project, target, ir_options).map_err(diagnostics)?;
             if !result.warnings.is_empty() {
                 eprintln!("{}", diagnostics(result.warnings));
             }

@@ -149,7 +149,9 @@ pub(crate) fn lower(
         .iter()
         .filter_map(|(id, symbol)| {
             if let crate::semantic::SymbolKind::Intrinsic { device, operation } = symbol.kind {
-                Some((id, (devices[&device], operation)))
+                devices
+                    .get(&device)
+                    .map(|device| (id, (*device, operation)))
             } else {
                 None
             }

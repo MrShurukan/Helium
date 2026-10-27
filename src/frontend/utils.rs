@@ -54,6 +54,9 @@ impl TokenIterator<'_> {
         }
         next
     }
+    pub fn lookahead(&self, offset: usize) -> Option<&Token> {
+        self.tokens.get(self.index + offset)
+    }
     pub fn position(&self) -> usize {
         self.index
     }
@@ -90,6 +93,7 @@ pub trait LocatableInSource {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct SourceLocation {
+    pub file: usize,
     pub line_start: usize,
     pub line_end: usize,
     /// Offset in grapheme count from the start of the first line
@@ -101,6 +105,7 @@ pub struct SourceLocation {
 impl SourceLocation {
     pub fn new_from_start_end(start: SourceLocation, end: SourceLocation) -> SourceLocation {
         SourceLocation {
+            file: start.file,
             line_start: start.line_start,
             line_end: end.line_end,
             start_offset: start.start_offset,
@@ -113,6 +118,7 @@ impl SourceLocation {
     /// The final token of a block (its closing brace).
     pub fn closing(self) -> Self {
         Self {
+            file: self.file,
             line_start: self.line_end,
             line_end: self.line_end,
             start_offset: self.end_offset.saturating_sub(1),

@@ -26,7 +26,7 @@ impl Analyzer {
                 continue;
             };
             statement.symbol = Some(id);
-            for operation in crate::intrinsics::Intrinsic::ALL {
+            for &operation in crate::intrinsics::DeviceKind::UartTx.methods() {
                 let name = format!("{}.{}", device.identifier, operation.name());
                 let parameters = operation.parameters();
                 let result = operation.result();

@@ -239,7 +239,11 @@ impl Program {
             resource,
             kind,
             protection,
-            location: location.name(&symbol.name),
+            location: if kind == AccessKind::UseDevice {
+                location
+            } else {
+                location.name(&symbol.name)
+            },
         });
     }
 

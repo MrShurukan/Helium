@@ -89,6 +89,8 @@ impl SymbolTable {
 /// identities together; consumers cannot mutate one independently of the other.
 #[derive(Debug)]
 pub struct AnalyzedProgram {
+    pub sources: std::sync::Arc<crate::diagnostic::source::SourceSet>,
+    pub(crate) template_checks: Vec<Statement>,
     pub(crate) warnings: Vec<crate::diagnostic::Diagnostic>,
     pub(crate) effects: std::collections::BTreeMap<BodyId, crate::effects::Summary>,
     pub(crate) statements: Vec<Statement>,

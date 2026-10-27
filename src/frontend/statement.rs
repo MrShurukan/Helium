@@ -9,7 +9,7 @@ use std::fmt::{Display, Formatter};
 
 /// Statements are the backbone of the entire language.
 /// Source file represents a list of statements when parsed
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::struct_field_names)]
 pub struct Statement {
     pub symbol: Option<crate::semantic::SymbolId>,
@@ -23,11 +23,22 @@ impl LocatableInSource for Statement {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StatementType {
+    Import {
+        path: Vec<String>,
+        extension: bool,
+    },
+    Extension {
+        public: bool,
+        identifier: String,
+        receiver: String,
+        methods: Vec<Statement>,
+    },
     DeviceDeclaration(DeviceDeclaration),
     TimerDeclaration(TimerDeclaration),
     FunctionDeclaration {
+        public: bool,
         no_interrupt: Option<SourceLocation>,
         identifier: String,
         name_location: SourceLocation,
@@ -115,7 +126,10 @@ impl Statement {
                 visit(to);
                 body.for_each_expression(visit);
             }
-            S::DefDeclaration(_) | S::DeviceDeclaration(_) => {}
+            S::DefDeclaration(_)
+            | S::DeviceDeclaration(_)
+            | S::Import { .. }
+            | S::Extension { .. } => {}
         }
     }
 
@@ -164,7 +178,10 @@ impl Statement {
                 visit(to);
                 body.for_each_expression_mut(visit);
             }
-            S::DefDeclaration(_) | S::DeviceDeclaration(_) => {}
+            S::DefDeclaration(_)
+            | S::DeviceDeclaration(_)
+            | S::Import { .. }
+            | S::Extension { .. } => {}
         }
     }
 
@@ -287,6 +304,7 @@ impl Statement {
         Self {
             symbol: None,
             source_location: SourceLocation {
+                file: condition.source_location.file,
                 line_start: condition.source_location.line_start,
                 line_end,
                 start_offset: condition.source_location.start_offset,
@@ -347,6 +365,17 @@ impl Display for Statement {
 impl Display for StatementType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            StatementType::Import { path, extension } => write!(
+                f,
+                "import {}{};",
+                if *extension { "extension " } else { "" },
+                path.join("::")
+            ),
+            StatementType::Extension {
+                identifier,
+                receiver,
+                ..
+            } => write!(f, "extension {identifier} for {receiver}"),
             Self::DeviceDeclaration(device) => write!(
                 f,
                 "device {} = {} {{ baud: {}, mode: TX, }}",
@@ -471,7 +500,7 @@ impl StatementType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TimerDeclaration {
     pub identifier: String,
     pub name_location: SourceLocation,
@@ -485,8 +514,9 @@ pub struct TimerDeclaration {
     pub handler_location: SourceLocation,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Parameter {
+    pub device_type: Option<String>,
     pub symbol: Option<crate::semantic::SymbolId>,
     pub type_location: SourceLocation,
     pub identifier: String,
@@ -494,7 +524,7 @@ pub struct Parameter {
     pub source_location: SourceLocation,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SingleDefDeclaration {
     pub symbol: Option<crate::semantic::SymbolId>,
     pub name_location: SourceLocation,
@@ -563,7 +593,7 @@ impl Display for DefDeclarationError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DeviceDeclaration {
     pub identifier: String,
     pub hardware: String,

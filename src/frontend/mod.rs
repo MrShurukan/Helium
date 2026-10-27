@@ -32,6 +32,7 @@ pub struct Parser<'a> {
     pub source: &'a str,
     /// List of errors that will be accumulated during the call of `parse`
     errors: Vec<ParserError>,
+    library: bool,
 }
 
 /// Performs a check on the peeked token. If it matched the `enum_types` pattern then it's consumed.
@@ -66,6 +67,7 @@ macro_rules! check_and_consume {
 }
 
 mod device;
+mod modules;
 mod timer;
 
 /// This macro is used to automate binary operator parsing.
@@ -154,6 +156,7 @@ impl Parser<'_> {
         Parser {
             source,
             errors: Vec::new(),
+            library: false,
         }
     }
 
@@ -162,6 +165,26 @@ impl Parser<'_> {
     /// passing it to back-end (which will convert it to assembly language).
     ///
     /// This is parsed according to rules in `grammar.txt` (root of the repo)
+    pub fn parse_file(
+        mut self,
+        file: usize,
+        library: bool,
+    ) -> Result<Vec<Statement>, Vec<ParserError>> {
+        self.library = library;
+        let mut tokens = self.scan().map_err(|mut errors| {
+            for error in &mut errors {
+                if let Some(s) = &mut error.location {
+                    s.file = file;
+                }
+            }
+            errors
+        })?;
+        for token in &mut tokens {
+            token.source_location.file = file;
+        }
+        self.read_top_level(&mut TokenIterator::new(&tokens))
+    }
+
     pub fn parse(self) -> Result<Vec<Statement>, Vec<ParserError>> {
         let tokens = self.scan()?;
         let mut tokens = TokenIterator::new(tokens.as_slice());
@@ -188,6 +211,9 @@ impl Parser<'_> {
 
             let result =
                 match token.token_type {
+                    TT::Keyword(KT::Import) => self.import_declaration(tokens),
+                    TT::Keyword(KT::Extension) => self.extension_declaration(tokens),
+                    TT::Keyword(KT::Pub) => self.public_declaration(tokens),
                     TT::Keyword(KT::Timer) => self.timer_declaration(tokens),
                     TT::Keyword(KT::Device) => self.device_declaration(tokens),
                     TT::Keyword(KT::Fn) => self.function_declaration(tokens),
@@ -290,7 +316,7 @@ impl Parser<'_> {
             }
         }
 
-        if !already_read_loop {
+        if !already_read_loop && !self.library {
             self.errors.push(ParserError::new_without_token(
                 ParserErrorType::MissingLoopDeclaration,
             ));
@@ -356,6 +382,11 @@ impl Parser<'_> {
             TT::Punctuation(PT::RightParen)
         ) {
             loop {
+                let device_parameter =
+                    matches!(self.peek(tokens)?.token_type, TT::Keyword(KT::Device));
+                if device_parameter {
+                    tokens.advance();
+                }
                 let name =
                     check_and_consume!(self, tokens, TT::Identifier(_), "Expected parameter name")
                         .clone();
@@ -368,16 +399,33 @@ impl Parser<'_> {
                     TT::Punctuation(PT::Colon),
                     "Expected ':' after parameter name"
                 );
-                let kind = check_and_consume!(self, tokens, TT::Type(_), "Expected parameter type")
-                    .clone();
-                let TT::Type(static_type) = kind.token_type else {
-                    unreachable!()
+                let (static_type, device_type, type_location) = if device_parameter {
+                    let kind =
+                        check_and_consume!(self, tokens, TT::Identifier(_), "Expected device kind")
+                            .clone();
+                    let TT::Identifier(kind_name) = kind.token_type else {
+                        unreachable!()
+                    };
+                    (
+                        static_type::StaticType::NoValue,
+                        Some(kind_name),
+                        kind.source_location,
+                    )
+                } else {
+                    let kind =
+                        check_and_consume!(self, tokens, TT::Type(_), "Expected parameter type")
+                            .clone();
+                    let TT::Type(kind_type) = kind.token_type else {
+                        unreachable!()
+                    };
+                    (*kind_type, None, kind.source_location)
                 };
                 parameters.push(Parameter {
+                    device_type,
                     symbol: None,
-                    type_location: kind.source_location,
+                    type_location,
                     identifier,
-                    static_type: *static_type,
+                    static_type,
                     source_location: name.source_location,
                 });
                 if !matches!(self.peek(tokens)?.token_type, TT::Punctuation(PT::Comma)) {
@@ -423,6 +471,7 @@ impl Parser<'_> {
                 block.source_location,
             ),
             statement_type: StatementType::FunctionDeclaration {
+                public: false,
                 no_interrupt: None,
                 name_location: name.source_location,
                 return_location,
@@ -1015,6 +1064,28 @@ impl Parser<'_> {
 
     fn call(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
         let mut callee = self.primary(tokens)?;
+        while matches!(
+            tokens.lookahead(0).map(|t| &t.token_type),
+            Some(TT::Punctuation(PT::Colon))
+        ) && matches!(
+            tokens.lookahead(1).map(|t| &t.token_type),
+            Some(TT::Punctuation(PT::Colon))
+        ) {
+            tokens.advance();
+            tokens.advance();
+            let part =
+                check_and_consume!(self, tokens, TT::Identifier(_), "Expected qualified name")
+                    .clone();
+            let (ExpressionType::Identifier(name), TT::Identifier(segment)) =
+                (&mut callee.expression_type, part.token_type)
+            else {
+                self.errors
+                    .push(self.missing_token_error("Expected named module or extension", tokens));
+                return None;
+            };
+            name.push_str("::");
+            name.push_str(&segment);
+        }
         if matches!(self.peek(tokens)?.token_type, TT::Punctuation(PT::Dot)) {
             tokens.advance();
             let method =

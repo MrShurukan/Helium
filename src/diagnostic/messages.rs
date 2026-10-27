@@ -26,6 +26,7 @@ impl DiagnosticKind {
     pub fn message(&self) -> String {
         match self {
             Self::Device { detail } => detail.clone(),
+            Self::Module { detail } => detail.clone(),
             Self::IrqRequirement { name, reason } => format!("Call to '{name}' requires enabled interrupts: {}", reason.message()),
             Self::IsrBlocking { name, reason } => format!("Call to '{name}' may block inside an interrupt handler: {}. Waiting can cause long delays in main code and other interrupt handlers", reason.message()),
             Self::InterruptContext { name } => {

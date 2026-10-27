@@ -82,6 +82,7 @@ fn missing_source_location_and_multiline_spans_render_without_panics() {
             feature: "test".into(),
         },
         Some(SourceLocation {
+            file: 0,
             line_start: 1,
             line_end: 2,
             start_offset: 1,
@@ -114,6 +115,7 @@ fn a_trailing_empty_line_can_carry_an_eof_marker() {
     let error = Diagnostic::new(
         DiagnosticKind::Parse(ParserErrorType::RanOutOfTokens),
         Some(SourceLocation {
+            file: 0,
             line_start: 2,
             line_end: 2,
             start_offset: 0,
