@@ -155,3 +155,20 @@ cargo run --locked -- timer-options --mcu atmega328p --cpu-hz 16000000 --timer T
 Try `cargo run -- check examples/uart-tx.he --mcu atmega328p --cpu-hz 16000000`.
 Blocking calls in an ISR are allowed with an unsuppressible `W_ISR_BLOCKING` warning;
 shared-access protection still applies. See [call contracts](docs/CALL_EFFECTS.md).
+
+## Extensions and the first std helper
+
+```text
+import extension std::uart::UartText;
+
+device debug = UART0 { baud: 38400, mode: TX, }
+setup { debug.newline(); debug.flush(); }
+loop {}
+```
+
+See [the runnable example](examples/uart-extensions.he) and
+[the module/extension contract](docs/STD_EXTENSIONS_PROPOSAL.md). Std source lives in
+`lib/std/` and is bundled with the compiler. Application modules resolve relative
+to the entry file, not the shell working directory. Static `device output: UartTx`
+parameters preserve hardware identity without runtime pointers. Strings, arrays
+and owning wrapper structs remain future work.

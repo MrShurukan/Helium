@@ -1,9 +1,18 @@
 // Current implemented syntax. Semantic and backend support are documented in docs/SUPPORT.md.
-program         -> topLevelDecl* ( setupDecl ( functionDecl | timerDecl | deviceDecl )* )? loopDecl ( functionDecl | timerDecl | deviceDecl )* EOF ;
-topLevelDecl    -> defDecl | varDecl | functionDecl | timerDecl | deviceDecl ;
-functionDecl    -> "noInterrupt"? "fn" IDENTIFIER "(" parameters? ")" ( ":" TYPE )? block ;
+program         -> topLevelDecl* ( setupDecl lateDecl* )? loopDecl lateDecl* EOF ;
+libraryModule   -> ( importDecl | functionDecl | extensionDecl )* EOF ;
+lateDecl        -> functionDecl | timerDecl | deviceDecl | importDecl | extensionDecl ;
+topLevelDecl    -> defDecl | varDecl | lateDecl ;
+functionDecl    -> "pub"? "noInterrupt"? "fn" IDENTIFIER "(" parameters? ")" ( ":" TYPE )? block ;
 parameters      -> parameter ( "," parameter )* ;
-parameter       -> IDENTIFIER ":" TYPE ;
+parameter       -> IDENTIFIER ":" TYPE | "device" IDENTIFIER ":" IDENTIFIER ;
+importDecl      -> "import" "extension"? qualifiedName ";" ;
+extensionDecl   -> "pub"? "extension" IDENTIFIER "for" IDENTIFIER "{" functionDecl* "}" ;
+qualifiedName   -> IDENTIFIER ( "::" IDENTIFIER )* ;
+// Import paths start with app:: or std::. Extension imports end with an extension name.
+// Ordinary module import enables qualified calls, not extension method lookup.
+// Static device parameters and extension receivers currently support UartTx only.
+// Extension methods have implicit static self. No state, nested extensions or device copies.
 declaration     -> varDecl | statement ;
 varDecl         -> "var" IDENTIFIER ( ":" TYPE ( "=" expression )? | "=" expression ) ";" ;
 defDecl         -> "def" ( alias | "{" alias+ "}" ) ;
@@ -31,14 +40,15 @@ comparison      -> term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
 term            -> factor ( ( "-" | "+" ) factor )* ;
 factor          -> unary ( ( "*" | "/" ) unary )* ;
 unary           -> ( "!" | "-" ) unary | call ;
-call            -> IDENTIFIER ( "." IDENTIFIER )? "(" arguments? ")" | primary ;
+call            -> qualifiedName "(" arguments? ")" | IDENTIFIER "." IDENTIFIER "(" arguments? ")" | primary ;
 arguments       -> expression ( "," expression )* ;
 primary         -> INTEGER | FLOAT | STRING | BOOLEAN | PINSTATE | PINMODE
                  | IDENTIFIER | "(" expression ")" ;
 
 // fun, alias and not remain reserved, but have no implemented productions.
 // Only named functions and methods of named devices can be called; no chained calls,
-// computed receivers or method values. Functions and devices are top-level only.
+// computed receivers or method values. Functions are top-level or extension members;
+// hardware devices are declared only at application top level, never in libraries.
 // No trailing commas in function parameters or call arguments.
 // Signature types: integers, bool, PinState. Omitted result type means no value.
 // return is legal only inside fn. Every value-returning function must have an explicit
@@ -61,3 +71,4 @@ modeField       -> "mode" ":" "TX" "," ;
 // Device declarations may precede setup/loop, occur between them, or follow loop.
 // Devices are static resources, not runtime values. Clock, baud, resource ownership
 // and call effects are semantic checks; see docs/UART_API_PROPOSAL.md and docs/CALL_EFFECTS.md.
+// Module visibility, specialization and std layout: docs/STD_EXTENSIONS_PROPOSAL.md.

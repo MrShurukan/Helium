@@ -1,10 +1,11 @@
 # Helium — handoff для ревью и следующей итерации
 
-Срез: **27 октября 2026**, после реализации UART TX и общих контрактов вызовов.
+Срез: **27 октября 2026**, после реализации статических параметров, extension/import и первой функции std.
 Репозиторий: `C:\Users\ilyuz\Documents\Review\Helium`.
 Ветка: `codex/reliable-compiler-base`. Ревью REVIEW_2026-10-27 принято.
 B3-review — `322cadc`, R02 — `dcfd151`, общий lifecycle — `3889b8c`.
 UART TX, контракты и warnings — `42e6b37`.
+Статические параметры, extension/import и std — `ff560d3`.
 Актуальные коммиты и незакоммиченные изменения всегда проверять через git status/log.
 Не сбрасывать изменения пользователя.
 
@@ -37,12 +38,28 @@ PD1 и UART0 резервируются, PD0 остаётся доступным
 итерации не прошивалась. AVR8js callback сообщает запись UDR, а не доставку байта;
 модель не воспроизводит полный двойной буфер. IR-интерпретатор UART не исполняет.
 
-Ближайший согласованный следующий этап — передаваемый статический доступ к устройству
-для reusable helper. Синтаксис такого параметра ещё нужно согласовать. Пока обычный
-helper может использовать конкретное device-имя, но это не универсальная библиотека.
-RX, очереди, interrupt-driven UART, runtime reconfiguration, std/module, форматтер,
-интерполяция и software UART остаются отдельными этапами. Наличие общей модели не
-означает поддержку нескольких MCU, линейного владения, borrow checking или generics.
+Статические UartTx-параметры и именованные расширения с явным импортом реализованы.
+`import extension std::uart::UartText;` открывает `debug.newline()`. Обычный import
+открывает только квалифицированные имена. Реестр DeviceKind::methods используется
+при регистрации встроенного API и запрещает его переопределение расширениями.
+Исходник std — lib/std/uart.he; при сборке компилятора он включается в бинарник,
+поэтому установка не зависит от cwd. App-модули читаются относительно входного файла.
+Код загрузки — modules.rs, разрешение имён/специализация — modules/expand.rs.
+Итоговый gate: 172 теста в debug и 172 в release, fmt/Clippy, включая AVR8js.
+UART-extension пример при size: 264 байта Flash, 1 байт SRAM; HEX совпал побайтно
+с эквивалентными прямыми UART-вызовами. Это измерение примера, не общий zero-cost контракт.
+SourceLocation теперь хранит file ID; ошибки и labels показывают свои исходные файлы.
+Неиспользованные generic-тела также проверяются; абстрактные проверочные экземпляры
+не получают hardware resources и не попадают в IR/машинный код. Детали и пределы —
+[STD_EXTENSIONS_PROPOSAL.md](STD_EXTENSIONS_PROPOSAL.md).
+
+Следующий шаг — обсуждение Flash-строк и общих с массивами правил: длина, индексация,
+bounds checks, передача без копирования, Flash/SRAM и UTF-8. Строки, массивы, пользовательские
+структуры, общий writer-interface и интерполяция пока не реализованы.
+Для будущих hardware-wrapper структур принято исключительное владение: ресурс
+передаётся владельцу, исходное имя недоступно, копирование запрещено (F15). Обычный
+вызов статического helper не передаёт владение. Borrow checker пока не вводится.
+RX/очереди, interrupt-driven UART, runtime reconfiguration и software UART отдельно.
 
 ### Контекст, который нужно сохранить
 
@@ -67,8 +84,9 @@ RX, очереди, interrupt-driven UART, runtime reconfiguration, std/module, 
    вывод эффектов и причины diagnostics.
 2. frontend/device.rs, uart.rs, resources.rs: синтаксис, baud и резервирование.
 3. ir/lower.rs, ir/verify.rs, backend/llvm.rs: lifecycle, intrinsics и реализация.
-4. tests/uart.rs, tests/cli.rs, unit tests effects.rs, tools/simulate-avr.cjs.
-5. CALL_EFFECTS.md, UART_API_PROPOSAL.md, SUPPORT.md и статусы ROADMAP/DEVELOPMENT_PLAN.
+4. modules.rs, modules/expand.rs, frontend/modules.rs, lib/std/uart.he; tests/extensions.rs.
+5. tests/uart.rs, tests/cli.rs, unit tests effects.rs, tools/simulate-avr.cjs.
+6. CALL_EFFECTS.md, UART_API_PROPOSAL.md, STD_EXTENSIONS_PROPOSAL.md, SUPPORT.md и статусы ROADMAP/DEVELOPMENT_PLAN.
 
 ## 1. Контекст и статус
 
@@ -327,7 +345,8 @@ cargo run --locked -- timer-options --mcu atmega328p --cpu-hz 16000000 --timer T
 - Расширение машинных скаляров, затем структуры, фиксированные массивы, ссылки/slices,
   передаваемые Pin и PinMode. Делать меньшими проверяемыми итерациями, не одним большим патчем.
 - Полная модель владения/заимствований, nullable/Option, хранение ссылок и lifetime,
-  resource ownership. Решение не принято: нужна цена сложности на реальных MCU-сценариях.
+  resource ownership. Для будущих hardware-wrapper принято исключительное владение (F15);
+  общий borrow checker пока не спроектирован.
 - Для будущего first-class Pin выбрана направленность на явное `.level`, чтобы разделить
   значение-пин и его уровень. Варианты `#pin`, `read`/`<-` отвергнуты в обсуждении.
   **Сейчас .level и first-class Pin ещё не реализованы**; действует старый GPIO-синтаксис.
@@ -337,18 +356,19 @@ cargo run --locked -- timer-options --mcu atmega328p --cpu-hz 16000000 --timer T
 - Строки: интерполяция обязательна по F14, синтаксис/срок отдельно. Рассмотреть
   неизменяемые литералы во Flash и потоковый вывод без полной временной строки.
   Ограниченные буферы, длины, UTF-8 и интерфейс форматтера ещё не спроектированы.
-- Heap/allocator/GC, C FFI/публичный ABI, module/import/package system, std и драйверы.
+- Heap/allocator/GC, C FFI/публичный ABI, package manager и развитые драйверы.
+  Минимальные module/import и std.newline уже реализованы.
   Сейчас предпочтение библиотекам на Helium; возможный FFI учитывать архитектурно,
   не реализовывать заранее ради гипотетической совместимости.
-- UART RX/очереди и передаваемый статический доступ к устройству ещё не реализованы.
+- UART RX/очереди ещё не реализованы; статический доступ к UartTx уже поддержан.
   LCD, Dallas/1-Wire, энкодер, другие таймеры, PWM, software UART и interrupt-safe
   driver API ещё не реализованы; не начинать весь список одной итерацией.
 - Русские/английские диагностики с выбором языка и LSP/VS Code. Сохранять структурированные
   ошибки и точные spans уже сейчас, но самого сервера пока нет.
 - Автоматическая отложенная инициализация (defer/lateinit), рекурсия, расширение for/division.
 
-Порядок продолжения: согласовать статический параметр устройства → reusable helper →
-следующие библиотечные примеры; TX и общий механизм warnings уже реализованы.
+Порядок продолжения: обсудить Flash-строки и массивы → реализовать согласованный минимум →
+библиотечный вывод текста; статические helpers, extension/import и std.newline уже реализованы.
 Новая унификация может потребовать пересмотра timer; пользователь прямо просит оценить
 этот вариант. Общий GPIO/Timer1 smoke test уже был выполнен в B2a.
 

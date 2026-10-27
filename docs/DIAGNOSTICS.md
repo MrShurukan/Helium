@@ -13,7 +13,7 @@ AVRA-обвязка и неиспользуемые assembly includes удале
 представления (`diagnostic/messages.rs`), а не извлекаются из готового консольного текста.
 
 AST сохраняет отдельные позиции имён, аннотаций параметров/результата/переменных, операторов,
-физических пинов и режимов. `SourceLocation` пока использует строки с единицы и столбцы в
+физических пинов и режимов. `SourceLocation` хранит идентификатор файла, строки с единицы и столбцы в
 графемах с нуля; диапазоны полуоткрытые. Это внутренние координаты lexer, не координаты LSP.
 
 `SourceFile { id: FileId, name, text }` проверяет и переводит их в `SourceSpan { file, bytes }`.
@@ -26,8 +26,9 @@ CLI использует `render_in`, показывает файл/строку
 от исходных координат. Длинные многострочные диапазоны сокращаются посередине.
 
 LSP ещё не реализован. Будущий адаптер преобразует байтовые позиции в согласованную с
-редактором кодировку. Компиляция пока однофайловая: импорт модулей, несколько файлов внутри
-одной диагностики и хранение версий документов должны быть добавлены вместе с модулями/LSP.
+редактором кодировку. Импорт модулей и несколько файлов в одной диагностике поддержаны:
+Project.sources хранит SourceSet, Diagnostic прикрепляет его для многофайлового render_in,
+render_with и source_spans. Версии редакторских документов остаются задачей LSP.
 Автоматических исправлений нет: компилятор не вставляет произвольный return и не переносит
 инициализацию в setup. Русская локализация также остаётся отдельной работой; parser/scanner
 пока сохраняют некоторые английские подробности непосредственно в своих вариантах ошибок.
@@ -101,3 +102,8 @@ build successful. No suppression flag, attribute or warnings-as-errors mode exis
 `E_IRQ_REQUIREMENT` is an error when progress needs interrupts but the context masks
 them. `E_DEVICE` covers UART configuration/ownership errors. This is not an exhaustive
 analyzer of loops or execution time. See [CALL_EFFECTS.md](CALL_EFFECTS.md).
+
+`E_MODULE` covers module loading/cycles, visibility, extension ambiguity, built-in
+method collisions and invalid static device bindings. Related labels retain their
+own file identities through specialization. Imported unresolved names use their
+original source spelling/ranges, not generated specialization names.

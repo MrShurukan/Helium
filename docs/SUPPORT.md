@@ -23,7 +23,8 @@ AVRA, the old linear IR and hand-written AVR assembly generation have been remov
 | `noInterrupt` blocks and function requirements | Checked calls; nested scopes and early returns | Yes | Yes |
 | Timer1 CTC, embedded ISR, shared-access checks | Yes; explicit CPU clock | Verified IR; interpreter has no asynchronous dispatch | Yes |
 | UART0 TX polling, 8N1 | Typed methods, resources, ISR warnings | Verified IR; interpreter reports unsupported execution | Yes |
-| Modules, heap, other timers, other peripheral drivers | Not implemented | — | — |
+| Static UartTx parameters, named extensions, app/std modules | File-local imports, visibility, receiver registry | Specialized functions; no runtime device arguments | Yes |
+| Heap, user structs/traits, other timers, other peripheral drivers | Not implemented | — | — |
 
 `analyze` parses, type-checks and returns one `AnalyzedProgram` with resolved symbol
 identities and a shared-access graph; use `statements()` to inspect its AST.
@@ -71,3 +72,9 @@ See [atomic GPIO contract and validation](ATOMIC_GPIO.md).
 `check[_with_options]` returns warnings on success. AnalyzedProgram and Module also
 retain source warnings. Warnings do not fail compilation and have no suppression
 option yet. See [CALL_EFFECTS.md](CALL_EFFECTS.md) and [UART_API_PROPOSAL.md](UART_API_PROPOSAL.md).
+
+Use `modules::Project` for explicit app/std roots or in-memory module texts, then
+`compile_project_ir` / `compile_project_llvm`. In-memory `analyze` and `compile_llvm`
+support bundled std but do not implicitly read app modules from cwd. See
+[extensions and modules](STD_EXTENSIONS_PROPOSAL.md). UART execution still requires
+the machine simulator; the IR interpreter does not emulate the peripheral.

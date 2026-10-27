@@ -1,0 +1,18 @@
+import extension std::uart::UartText;
+
+device debug = UART0 {
+    baud: 38400,
+    mode: TX,
+}
+
+fn write_marker(device output: UartTx, marker: u8) {
+    output.write_byte(marker);
+}
+
+setup {
+    write_marker(debug, 65);
+    debug.newline();
+    debug.flush();
+}
+
+loop {}
