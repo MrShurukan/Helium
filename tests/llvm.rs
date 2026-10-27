@@ -185,7 +185,14 @@ fn compare_machine(
             .collect::<Vec<_>>()
             .join("\n");
     }
-    let build = llvm_toolchain::build(&text, &destination, "hex", level).unwrap();
+    let build = llvm_toolchain::build(
+        &text,
+        &helium::backend::microcontroller::ATMEGA328P,
+        &destination,
+        "hex",
+        level,
+    )
+    .unwrap();
     let memory = build.memory.as_ref().expect("linked builds report memory");
     let sizes = build
         .sections

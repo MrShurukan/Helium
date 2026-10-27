@@ -1,5 +1,5 @@
 //! Exact Timer1 CTC planning. Floating point is used only to present the report.
-use crate::backend::microcontroller::ATMEGA328P;
+use crate::backend::microcontroller::{Microcontroller, Timer1};
 use crate::diagnostic::{Diagnostic, DiagnosticKind, LabelKind};
 use crate::frontend::{
     statement::{Statement, StatementType},
@@ -26,6 +26,7 @@ impl ToleranceDirection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimerConfig {
+    pub hardware: &'static Timer1,
     pub cpu_hz: u32,
     pub requested_ns: u64,
     pub tolerance_ns: u64,
@@ -38,13 +39,18 @@ pub struct TimerConfig {
 pub enum TimerError {
     InvalidClock {
         hz: u32,
+        target: &'static str,
+        maximum: u32,
     },
     ZeroPeriod,
     MissingClock,
     Unsupported {
         hardware: String,
+        supported: &'static str,
     },
-    AlreadyReserved,
+    AlreadyReserved {
+        hardware: &'static str,
+    },
     NotValue {
         name: String,
     },
@@ -52,8 +58,8 @@ pub enum TimerError {
         cpu_hz: u32,
         requested_ns: u64,
         tolerance_ns: u64,
-        shorter: Option<TimerConfig>,
-        longer: Option<TimerConfig>,
+        shorter: Option<Box<TimerConfig>>,
+        longer: Option<Box<TimerConfig>>,
         direction: ToleranceDirection,
         minimum_tolerance_ns: Option<u128>,
     },
@@ -73,8 +79,7 @@ impl TimerConfig {
     }
 
     pub fn clock_select(&self) -> u8 {
-        ATMEGA328P
-            .timer
+        self.hardware
             .clock_select(self.prescaler)
             .expect("TimerConfig must contain a supported prescaler")
     }
@@ -95,12 +100,12 @@ impl TimerConfig {
         let error = delta as f64 / f64::from(self.cpu_hz) / 1e9;
         format!(
             "{}: CPU={} Hz, period={actual:.12}s, error={:+.6}ns ({:+.6}%), prescaler={}, {}={}, tolerance={}{}ns",
-            ATMEGA328P.timer.name,
+            self.hardware.name,
             self.cpu_hz,
             error * 1e9,
             error * 1e11 / self.requested_ns as f64,
             self.prescaler,
-            ATMEGA328P.timer.compare_name,
+            self.hardware.compare_name,
             self.ticks - 1,
             self.direction.sign(),
             self.tolerance_ns
@@ -129,31 +134,40 @@ pub fn parse_duration(text: &str) -> Result<u64, String> {
         .ok_or_else(|| "Invalid duration unit or duration overflow; use integer ns/us/ms/s".into())
 }
 
-pub fn validate_clock(cpu_hz: u32) -> Result<(), TimerError> {
-    if cpu_hz == 0 || cpu_hz > ATMEGA328P.max_cpu_hz {
-        return Err(TimerError::InvalidClock { hz: cpu_hz });
+pub fn validate_clock(target: &Microcontroller, cpu_hz: u32) -> Result<(), TimerError> {
+    if cpu_hz == 0 || cpu_hz > target.max_cpu_hz {
+        return Err(TimerError::InvalidClock {
+            hz: cpu_hz,
+            target: target.name,
+            maximum: target.max_cpu_hz,
+        });
     }
     Ok(())
 }
 
-pub fn candidates(cpu_hz: u32, requested_ns: u64) -> Result<Vec<TimerConfig>, TimerError> {
-    validate_clock(cpu_hz)?;
+pub fn candidates(
+    target: &'static Microcontroller,
+    cpu_hz: u32,
+    requested_ns: u64,
+) -> Result<Vec<TimerConfig>, TimerError> {
+    validate_clock(target, cpu_hz)?;
     if requested_ns == 0 {
         return Err(TimerError::ZeroPeriod);
     }
     let desired = u128::from(requested_ns) * u128::from(cpu_hz);
     let mut result = Vec::new();
-    for &(prescaler, _) in ATMEGA328P.timer.prescalers {
+    for &(prescaler, _) in target.timer.prescalers {
         let quantum = u128::from(prescaler) * 1_000_000_000;
         let lower = desired / quantum;
         for ticks in [lower, lower + 1] {
             let config = TimerConfig {
+                hardware: &target.timer,
                 cpu_hz,
                 requested_ns,
                 tolerance_ns: 0,
                 direction: ToleranceDirection::Either,
                 prescaler,
-                ticks: ticks.clamp(1, u128::from(ATMEGA328P.timer.max_ticks)) as u32,
+                ticks: ticks.clamp(1, u128::from(target.timer.max_ticks)) as u32,
             };
             if !result.contains(&config) {
                 result.push(config);
@@ -164,8 +178,14 @@ pub fn candidates(cpu_hz: u32, requested_ns: u64) -> Result<Vec<TimerConfig>, Ti
     Ok(result)
 }
 
-pub fn plan(cpu_hz: u32, requested_ns: u64, tolerance_ns: u64) -> Result<TimerConfig, TimerError> {
+pub fn plan(
+    target: &'static Microcontroller,
+    cpu_hz: u32,
+    requested_ns: u64,
+    tolerance_ns: u64,
+) -> Result<TimerConfig, TimerError> {
     plan_with_direction(
+        target,
         cpu_hz,
         requested_ns,
         tolerance_ns,
@@ -174,12 +194,13 @@ pub fn plan(cpu_hz: u32, requested_ns: u64, tolerance_ns: u64) -> Result<TimerCo
 }
 
 pub fn plan_with_direction(
+    target: &'static Microcontroller,
     cpu_hz: u32,
     requested_ns: u64,
     tolerance_ns: u64,
     direction: ToleranceDirection,
 ) -> Result<TimerConfig, TimerError> {
-    let options = candidates(cpu_hz, requested_ns)?;
+    let options = candidates(target, cpu_hz, requested_ns)?;
     let desired = u128::from(requested_ns) * u128::from(cpu_hz);
     let best = options.iter().find(|c| match direction {
         ToleranceDirection::Either => true,
@@ -202,13 +223,14 @@ pub fn plan_with_direction(
         requested_ns,
         tolerance_ns,
         direction,
-        shorter: lower.cloned(),
-        longer: upper.cloned(),
+        shorter: lower.cloned().map(Box::new),
+        longer: upper.cloned().map(Box::new),
         minimum_tolerance_ns: best.map(|c| c.error().div_ceil(u128::from(cpu_hz))),
     })
 }
 
 pub(crate) fn resolve(
+    target: &'static Microcontroller,
     statements: &[Statement],
     cpu_hz: Option<u32>,
 ) -> Result<Option<TimerConfig>, Vec<Diagnostic>> {
@@ -225,10 +247,11 @@ pub(crate) fn resolve(
                 Some(location),
             ))
         };
-        if timer.hardware != ATMEGA328P.timer.name {
+        if timer.hardware != target.timer.name {
             fail(
                 TimerError::Unsupported {
                     hardware: timer.hardware.clone(),
+                    supported: target.timer.name,
                 },
                 timer.hardware_location,
             );
@@ -238,7 +261,9 @@ pub(crate) fn resolve(
             errors.push(
                 Diagnostic::new(
                     DiagnosticKind::Timer {
-                        error: TimerError::AlreadyReserved,
+                        error: TimerError::AlreadyReserved {
+                            hardware: target.timer.name,
+                        },
                     },
                     Some(timer.hardware_location),
                 )
@@ -252,6 +277,7 @@ pub(crate) fn resolve(
             continue;
         };
         match plan_with_direction(
+            target,
             cpu_hz,
             timer.every_ns,
             timer.tolerance_ns,

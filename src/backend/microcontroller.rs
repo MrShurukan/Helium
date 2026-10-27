@@ -1,6 +1,6 @@
 //! The hardware subset currently supported by Helium. Data-space addresses are
 //! explicit; SREG uses an I/O-space address for IN/OUT. See docs/TARGET.md.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Microcontroller {
     pub name: &'static str,
     pub avr_dude_name: &'static str,
@@ -14,7 +14,7 @@ pub struct Microcontroller {
     pub timer: Timer1,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GpioPort {
     pub name: &'static str,
     pub digital_mask: u8,
@@ -23,7 +23,7 @@ pub struct GpioPort {
     pub output: u16,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Timer1 {
     pub name: &'static str,
     pub compare_name: &'static str,

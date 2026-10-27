@@ -302,7 +302,7 @@ pub struct Module {
     pub timer: Option<crate::timer::TimerConfig>,
     pub interrupt_handler: Option<FunctionId>,
     pub interrupt_globals: std::collections::HashSet<GlobalId>,
-    pub target: String,
+    pub target: &'static crate::backend::microcontroller::Microcontroller,
     pub globals: Vec<Storage>,
     pub pins: Vec<Pin>,
     pub functions: Vec<Function>,
@@ -333,7 +333,7 @@ impl Module {
     pub fn dump(&self) -> String {
         let mut text = format!(
             "helium-ir v1 target={} entry=f{}\n",
-            self.target, self.entry.0
+            self.target.name, self.entry.0
         );
         if let Some(timer) = &self.timer {
             writeln!(

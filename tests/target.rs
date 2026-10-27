@@ -6,6 +6,63 @@ use helium::{
 };
 
 #[test]
+fn selected_descriptor_controls_planning_validation_and_emission() {
+    // A test-only variation, not another supported MCU or a public target file.
+    let mut descriptor = ATMEGA328P.clone();
+    descriptor.name = "test-description";
+    descriptor.max_cpu_hz = 8_000_000;
+    descriptor.timer.name = "TestTimer";
+    descriptor.timer.max_ticks = 256;
+    descriptor.timer.compare_name = "TEST_COMPARE";
+    descriptor.timer.vector = "__vector_test";
+    descriptor.timer.prescalers = &[(1, 1)];
+    let descriptor = Box::leak(Box::new(descriptor));
+    let error = timer::validate_clock(descriptor, 16_000_000)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("test-description"));
+    assert!(error.contains("8000000"));
+    assert!(timer::plan(descriptor, 1_000_000, 257_000, 0).is_err());
+    let source = "timer clock=TestTimer {every: 256us, interrupt {}} loop {}";
+    let module = helium::compile_typed_ir_with_target(
+        source,
+        descriptor,
+        Options {
+            cpu_hz: Some(1_000_000),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    assert!(std::ptr::eq(module.target, descriptor));
+    assert!(module
+        .timer
+        .as_ref()
+        .unwrap()
+        .report()
+        .contains("TEST_COMPARE=255"));
+    assert!(llvm::emit(&module, false)
+        .unwrap()
+        .contains("@__vector_test()"));
+    let mut wrong = module;
+    wrong.target = &ATMEGA328P;
+    assert!(ir::verify::verify(&wrong).is_err());
+    assert!(llvm::emit(&wrong, false).is_err());
+}
+
+#[test]
+#[ignore = "requires LLVM AVR and AVR GNU toolchain"]
+fn toolchain_memory_report_uses_the_supplied_capacity() {
+    use helium::backend::llvm_toolchain::{build, Optimization};
+    let text = compile_llvm("loop {}", "atmega328p", Options::default()).unwrap();
+    let mut descriptor = ATMEGA328P.clone();
+    descriptor.flash_bytes = 1;
+    let output =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("build/target-capacity/rejected.hex");
+    let error = build(&text, &descriptor, &output, "hex", Optimization::Size).unwrap_err();
+    assert!(error.contains("capacity exceeded"), "{error}");
+}
+
+#[test]
 fn source_verifier_and_emitter_agree_on_every_gpio_boundary() {
     for port in ["A", "B", "C", "D", "E"] {
         for bit in 0..=8 {
@@ -121,8 +178,18 @@ fn timer_limits_encodings_and_register_write_order_remain_exact() {
         assert!(ir::verify::verify(&broken).is_err());
         assert!(llvm::emit(&broken, false).is_err());
     }
-    assert!(timer::plan(1_000_000, 67_108_864_001, 0).is_err());
-    assert!(timer::validate_clock(20_000_000).is_ok());
-    assert!(timer::validate_clock(20_000_001).is_err());
-    assert!(timer::validate_clock(0).is_err());
+    assert!(timer::plan(
+        &helium::backend::microcontroller::ATMEGA328P,
+        1_000_000,
+        67_108_864_001,
+        0
+    )
+    .is_err());
+    assert!(
+        timer::validate_clock(&helium::backend::microcontroller::ATMEGA328P, 20_000_000).is_ok()
+    );
+    assert!(
+        timer::validate_clock(&helium::backend::microcontroller::ATMEGA328P, 20_000_001).is_err()
+    );
+    assert!(timer::validate_clock(&helium::backend::microcontroller::ATMEGA328P, 0).is_err());
 }

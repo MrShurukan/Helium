@@ -19,20 +19,71 @@ const TIMER: &str = "timer clock=Timer1 { every: 1s, interrupt { seconds=seconds
 
 #[test]
 fn exact_timer_selection_and_tolerance_use_integer_arithmetic() {
-    let c = timer::plan(16_000_000, 1_000_000_000, 0).unwrap();
+    let c = timer::plan(
+        &helium::backend::microcontroller::ATMEGA328P,
+        16_000_000,
+        1_000_000_000,
+        0,
+    )
+    .unwrap();
     assert_eq!((c.prescaler, c.ticks, c.cycles()), (256, 62500, 16_000_000));
-    assert_eq!(timer::plan(16_000_000, 1_000_000, 0).unwrap().prescaler, 1);
-    assert!(timer::plan(16_000_000, 100, 24).is_err());
-    assert_eq!(timer::plan(16_000_000, 100, 25).unwrap().ticks, 2);
-    assert!(timer::plan(16_000_000, 0, 999).is_err());
-    assert!(timer::plan(0, 1000, 0).is_err());
-    assert!(timer::plan(16_000_000, u64::MAX, 0).is_err());
+    assert_eq!(
+        timer::plan(
+            &helium::backend::microcontroller::ATMEGA328P,
+            16_000_000,
+            1_000_000,
+            0
+        )
+        .unwrap()
+        .prescaler,
+        1
+    );
+    assert!(timer::plan(
+        &helium::backend::microcontroller::ATMEGA328P,
+        16_000_000,
+        100,
+        24
+    )
+    .is_err());
+    assert_eq!(
+        timer::plan(
+            &helium::backend::microcontroller::ATMEGA328P,
+            16_000_000,
+            100,
+            25
+        )
+        .unwrap()
+        .ticks,
+        2
+    );
+    assert!(timer::plan(
+        &helium::backend::microcontroller::ATMEGA328P,
+        16_000_000,
+        0,
+        999
+    )
+    .is_err());
+    assert!(timer::plan(&helium::backend::microcontroller::ATMEGA328P, 0, 1000, 0).is_err());
+    assert!(timer::plan(
+        &helium::backend::microcontroller::ATMEGA328P,
+        16_000_000,
+        u64::MAX,
+        0
+    )
+    .is_err());
     assert!(timer::parse_duration("18446744073709551615s").is_err());
     assert_eq!(timer::parse_duration("500ms").unwrap(), 500_000_000);
     for invalid in ["1", "1.5s", "-1s", "1minute", "s"] {
         assert!(timer::parse_duration(invalid).is_err());
     }
-    let error = timer::plan(16_000_000, 100, 0).unwrap_err().to_string();
+    let error = timer::plan(
+        &helium::backend::microcontroller::ATMEGA328P,
+        16_000_000,
+        100,
+        0,
+    )
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("Nearest shorter"));
     assert!(error.contains("Nearest longer"));
     assert!(error.contains("at least 25ns"));
@@ -298,7 +349,14 @@ fn timer_interrupts_execute_and_resume_main_at_all_optimization_levels() {
             );
             let destination = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join(format!("build/timer-tests/{level:?}-{optimize}.hex"));
-            let build = llvm_toolchain::build(&text, &destination, "hex", level).unwrap();
+            let build = llvm_toolchain::build(
+                &text,
+                &helium::backend::microcontroller::ATMEGA328P,
+                &destination,
+                "hex",
+                level,
+            )
+            .unwrap();
             let simulation =
                 Command::new(std::env::var_os("HELIUM_NODE").unwrap_or_else(|| "node".into()))
                     .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/simulate-avr.cjs"))
@@ -382,7 +440,14 @@ fn long_critical_section_defers_and_coalesces_timer_events() {
     let module = compile(source);
     let text = llvm::emit(&module, true).unwrap();
     let destination = Path::new(env!("CARGO_MANIFEST_DIR")).join("build/timer-tests/coalesced.hex");
-    let build = llvm_toolchain::build(&text, &destination, "hex", Optimization::Size).unwrap();
+    let build = llvm_toolchain::build(
+        &text,
+        &helium::backend::microcontroller::ATMEGA328P,
+        &destination,
+        "hex",
+        Optimization::Size,
+    )
+    .unwrap();
     let output = Command::new(std::env::var_os("HELIUM_NODE").unwrap_or_else(|| "node".into()))
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/simulate-avr.cjs"))
         .arg(&build.directory)

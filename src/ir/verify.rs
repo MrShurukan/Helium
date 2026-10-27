@@ -65,8 +65,7 @@ pub fn verify(module: &Module) -> Result<(), Error> {
         ));
     }
 
-    let target = crate::backend::microcontroller::get(&module.target)
-        .ok_or_else(|| failure(ErrorKind::InvalidPin, None, None, "unknown target"))?;
+    let target = module.target;
     let mut pins = HashSet::new();
     for pin in &module.pins {
         if !target.has_digital_pin(&pin.port, pin.bit) || !pins.insert((&pin.port, pin.bit)) {
@@ -246,6 +245,7 @@ fn verify_timer(module: &Module) -> Result<(), Error> {
         }
         (Some(timer), Some(id)) => {
             let valid = crate::timer::plan_with_direction(
+                module.target,
                 timer.cpu_hz,
                 timer.requested_ns,
                 timer.tolerance_ns,

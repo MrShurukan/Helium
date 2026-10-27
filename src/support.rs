@@ -10,16 +10,10 @@ use crate::{
 };
 use std::collections::HashMap;
 
-pub fn validate_pins(statements: &[Statement], mcu: &str) -> Result<(), Vec<Diagnostic>> {
-    let Some(target) = crate::backend::microcontroller::get(mcu) else {
-        return Err(vec![Diagnostic::new(
-            DiagnosticKind::UnsupportedTarget {
-                mcu: mcu.to_owned(),
-            },
-            None,
-        )]);
-    };
-
+pub fn validate_pins(
+    statements: &[Statement],
+    target: &crate::backend::microcontroller::Microcontroller,
+) -> Result<(), Vec<Diagnostic>> {
     let mut errors = vec![];
     let mut pins = HashMap::new();
 

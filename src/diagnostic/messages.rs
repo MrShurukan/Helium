@@ -1,18 +1,17 @@
 //! English presentation. Future locales match the same structured diagnostic kinds.
 use super::DiagnosticKind;
-use crate::backend::microcontroller::ATMEGA328P;
 
 impl crate::timer::TimerError {
     pub fn message(&self) -> String {
         match self {
-            Self::InvalidClock { hz } => format!("CPU frequency {hz} Hz is outside the supported ATmega328P range 1..={} Hz; this does not configure the oscillator or fuses", ATMEGA328P.max_cpu_hz),
+            Self::InvalidClock { hz, target, maximum } => format!("CPU frequency {hz} Hz is outside the supported {target} range 1..={maximum} Hz; this does not configure the oscillator or fuses"),
             Self::ZeroPeriod => "Timer period must be greater than zero".into(),
             Self::MissingClock => "Timer declarations require an explicit --cpu-hz (for example --cpu-hz 16000000); the compiler does not change oscillator settings".into(),
-            Self::Unsupported { hardware } => format!("Unsupported timer '{hardware}'; this target currently supports periodic Timer1 only"),
-            Self::AlreadyReserved => "Timer1 is already reserved by another declaration".into(),
+            Self::Unsupported { hardware, supported } => format!("Unsupported timer '{hardware}'; this target currently supports periodic {supported} only"),
+            Self::AlreadyReserved { hardware } => format!("{hardware} is already reserved by another declaration"),
             Self::NotValue { name } => format!("Timer '{name}' names a hardware resource, not a runtime value; it cannot be copied or assigned"),
             Self::Unrepresentable { cpu_hz, requested_ns, tolerance_ns, shorter, longer, direction, minimum_tolerance_ns } => {
-                let show = |c: &Option<crate::timer::TimerConfig>| c.as_ref().map(crate::timer::TimerConfig::report).unwrap_or_else(|| "not available".into());
+                let show = |c: &Option<Box<crate::timer::TimerConfig>>| c.as_deref().map(crate::timer::TimerConfig::report).unwrap_or_else(|| "not available".into());
                 let requirement = match minimum_tolerance_ns {
                     Some(minimum) => format!("Nearest configuration in the allowed direction needs tolerance of at least {minimum}ns."),
                     None => "No representable period exists in the allowed direction; increasing tolerance cannot help.".into(),

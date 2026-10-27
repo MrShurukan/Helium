@@ -106,7 +106,14 @@ fn gpio_updates_survive_isr_at_every_main_instruction_boundary() {
                 let text = llvm::emit(&module, true).unwrap();
                 let destination = Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join(format!("build/gpio-atomic/{port}-{optimize}-{level:?}.hex"));
-                let build = llvm_toolchain::build(&text, &destination, "hex", level).unwrap();
+                let build = llvm_toolchain::build(
+                    &text,
+                    &helium::backend::microcontroller::ATMEGA328P,
+                    &destination,
+                    "hex",
+                    level,
+                )
+                .unwrap();
                 let asm = fs::read_to_string(build.directory.join("disassembly.txt")).unwrap();
                 assert!(asm.contains("sbi") && asm.contains("cbi"), "{asm}");
                 let (ddr_io, port_io) = match port {
@@ -182,6 +189,7 @@ fn gpio_updates_survive_isr_at_every_main_instruction_boundary() {
                     assert!(injected);
                     let negative = llvm_toolchain::build(
                         &broken,
+                        &helium::backend::microcontroller::ATMEGA328P,
                         &destination.with_file_name("negative.hex"),
                         "hex",
                         level,

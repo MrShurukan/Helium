@@ -9,8 +9,18 @@ mod support;
 pub use semantic::AnalyzedProgram;
 pub mod timer;
 
+use backend::microcontroller::{self, Microcontroller};
 use diagnostic::Diagnostic;
 use frontend::Parser;
+
+fn target_named(mcu: &str) -> Result<&'static Microcontroller, Vec<Diagnostic>> {
+    microcontroller::get(mcu).ok_or_else(|| {
+        vec![Diagnostic::new(
+            diagnostic::DiagnosticKind::UnsupportedTarget { mcu: mcu.into() },
+            None,
+        )]
+    })
+}
 
 /// Parse and type-check the language, including constructs not yet lowered to AVR.
 pub fn analyze(source: &str) -> Result<AnalyzedProgram, Vec<Diagnostic>> {
@@ -56,8 +66,17 @@ pub fn compile_llvm(
     mcu: &str,
     options: ir::Options,
 ) -> Result<String, Vec<Diagnostic>> {
+    compile_llvm_with_target(source, target_named(mcu)?, options)
+}
+
+/// Compile with the already selected descriptor; no stage selects another MCU.
+pub fn compile_llvm_with_target(
+    source: &str,
+    target: &'static Microcontroller,
+    options: ir::Options,
+) -> Result<String, Vec<Diagnostic>> {
     let statements = analyze(source)?;
-    let module = typed_ir_from_ast(&statements, mcu, options, true)?;
+    let module = typed_ir_from_ast(&statements, target, options, true)?;
     backend::llvm::emit(&module, false).map_err(|detail| {
         vec![Diagnostic::new(
             diagnostic::DiagnosticKind::InvalidIr {
@@ -74,18 +93,26 @@ pub fn compile_typed_ir(
     mcu: &str,
     options: ir::Options,
 ) -> Result<ir::Module, Vec<Diagnostic>> {
+    compile_typed_ir_with_target(source, target_named(mcu)?, options)
+}
+
+pub fn compile_typed_ir_with_target(
+    source: &str,
+    target: &'static Microcontroller,
+    options: ir::Options,
+) -> Result<ir::Module, Vec<Diagnostic>> {
     let statements = analyze(source)?;
-    typed_ir_from_ast(&statements, mcu, options, false)
+    typed_ir_from_ast(&statements, target, options, false)
 }
 
 fn typed_ir_from_ast(
     program: &AnalyzedProgram,
-    mcu: &str,
+    target: &'static Microcontroller,
     options: ir::Options,
     machine: bool,
 ) -> Result<ir::Module, Vec<Diagnostic>> {
     if let Some(cpu_hz) = options.cpu_hz {
-        timer::validate_clock(cpu_hz).map_err(|error| {
+        timer::validate_clock(target, cpu_hz).map_err(|error| {
             vec![Diagnostic::new(
                 diagnostic::DiagnosticKind::Timer { error },
                 None,
@@ -93,10 +120,10 @@ fn typed_ir_from_ast(
         })?;
     }
     let statements = program.statements();
-    support::validate_pins(statements, mcu)?;
+    support::validate_pins(statements, target)?;
     support::validate_features(statements, machine)?;
-    let timer = timer::resolve(statements, options.cpu_hz)?;
-    let mut module = ir::lower(program, mcu, timer).map_err(|error| vec![error])?;
+    let timer = timer::resolve(target, statements, options.cpu_hz)?;
+    let mut module = ir::lower(program, target, timer).map_err(|error| vec![error])?;
     let internal_error = |stage, error: ir::verify::Error| {
         vec![Diagnostic::new(
             diagnostic::DiagnosticKind::InvalidIr {

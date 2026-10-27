@@ -1,5 +1,5 @@
 //! Optional external toolchain. No tools are needed to emit textual LLVM IR.
-use super::microcontroller::ATMEGA328P;
+use super::microcontroller::Microcontroller;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -90,6 +90,7 @@ fn arg(value: impl AsRef<OsStr>) -> OsString {
 /// output after every required stage succeeds. No shell command interpolation.
 pub fn build(
     ir: &str,
+    target: &Microcontroller,
     destination: &Path,
     emit: &str,
     optimization: Optimization,
@@ -160,8 +161,8 @@ pub fn build(
         "opt",
         &[
             arg("-S"),
-            arg(format!("-mtriple={}", ATMEGA328P.llvm_triple)),
-            arg(format!("-mcpu={}", ATMEGA328P.name)),
+            arg(format!("-mtriple={}", target.llvm_triple)),
+            arg(format!("-mcpu={}", target.name)),
             arg(format!("-passes={}", optimization.pipeline())),
             arg(&raw),
             arg("-o"),
@@ -174,8 +175,8 @@ pub fn build(
         "-O2"
     };
     let machine_args = [
-        arg(format!("-mtriple={}", ATMEGA328P.llvm_triple)),
-        arg(format!("-mcpu={}", ATMEGA328P.name)),
+        arg(format!("-mtriple={}", target.llvm_triple)),
+        arg(format!("-mcpu={}", target.name)),
         arg(level),
         arg(&optimized),
     ];
@@ -194,7 +195,7 @@ pub fn build(
         run(
             "avr-gcc",
             &[
-                arg(format!("-mmcu={}", ATMEGA328P.name)),
+                arg(format!("-mmcu={}", target.name)),
                 arg(&object),
                 arg("-Wl,--gc-sections"),
                 arg(format!(
@@ -206,8 +207,7 @@ pub fn build(
             ],
         )?;
 
-        let report =
-            super::memory::from_elf(&fs::read(&elf).map_err(|e| e.to_string())?, &ATMEGA328P)?;
+        let report = super::memory::from_elf(&fs::read(&elf).map_err(|e| e.to_string())?, target)?;
         fs::write(directory.join("memory.txt"), report.render()).map_err(|e| e.to_string())?;
         memory = Some(report);
         sections = run("avr-size", &[arg("-A"), arg(&elf)])?;

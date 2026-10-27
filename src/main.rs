@@ -2,7 +2,7 @@ use helium::diagnostic::{Diagnostic, DiagnosticKind, RenderOptions};
 use helium::{
     analyze,
     backend::{flash, llvm_toolchain},
-    compile_llvm, compile_typed_ir, ir,
+    compile_llvm_with_target, compile_typed_ir_with_target, ir,
 };
 use std::io::IsTerminal;
 use std::{env, fs, path::PathBuf, process::ExitCode};
@@ -115,14 +115,14 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 .map_err(|_| "--cpu-hz must be a positive integer".to_owned())
         })
         .transpose()?;
-    if let Some(cpu_hz) = ir_options.cpu_hz {
-        helium::timer::validate_clock(cpu_hz).map_err(|e| e.to_string())?;
-    }
-    if helium::backend::microcontroller::get(&mcu).is_none() {
+    let Some(target) = helium::backend::microcontroller::get(&mcu) else {
         return Err(
             Diagnostic::new(DiagnosticKind::UnsupportedTarget { mcu }, None)
                 .render_with("", RenderOptions { color }),
         );
+    };
+    if let Some(cpu_hz) = ir_options.cpu_hz {
+        helium::timer::validate_clock(target, cpu_hz).map_err(|e| e.to_string())?;
     }
 
     if command == "flash" {
@@ -169,7 +169,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
     }
     let level = llvm_toolchain::Optimization::parse(optimization.as_deref().unwrap_or("none"))?;
     if command == "check" {
-        let llvm = compile_llvm(&source, &mcu, ir_options).map_err(diagnostics)?;
+        let llvm = compile_llvm_with_target(&source, target, ir_options).map_err(diagnostics)?;
         return Ok(format!(
             "Checked {}{}",
             input.display(),
@@ -179,10 +179,10 @@ fn run(args: Vec<String>) -> Result<String, String> {
 
     let content = match emit {
         "ast" => format!("{:#?}\n", analyze(&source).map_err(diagnostics)?),
-        "ir" => compile_typed_ir(&source, &mcu, ir_options)
+        "ir" => compile_typed_ir_with_target(&source, target, ir_options)
             .map_err(diagnostics)?
             .dump(),
-        _ => compile_llvm(&source, &mcu, ir_options).map_err(diagnostics)?,
+        _ => compile_llvm_with_target(&source, target, ir_options).map_err(diagnostics)?,
     };
     let report = timer_report(&content);
 
@@ -203,7 +203,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
     }
 
     if matches!(emit, "asm" | "elf" | "hex") {
-        let result = llvm_toolchain::build(&content, &destination, emit, level)?;
+        let result = llvm_toolchain::build(&content, target, &destination, emit, level)?;
         return Ok(format!(
             "Built {} (external stages: {} ms)\nIntermediates: {}\n{}",
             destination.display(),
@@ -269,6 +269,7 @@ fn timer_options(args: &[String]) -> Result<String, String> {
         .parse()
         .map_err(|_| "--cpu-hz must be an integer")?;
     let period = helium::timer::parse_duration(required("--every")?)?;
-    let candidates = helium::timer::candidates(hz, period).map_err(|error| error.to_string())?;
+    let candidates =
+        helium::timer::candidates(target, hz, period).map_err(|error| error.to_string())?;
     Ok(format!("Requested: {period}ns; candidates ordered by absolute error, then prescaler.\n{}\nCalculated periods assume the stated CPU clock; oscillator error and ISR latency are not included.", candidates.iter().map(helium::timer::TimerConfig::report).collect::<Vec<_>>().join("\n")))
 }

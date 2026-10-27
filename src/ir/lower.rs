@@ -118,7 +118,7 @@ fn checked_integer(
 
 pub(crate) fn lower(
     program: &AnalyzedProgram,
-    target: &str,
+    target: &'static crate::backend::microcontroller::Microcontroller,
     timer: Option<crate::timer::TimerConfig>,
 ) -> Result<Module, Diagnostic> {
     let statements = program.statements();
@@ -127,7 +127,7 @@ pub(crate) fn lower(
         timer,
         interrupt_handler: None,
         interrupt_globals: Default::default(),
-        target: target.into(),
+        target,
         globals: vec![],
         pins: vec![],
         functions: vec![],

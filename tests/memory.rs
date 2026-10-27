@@ -23,7 +23,14 @@ define i16 @main() addrspace(1) {
     for mode in [Optimization::None, Optimization::Speed, Optimization::Size] {
         let output = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(format!("build/b3-tests/storage-{mode:?}.elf"));
-        let result = build(ir, &output, "elf", mode).unwrap();
+        let result = build(
+            ir,
+            &helium::backend::microcontroller::ATMEGA328P,
+            &output,
+            "elf",
+            mode,
+        )
+        .unwrap();
         let memory = result.memory.unwrap();
         assert_eq!(memory.static_sram, 6);
         let sizes = result

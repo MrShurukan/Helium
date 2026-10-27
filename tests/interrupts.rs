@@ -294,9 +294,14 @@ entry:
                 let destination = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
                     "build/interrupt-tests/{level:?}-{optimize_ir}-{enabled}.hex"
                 ));
-                let build =
-                    llvm_toolchain::build(&(definitions + &harness), &destination, "hex", level)
-                        .unwrap();
+                let build = llvm_toolchain::build(
+                    &(definitions + &harness),
+                    &helium::backend::microcontroller::ATMEGA328P,
+                    &destination,
+                    "hex",
+                    level,
+                )
+                .unwrap();
                 let simulation =
                     Command::new(std::env::var_os("HELIUM_NODE").unwrap_or_else(|| "node".into()))
                         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/simulate-avr.cjs"))

@@ -8,17 +8,57 @@ use helium::{
 fn direction_filters_before_selecting_the_nearest_period() {
     // 16 MHz: 62.5 ns per tick. The closest period overall is 125 ns,
     // but a negative tolerance must choose 62.5 ns for every=100 ns.
-    let either = timer::plan(16_000_000, 100, 38).unwrap();
-    let down = timer::plan_with_direction(16_000_000, 100, 38, D::NotLonger).unwrap();
-    let up = timer::plan_with_direction(16_000_000, 100, 25, D::NotShorter).unwrap();
+    let either = timer::plan(
+        &helium::backend::microcontroller::ATMEGA328P,
+        16_000_000,
+        100,
+        38,
+    )
+    .unwrap();
+    let down = timer::plan_with_direction(
+        &helium::backend::microcontroller::ATMEGA328P,
+        16_000_000,
+        100,
+        38,
+        D::NotLonger,
+    )
+    .unwrap();
+    let up = timer::plan_with_direction(
+        &helium::backend::microcontroller::ATMEGA328P,
+        16_000_000,
+        100,
+        25,
+        D::NotShorter,
+    )
+    .unwrap();
     assert_eq!((either.ticks, down.ticks, up.ticks), (2, 1, 2));
-    assert!(timer::plan_with_direction(16_000_000, 100, 37, D::NotLonger).is_err());
-    assert!(timer::plan_with_direction(16_000_000, 100, 24, D::NotShorter).is_err());
+    assert!(timer::plan_with_direction(
+        &helium::backend::microcontroller::ATMEGA328P,
+        16_000_000,
+        100,
+        37,
+        D::NotLonger
+    )
+    .is_err());
+    assert!(timer::plan_with_direction(
+        &helium::backend::microcontroller::ATMEGA328P,
+        16_000_000,
+        100,
+        24,
+        D::NotShorter
+    )
+    .is_err());
     for direction in [D::Either, D::NotLonger, D::NotShorter] {
         assert_eq!(
-            timer::plan_with_direction(16_000_000, 125, 0, direction)
-                .unwrap()
-                .ticks,
+            timer::plan_with_direction(
+                &helium::backend::microcontroller::ATMEGA328P,
+                16_000_000,
+                125,
+                0,
+                direction
+            )
+            .unwrap()
+            .ticks,
             2
         );
     }
@@ -27,8 +67,14 @@ fn direction_filters_before_selecting_the_nearest_period() {
 #[test]
 fn impossible_side_is_distinct_from_insufficient_tolerance() {
     for (period, direction) in [(1, D::NotLonger), (u64::MAX, D::NotShorter)] {
-        let error =
-            timer::plan_with_direction(16_000_000, period, u64::MAX, direction).unwrap_err();
+        let error = timer::plan_with_direction(
+            &helium::backend::microcontroller::ATMEGA328P,
+            16_000_000,
+            period,
+            u64::MAX,
+            direction,
+        )
+        .unwrap_err();
         assert!(matches!(
             error,
             TimerError::Unrepresentable {
@@ -40,7 +86,14 @@ fn impossible_side_is_distinct_from_insufficient_tolerance() {
             .to_string()
             .contains("increasing tolerance cannot help"));
     }
-    let error = timer::plan_with_direction(16_000_000, 100, 30, D::NotLonger).unwrap_err();
+    let error = timer::plan_with_direction(
+        &helium::backend::microcontroller::ATMEGA328P,
+        16_000_000,
+        100,
+        30,
+        D::NotLonger,
+    )
+    .unwrap_err();
     assert!(matches!(
         error,
         TimerError::Unrepresentable {
@@ -81,7 +134,13 @@ fn planner_matches_exhaustive_hardware_search() {
             }
             match (
                 best,
-                timer::plan_with_direction(hz, period, u64::MAX, direction),
+                timer::plan_with_direction(
+                    &helium::backend::microcontroller::ATMEGA328P,
+                    hz,
+                    period,
+                    u64::MAX,
+                    direction,
+                ),
             ) {
                 (Some((_, d, t)), Ok(actual)) => {
                     assert_eq!((actual.prescaler, actual.ticks), (d, t))

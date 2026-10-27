@@ -22,8 +22,14 @@ fn result_type(value: Option<Type>) -> &'static str {
 /// Produce unoptimized LLVM IR from a well-formed Helium module.
 /// `export_symbols` is for differential tests, not a public C ABI contract.
 pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
-    let target = microcontroller::get(&module.target)
-        .ok_or_else(|| format!("Unsupported LLVM target {}", module.target))?;
+    let target = module.target;
+    if module
+        .timer
+        .as_ref()
+        .is_some_and(|timer| timer.hardware != &target.timer)
+    {
+        return Err("Timer configuration belongs to a different target description".into());
+    }
 
     // Reject wider integers until their machine-level behavior is covered by tests.
     let types = module
