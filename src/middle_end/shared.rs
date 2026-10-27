@@ -1,6 +1,6 @@
 //! One resolved call/access graph for conflict diagnostics and ISR visibility.
 use crate::{
-    diagnostic::{Diagnostic, DiagnosticKind, LabelKind},
+    diagnostic::{Diagnostic, DiagnosticKind, LabelKind, SharedAccessReason},
     frontend::{
         expression::{Expression, ExpressionType as E},
         statement::{Statement, StatementType as S},
@@ -22,7 +22,9 @@ pub enum AccessKind {
     ReadMemory,
     WriteMemory,
     ReadPin,
+    /// Backend must update only this pin atomically; whole-port RMW is forbidden.
     WritePin,
+    /// Ordered updates of this pin in DDR/PORT, not an atomic whole-mode change.
     ConfigurePin,
 }
 impl AccessKind {
@@ -51,6 +53,54 @@ pub struct Access {
     pub kind: AccessKind,
     pub protection: Protection,
     pub location: SourceLocation,
+}
+
+impl Access {
+    fn conflict_reason(
+        &self,
+        irq: &Self,
+        main: &Self,
+        symbols: &SymbolTable,
+    ) -> SharedAccessReason {
+        use crate::frontend::static_type::{IntegerType, SignedIntegerType, UnsignedIntegerType};
+        match self.resource {
+            ResourceId::GpioPort(_)
+                if irq.kind == AccessKind::ConfigurePin
+                    || main.kind == AccessKind::ConfigurePin =>
+            {
+                SharedAccessReason::PinConfiguration
+            }
+            ResourceId::GpioPort(_) => SharedAccessReason::SamePin,
+            ResourceId::GlobalMemory(_) => match symbols.get(self.symbol).ty {
+                StaticType::Integer(t)
+                    if !matches!(
+                        t,
+                        IntegerType::Signed(SignedIntegerType::Int8)
+                            | IntegerType::Unsigned(UnsignedIntegerType::Uns8)
+                    ) =>
+                {
+                    SharedAccessReason::MultiByteMemory
+                }
+                _ => SharedAccessReason::SharedMemory,
+            },
+        }
+    }
+
+    fn conflicts(&self, other: &Self, symbols: &SymbolTable) -> bool {
+        if self.resource != other.resource || !(self.kind.writes() || other.kind.writes()) {
+            return false;
+        }
+        match self.resource {
+            ResourceId::GlobalMemory(_) => true,
+            ResourceId::GpioPort(_) => match (
+                &symbols.get(self.symbol).kind,
+                &symbols.get(other.symbol).kind,
+            ) {
+                (SymbolKind::Pin { bit: a, .. }, SymbolKind::Pin { bit: b, .. }) => a == b,
+                _ => unreachable!("GPIO resource must refer to pins"),
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -380,20 +430,32 @@ impl Program {
                 let Some(main) = main.get(&access.resource) else {
                     continue;
                 };
-                if !interrupt.iter().chain(main).any(|(_, a)| a.kind.writes()) {
-                    continue;
+                // Select a genuinely conflicting pair involving this access;
+                // unrelated writes on the same port must not become witnesses.
+                let pair = if self.main.contains(id) {
+                    interrupt
+                        .iter()
+                        .find(|(_, other)| access.conflicts(other, symbols))
+                        .map(|&(irq_id, other)| ((irq_id, other), (*id, access)))
+                } else {
+                    None
                 }
-                let (irq_body, irq_access) = interrupt
-                    .iter()
-                    .find(|(_, a)| a.kind.writes())
-                    .unwrap_or(&interrupt[0]);
-                let (main_body, main_access) = main
-                    .iter()
-                    .find(|(_, a)| a.kind.writes())
-                    .unwrap_or(&main[0]);
+                .or_else(|| {
+                    if self.interrupts.contains(id) {
+                        main.iter()
+                            .find(|(_, other)| access.conflicts(other, symbols))
+                            .map(|&(main_id, other)| ((*id, access), (main_id, other)))
+                    } else {
+                        None
+                    }
+                });
+                let Some(((irq_body, irq_access), (main_body, main_access))) = pair else {
+                    continue;
+                };
                 let mut error = Diagnostic::new(
                     DiagnosticKind::SharedAccess {
                         name: symbols.get(access.symbol).name.clone(),
+                        reason: access.conflict_reason(irq_access, main_access, symbols),
                     },
                     Some(access.location),
                 )
@@ -403,11 +465,11 @@ impl Program {
                 }
                 let mut paths = vec![
                     (
-                        self.call_path([BodyId::MainLoop], *main_body),
+                        self.call_path([BodyId::MainLoop], main_body),
                         LabelKind::MainCall,
                     ),
                     (
-                        self.call_path(irq_roots(), *irq_body),
+                        self.call_path(irq_roots(), irq_body),
                         LabelKind::InterruptCall,
                     ),
                 ];

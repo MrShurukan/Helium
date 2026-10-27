@@ -63,7 +63,11 @@ fn gpio_operations_use_correct_input_direction_and_latch_addresses() {
             .lines()
             .any(|l| l.contains("store volatile") && l.contains(&format!("i16 {input} to ptr"))));
         for address in [direction, output] {
-            assert!(text
+            let io = address - 32;
+            assert!(
+                text.contains(&format!("sbi {io}, 0")) || text.contains(&format!("cbi {io}, 0"))
+            );
+            assert!(!text
                 .lines()
                 .any(|l| l.contains("store volatile")
                     && l.contains(&format!("i16 {address} to ptr"))));

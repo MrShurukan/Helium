@@ -26,7 +26,16 @@ impl DiagnosticKind {
                 format!("Function '{name}' requires interrupts to be disabled")
             }
             Self::Timer { error } => error.message(),
-            Self::SharedAccess { name } => format!("Access to '{name}' conflicts with an interrupt handler and requires noInterrupt protection"),
+            Self::SharedAccess { name, reason } => {
+                use super::SharedAccessReason as R;
+                let detail = match reason {
+                    R::SharedMemory => "shared memory operations, including read-modify-write, require a protected transaction",
+                    R::MultiByteMemory => "multi-byte memory access can be interrupted between bytes",
+                    R::SamePin => "both contexts use the same pin; atomic bit writes do not protect a complete read/compute/write operation",
+                    R::PinConfiguration => "pin configuration changes direction and/or pull-up state and conflicts with use of the same pin",
+                };
+                format!("Access to '{name}' conflicts with an interrupt handler and requires noInterrupt protection: {detail}")
+            }
             Self::NotCallable { name } => format!("'{name}' is not a function"),
             Self::ArgumentCount {
                 name,

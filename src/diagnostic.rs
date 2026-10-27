@@ -77,6 +77,14 @@ impl fmt::Display for DiagnosticCode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SharedAccessReason {
+    SharedMemory,
+    MultiByteMemory,
+    SamePin,
+    PinConfiguration,
+}
+
 /// Structured facts about an error. Add translations at the presentation layer.
 #[derive(Debug, Clone)]
 pub enum DiagnosticKind {
@@ -85,6 +93,7 @@ pub enum DiagnosticKind {
     },
     SharedAccess {
         name: String,
+        reason: SharedAccessReason,
     },
     InterruptContext {
         name: String,

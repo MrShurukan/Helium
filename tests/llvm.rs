@@ -39,7 +39,8 @@ fn llvm_adapter_preserves_effects_and_wrapping_contract() {
             .count(),
         1
     );
-    assert!(text.contains("store volatile i8"));
+    assert!(text.contains("sbi 8, 5"));
+    assert!(text.contains("cbi 8, 5"));
     assert!(!text.contains(" nsw "));
     assert!(!text.contains(" nuw "));
     assert!(!text.contains("mustprogress"));

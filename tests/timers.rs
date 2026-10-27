@@ -79,14 +79,15 @@ fn unsafe_shared_access_is_rejected_in_both_directions_and_through_helpers() {
 }
 
 #[test]
-fn gpio_conflicts_include_distinct_pins_on_the_same_port() {
+fn gpio_conflicts_are_limited_to_the_same_pin() {
     let source = "def A=PortB.0 OUTPUT; def B=PortB.1 OUTPUT;
         timer clock=Timer1 {every:1s, interrupt {A=HIGH;}} loop {B=LOW;}";
-    assert!(analyze(source)
+    compile(source);
+    assert!(analyze(&source.replace("loop {B=LOW;}", "loop {A=LOW;}"))
         .unwrap_err()
         .iter()
         .any(|e| e.code() == DiagnosticCode::SharedAccess));
-    compile(&source.replace("loop {B=LOW;}", "loop {noInterrupt {B=LOW;}}"));
+    compile(&source.replace("loop {B=LOW;}", "loop {noInterrupt {A=LOW;}}"));
 }
 
 #[test]

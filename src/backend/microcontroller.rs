@@ -117,3 +117,11 @@ impl Microcontroller {
                 .is_some_and(|p| p.digital_mask & (1 << number) != 0)
     }
 }
+
+/// AVR SBI/CBI address encoding for the supported low-I/O GPIO registers.
+/// No RMW fallback: pin independence is a language/backend contract.
+pub fn atomic_bit_io(data_address: u16) -> Option<u8> {
+    (0x20..=0x3f)
+        .contains(&data_address)
+        .then(|| (data_address - 0x20) as u8)
+}

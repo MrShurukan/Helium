@@ -173,14 +173,14 @@ impl FunctionEmitter<'_> {
         ));
     }
 
-    fn set_bit(&mut self, address: u16, mask: u8, on: bool) {
-        let old = self.read_register(address);
-        let value = self.temp(&format!(
-            "{} i8 {old}, {}",
-            if on { "or" } else { "and" },
-            if on { mask } else { !mask }
+    fn set_bit(&mut self, address: u16, bit: usize, on: bool) -> Result<(), String> {
+        let io = microcontroller::atomic_bit_io(address)
+            .ok_or("GPIO register has no supported atomic bit-write implementation")?;
+        self.line(&format!(
+            "call void asm sideeffect \"{} {io}, {bit}\", \"~{{memory}}\"()",
+            if on { "sbi" } else { "cbi" }
         ));
-        self.write_register(address, &value);
+        Ok(())
     }
 
     fn instruction(&mut self, instruction: &Instruction) -> Result<(), String> {
@@ -321,20 +321,31 @@ impl FunctionEmitter<'_> {
             }
             Op::WritePin(pin, v) => {
                 let (port, mask) = self.address(*pin)?;
-                // PORT is the output latch; PIN is the sampled physical input.
-                let old = self.read_register(port.output);
-                let cleared = self.temp(&format!("and i8 {old}, {}", !mask));
-                let bit = self.temp(&format!("zext {} to i8", self.value(*v)));
-                let shifted = self.temp(&format!("mul i8 {bit}, {mask}"));
-                let new = self.temp(&format!("or i8 {cleared}, {shifted}"));
-                self.write_register(port.output, &new);
+                // Exactly one SBI or CBI executes. Interrupts between the skip
+                // instructions are safe: ISR preserves registers, and each write
+                // touches only this bit. No whole-port load/store is emitted.
+                let io = microcontroller::atomic_bit_io(port.output)
+                    .ok_or("GPIO register has no supported atomic bit-write implementation")?;
+                let bit = mask.trailing_zeros();
+                let value = self.temp(&format!("zext {} to i8", self.value(*v)));
+                self.line(&format!(
+                    "call void asm sideeffect \"sbrc $0, 0\\0Asbi {io}, {bit}\\0Asbrs $0, 0\\0Acbi {io}, {bit}\", \"r,~{{memory}}\"(i8 {value})"
+                ));
                 return Ok(());
             }
             Op::SetPinMode(pin, mode) => {
                 let (port, mask) = self.address(*pin)?;
-                self.set_bit(port.direction, mask, *mode == PinMode::Output);
+                self.set_bit(
+                    port.direction,
+                    mask.trailing_zeros() as usize,
+                    *mode == PinMode::Output,
+                )?;
                 if *mode != PinMode::Output {
-                    self.set_bit(port.output, mask, *mode == PinMode::InputPullUp);
+                    self.set_bit(
+                        port.output,
+                        mask.trailing_zeros() as usize,
+                        *mode == PinMode::InputPullUp,
+                    )?;
                 }
                 return Ok(());
             }

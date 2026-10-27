@@ -120,6 +120,7 @@ USB bootloader uploads may need board-specific port and baud settings in AVRDUDE
 - [Development plan](docs/DEVELOPMENT_PLAN.md)
 - [Roadmap, technical debt and accepted limitations](docs/ROADMAP.md)
 - [Current target description and B2 validation](docs/TARGET.md)
+- [Atomic GPIO contract and B2a board validation](docs/ATOMIC_GPIO.md)
 
 - [Support and semantic rules](docs/SUPPORT.md)
 - [Typed IR contract](docs/IR_V1.md)

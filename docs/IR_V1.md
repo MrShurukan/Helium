@@ -204,3 +204,11 @@ The verifier checks the wrapper order, distinct role IDs, a single startup path 
 no lifecycle calls from helpers or ISR. It does not assume setup has function ID 1.
 Standalone IR test modules may omit lifecycle metadata; timer modules may not.
 
+
+## GPIO effect contract (B2a)
+
+ReadPin samples PIN once. WritePin must preserve other bits atomically, independent
+of optimization. SetPinMode updates only the selected bit in DDR and PORT, in order;
+the complete mode transition is not atomic. The AVR adapter uses explicit SBI/CBI
+and rejects addresses without this implementation. A backend must never lower these
+operations to unprotected whole-port RMW. See ATOMIC_GPIO.md for shared-access rules.

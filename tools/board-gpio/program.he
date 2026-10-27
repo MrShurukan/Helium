@@ -1,0 +1,21 @@
+// Board fixture: Nano D12/PB4 and D13/PB5 must be free. CPU clock 16 MHz.
+def MainPin=PortB.4 OUTPUT;
+def IrqPin=PortB.5 OUTPUT;
+var ticks:u16=0;
+var errors:u16=0;
+var progress:u16=0;
+var mainLevel:bool=false;
+var irqLevel:bool=false;
+setup {MainPin=LOW; IrqPin=LOW;}
+timer clock=Timer1 {every:100us, interrupt {
+    if (IrqPin == HIGH) != irqLevel {errors=errors+1;}
+    irqLevel=!irqLevel;
+    IrqPin=irqLevel ? HIGH : LOW;
+    ticks=ticks+1;
+}}
+loop {
+    noInterrupt {if (MainPin == HIGH) != mainLevel {errors=errors+1;}}
+    mainLevel=!mainLevel;
+    MainPin=mainLevel ? HIGH : LOW;
+    progress=progress+1;
+}

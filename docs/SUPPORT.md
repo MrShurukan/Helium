@@ -60,3 +60,8 @@ constant (including grouped/chained) pin mode statements remain supported.
 - GPIO validation describes MCU capabilities, not board wiring, fuses or electrical behavior.
 
 See [diagnostics](DIAGNOSTICS.md) for ranges, related locations and the current audit.
+
+GPIO writes preserve other pins on the same port through explicit atomic bit
+instructions. Main/ISR accesses to distinct pins are allowed; a shared pin with
+writes or mode changes still requires noInterrupt. Shared memory rules are unchanged.
+See [atomic GPIO contract and validation](ATOMIC_GPIO.md).

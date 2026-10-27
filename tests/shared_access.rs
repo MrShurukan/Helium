@@ -66,10 +66,11 @@ fn setup_writes_do_not_turn_runtime_reads_into_conflicts() {
 }
 
 #[test]
-fn gpio_modes_and_distinct_ports_keep_conservative_rules() {
+fn gpio_modes_conflict_only_on_the_same_pin() {
     let source = "def A=PortB.0 INPUT; def B=PortB.1 INPUT;
         timer clock=Timer1 {every:1s, interrupt {var level=!A;}} loop {B=OUTPUT;}";
-    shared_error(source);
+    analyze(source).unwrap();
+    shared_error(&source.replace("loop {B=OUTPUT;}", "loop {A=OUTPUT;}"));
     analyze(&source.replace("PortB.1", "PortC.1")).unwrap();
     analyze(&source.replace("B=OUTPUT;", "var level=!B;")).unwrap();
 }
