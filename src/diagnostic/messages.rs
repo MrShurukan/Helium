@@ -25,6 +25,9 @@ impl crate::timer::TimerError {
 impl DiagnosticKind {
     pub fn message(&self) -> String {
         match self {
+            Self::Device { detail } => detail.clone(),
+            Self::IrqRequirement { name, reason } => format!("Call to '{name}' requires enabled interrupts: {}", reason.message()),
+            Self::IsrBlocking { name, reason } => format!("Call to '{name}' may block inside an interrupt handler: {}. Waiting can cause long delays in main code and other interrupt handlers", reason.message()),
             Self::InterruptContext { name } => {
                 format!("Function '{name}' requires interrupts to be disabled")
             }
@@ -32,6 +35,7 @@ impl DiagnosticKind {
             Self::SharedAccess { name, reason } => {
                 use super::SharedAccessReason as R;
                 let detail = match reason {
+                    R::Device => "shared device operations require a protected transaction",
                     R::SharedMemory => "shared memory operations, including read-modify-write, require a protected transaction",
                     R::MultiByteMemory => "multi-byte memory access can be interrupted between bytes",
                     R::SamePin => "both contexts use the same pin; atomic bit writes do not protect a complete read/compute/write operation",
@@ -149,6 +153,7 @@ impl super::LabelKind {
             Self::MainAccess => "accessed by the main loop or a function it calls".into(),
             Self::MainCall => "this call is reachable from the main loop".into(),
             Self::InterruptCall => "this call is reachable from the interrupt handler".into(),
+            Self::EffectCall => "effect propagated through this call".into(),
             Self::InterruptAccess => {
                 "accessed by the interrupt handler or a function it calls".into()
             }

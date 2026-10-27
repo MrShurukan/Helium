@@ -120,9 +120,11 @@ pub(crate) fn lower(
     program: &AnalyzedProgram,
     target: &'static crate::backend::microcontroller::Microcontroller,
     timer_config: Option<crate::timer::TimerConfig>,
+    uarts: Vec<(SymbolId, crate::uart::UartConfig, SourceLocation)>,
 ) -> Result<Module, Diagnostic> {
     let statements = program.statements();
     let mut module = Module {
+        warnings: program.warnings().to_vec(),
         lifecycle: None,
         devices: Vec::new(),
         interrupts: Vec::new(),
@@ -133,6 +135,26 @@ pub(crate) fn lower(
         functions: vec![],
         entry: FunctionId(0),
     };
+    let mut devices = HashMap::new();
+    for (symbol, config, location) in uarts {
+        devices.insert(symbol, DeviceId(module.devices.len()));
+        module.devices.push(Device {
+            config: DeviceConfig::UartTx(config),
+            phase: StartupPhase::BeforeSetup,
+            origin: Origin::Source(location),
+        });
+    }
+    let intrinsics = program
+        .symbols()
+        .iter()
+        .filter_map(|(id, symbol)| {
+            if let crate::semantic::SymbolKind::Intrinsic { device, operation } = symbol.kind {
+                Some((id, (devices[&device], operation)))
+            } else {
+                None
+            }
+        })
+        .collect::<HashMap<_, _>>();
     let mut globals = HashMap::new();
     let mut pins = HashMap::new();
     let mut setup = &[][..];
@@ -188,13 +210,21 @@ pub(crate) fn lower(
         setup: FunctionId(1),
         loop_body: FunctionId(2),
     };
-    let mut entry = Builder::new(module.entry, "$entry", &globals, &pins, &functions);
+    let mut entry = Builder::new(
+        module.entry,
+        "$entry",
+        &globals,
+        &pins,
+        &functions,
+        &intrinsics,
+    );
     let mut initialize = Builder::new(
         lifecycle.initialize,
         "$initialize",
         &globals,
         &pins,
         &functions,
+        &intrinsics,
     );
     for statement in statements {
         if let S::VariableDeclaration {
@@ -232,7 +262,7 @@ pub(crate) fn lower(
         (lifecycle.setup, "$setup", setup),
         (lifecycle.loop_body, "$loop", loop_body),
     ] {
-        let mut builder = Builder::new(id, name, &globals, &pins, &functions);
+        let mut builder = Builder::new(id, name, &globals, &pins, &functions, &intrinsics);
         if id == lifecycle.setup && !body.is_empty() {
             builder.protected_body(body, Origin::Generated("setup interrupt protection"))?;
         } else {
@@ -253,7 +283,7 @@ pub(crate) fn lower(
             continue;
         };
         let (id, result) = functions[&statement.symbol.unwrap()];
-        let mut builder = Builder::new(id, identifier, &globals, &pins, &functions);
+        let mut builder = Builder::new(id, identifier, &globals, &pins, &functions, &intrinsics);
         builder.return_type = result;
         for parameter in parameters {
             let kind = ty(parameter.static_type, parameter.source_location)?;
@@ -291,7 +321,8 @@ pub(crate) fn lower(
     for statement in statements {
         if let S::TimerDeclaration(timer) = &statement.statement_type {
             let id = FunctionId(module.functions.len());
-            let mut builder = Builder::new(id, "$interrupt", &globals, &pins, &functions);
+            let mut builder =
+                Builder::new(id, "$interrupt", &globals, &pins, &functions, &intrinsics);
             builder.body(&timer.body)?;
             builder.terminate(Terminator::Return(None));
             let mut handler = builder.finish()?;
@@ -317,7 +348,14 @@ pub(crate) fn lower(
     for symbol in program.shared_analysis().interrupt_globals() {
         module.interrupt_globals.insert(globals[symbol].0);
     }
-    let mut entry = Builder::new(module.entry, "$entry", &globals, &pins, &functions);
+    let mut entry = Builder::new(
+        module.entry,
+        "$entry",
+        &globals,
+        &pins,
+        &functions,
+        &intrinsics,
+    );
     for op in module.startup_operations(&lifecycle) {
         let origin = match &op {
             Op::DeviceStart(id) => module.devices[id.0].origin.clone(),
@@ -356,6 +394,7 @@ struct Builder<'a> {
     globals: &'a HashMap<SymbolId, (GlobalId, Type)>,
     pins: &'a HashMap<SymbolId, PinId>,
     functions: &'a HashMap<SymbolId, (FunctionId, Option<Type>)>,
+    intrinsics: &'a HashMap<SymbolId, (DeviceId, crate::intrinsics::Intrinsic)>,
     parameters: Vec<(ValueId, Type)>,
     return_type: Option<Type>,
     interrupt_states: Vec<ValueId>,
@@ -368,6 +407,7 @@ impl<'a> Builder<'a> {
         globals: &'a HashMap<SymbolId, (GlobalId, Type)>,
         pins: &'a HashMap<SymbolId, PinId>,
         functions: &'a HashMap<SymbolId, (FunctionId, Option<Type>)>,
+        intrinsics: &'a HashMap<SymbolId, (DeviceId, crate::intrinsics::Intrinsic)>,
     ) -> Self {
         Self {
             id,
@@ -385,6 +425,7 @@ impl<'a> Builder<'a> {
             globals,
             pins,
             functions,
+            intrinsics,
             parameters: vec![],
             return_type: None,
             interrupt_states: vec![],
@@ -657,13 +698,28 @@ impl<'a> Builder<'a> {
         arguments: &[Expression],
         origin: Origin,
     ) -> Result<Option<ValueId>, Diagnostic> {
-        let (id, result) = self.functions[&symbol];
         // Evaluate and snapshot each argument before evaluating the next one.
         let arguments = arguments
             .iter()
             .map(|arg| self.value(arg))
             .collect::<Result<Vec<_>, _>>()?;
-        let operation = Op::Call(id, arguments);
+        let (operation, result) = if let Some(&(device, operation)) = self.intrinsics.get(&symbol) {
+            (
+                Op::Intrinsic {
+                    device,
+                    operation,
+                    arguments,
+                },
+                if operation == crate::intrinsics::Intrinsic::UartTryWrite {
+                    Some(Type::Bool)
+                } else {
+                    None
+                },
+            )
+        } else {
+            let (id, result) = self.functions[&symbol];
+            (Op::Call(id, arguments), result)
+        };
         if let Some(kind) = result {
             Ok(Some(self.emit(operation, kind, origin)))
         } else {

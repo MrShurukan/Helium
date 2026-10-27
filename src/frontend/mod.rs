@@ -65,6 +65,7 @@ macro_rules! check_and_consume {
     };
 }
 
+mod device;
 mod timer;
 
 /// This macro is used to automate binary operator parsing.
@@ -188,6 +189,7 @@ impl Parser<'_> {
             let result =
                 match token.token_type {
                     TT::Keyword(KT::Timer) => self.timer_declaration(tokens),
+                    TT::Keyword(KT::Device) => self.device_declaration(tokens),
                     TT::Keyword(KT::Fn) => self.function_declaration(tokens),
                     TT::Keyword(KT::NoInterrupt) => {
                         let modifier = token.source_location;
@@ -1012,7 +1014,30 @@ impl Parser<'_> {
     }
 
     fn call(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
-        let callee = self.primary(tokens)?;
+        let mut callee = self.primary(tokens)?;
+        if matches!(self.peek(tokens)?.token_type, TT::Punctuation(PT::Dot)) {
+            tokens.advance();
+            let method =
+                check_and_consume!(self, tokens, TT::Identifier(_), "Expected device method")
+                    .clone();
+            let (ExpressionType::Identifier(device), TT::Identifier(method)) =
+                (&mut callee.expression_type, method.token_type)
+            else {
+                self.errors
+                    .push(self.missing_token_error("Only named devices have methods", tokens));
+                return None;
+            };
+            device.push('.');
+            device.push_str(&method);
+            if !matches!(
+                self.peek(tokens)?.token_type,
+                TT::Punctuation(PT::LeftParen)
+            ) {
+                self.errors
+                    .push(self.missing_token_error("Device method must be called", tokens));
+                return None;
+            }
+        }
         if !matches!(
             self.peek(tokens)?.token_type,
             TT::Punctuation(PT::LeftParen)

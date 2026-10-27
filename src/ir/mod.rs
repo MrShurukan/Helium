@@ -182,6 +182,11 @@ pub struct Pin {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    Intrinsic {
+        device: DeviceId,
+        operation: crate::intrinsics::Intrinsic,
+        arguments: Vec<ValueId>,
+    },
     /// Lifecycle-only effects, not exposed as source-language operations.
     InterruptDisable,
     DeviceStart(DeviceId),
@@ -207,6 +212,7 @@ pub enum Op {
 impl Op {
     pub fn operands(&self) -> Vec<ValueId> {
         match self {
+            Self::Intrinsic { arguments, .. } => arguments.clone(),
             Self::InterruptRestore(a)
             | Self::Unary(_, a)
             | Self::Widen(a, _)
@@ -306,6 +312,7 @@ pub enum StartupPhase {
 #[derive(Debug, Clone)]
 pub enum DeviceConfig {
     PeriodicTimer(crate::timer::TimerConfig),
+    UartTx(crate::uart::UartConfig),
 }
 
 #[derive(Debug, Clone)]
@@ -316,14 +323,16 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn timer(&self) -> &crate::timer::TimerConfig {
+    pub fn timer(&self) -> Option<&crate::timer::TimerConfig> {
         match &self.config {
-            DeviceConfig::PeriodicTimer(config) => config,
+            DeviceConfig::PeriodicTimer(config) => Some(config),
+            _ => None,
         }
     }
-    pub fn timer_mut(&mut self) -> &mut crate::timer::TimerConfig {
+    pub fn timer_mut(&mut self) -> Option<&mut crate::timer::TimerConfig> {
         match &mut self.config {
-            DeviceConfig::PeriodicTimer(config) => config,
+            DeviceConfig::PeriodicTimer(config) => Some(config),
+            _ => None,
         }
     }
 }
@@ -337,6 +346,7 @@ pub struct InterruptBinding {
 
 #[derive(Debug, Clone)]
 pub struct Module {
+    pub warnings: Vec<crate::diagnostic::Diagnostic>,
     /// Present for source programs; absent for standalone IR test functions.
     pub lifecycle: Option<Lifecycle>,
     pub devices: Vec<Device>,
@@ -408,7 +418,10 @@ impl Module {
                 text,
                 "device d{id} {:?}: {}",
                 device.phase,
-                device.timer().report()
+                match &device.config {
+                    DeviceConfig::PeriodicTimer(c) => c.report(),
+                    DeviceConfig::UartTx(c) => c.report(),
+                }
             )
             .unwrap();
         }
@@ -476,6 +489,11 @@ impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InterruptDisable => f.write_str("interrupt_disable"),
+            Self::Intrinsic {
+                device,
+                operation,
+                arguments,
+            } => write!(f, "intrinsic d{} {:?} {:?}", device.0, operation, arguments),
             Self::DeviceStart(id) => write!(f, "device_start d{}", id.0),
             Self::InterruptEnable => f.write_str("interrupt_enable"),
             Self::InterruptSave => f.write_str("interrupt_save"),

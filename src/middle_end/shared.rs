@@ -13,12 +13,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResourceId {
+    Device(SymbolId),
     GlobalMemory(SymbolId),
     GpioPort(PortId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessKind {
+    UseDevice,
     ReadMemory,
     WriteMemory,
     ReadPin,
@@ -31,7 +33,7 @@ impl AccessKind {
     fn writes(self) -> bool {
         matches!(
             self,
-            Self::WriteMemory | Self::WritePin | Self::ConfigurePin
+            Self::WriteMemory | Self::WritePin | Self::ConfigurePin | Self::UseDevice
         )
     }
 }
@@ -64,6 +66,7 @@ impl Access {
     ) -> SharedAccessReason {
         use crate::frontend::static_type::{IntegerType, SignedIntegerType, UnsignedIntegerType};
         match self.resource {
+            ResourceId::Device(_) => SharedAccessReason::Device,
             ResourceId::GpioPort(_)
                 if irq.kind == AccessKind::ConfigurePin
                     || main.kind == AccessKind::ConfigurePin =>
@@ -91,7 +94,7 @@ impl Access {
             return false;
         }
         match self.resource {
-            ResourceId::GlobalMemory(_) => true,
+            ResourceId::GlobalMemory(_) | ResourceId::Device(_) => true,
             ResourceId::GpioPort(_) => match (
                 &symbols.get(self.symbol).kind,
                 &symbols.get(other.symbol).kind,
@@ -210,6 +213,7 @@ impl Program {
     ) {
         let symbol = symbols.get(id);
         let (resource, kind) = match symbol.kind {
+            SymbolKind::Device => (ResourceId::Device(id), AccessKind::UseDevice),
             SymbolKind::Global => (
                 ResourceId::GlobalMemory(id),
                 if write {
@@ -263,6 +267,17 @@ impl Program {
                 );
             }
             E::Call { arguments, .. } => {
+                if let SymbolKind::Intrinsic { device, .. } = symbols.get(e.symbol.unwrap()).kind {
+                    Self::access(
+                        device,
+                        true,
+                        false,
+                        protection,
+                        e.source_location,
+                        symbols,
+                        body,
+                    );
+                }
                 body.calls.push(Call {
                     callee: e.symbol.unwrap(),
                     location: e.source_location,

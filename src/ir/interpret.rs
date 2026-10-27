@@ -136,6 +136,11 @@ impl<'a> Interpreter<'a> {
                         self.interrupts_enabled = true;
                         None
                     }
+                    Op::Intrinsic { .. } => {
+                        return Err(Error::InvalidIr(
+                            "UART execution requires the machine simulator".into(),
+                        ))
+                    }
                     Op::DeviceStart(_) => None, // Peripherals are modeled by machine tests.
                     Op::InterruptSave => {
                         let previous = self.interrupts_enabled;

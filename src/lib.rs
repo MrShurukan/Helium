@@ -1,7 +1,9 @@
 //! Helium compilation stages. None of these functions starts an external process.
 pub mod backend;
 pub mod diagnostic;
+pub mod effects;
 pub mod frontend;
+pub mod intrinsics;
 pub mod ir;
 pub mod middle_end;
 pub mod resources;
@@ -9,10 +11,23 @@ pub mod semantic;
 mod support;
 pub use semantic::AnalyzedProgram;
 pub mod timer;
+pub mod uart;
 
 use backend::microcontroller::{self, Microcontroller};
 use diagnostic::Diagnostic;
 use frontend::Parser;
+
+#[derive(Debug)]
+pub struct Compilation {
+    pub output: String,
+    pub warnings: Vec<Diagnostic>,
+}
+impl std::ops::Deref for Compilation {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.output
+    }
+}
 
 fn target_named(mcu: &str) -> Result<&'static Microcontroller, Vec<Diagnostic>> {
     microcontroller::get(mcu).ok_or_else(|| {
@@ -48,7 +63,7 @@ pub fn analyze(source: &str) -> Result<AnalyzedProgram, Vec<Diagnostic>> {
 }
 
 /// Validate the executable language subset without starting external tools.
-pub fn check(source: &str, mcu: &str) -> Result<(), Vec<Diagnostic>> {
+pub fn check(source: &str, mcu: &str) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
     check_with_options(source, mcu, ir::Options::default())
 }
 
@@ -58,15 +73,15 @@ pub fn check_with_options(
     source: &str,
     mcu: &str,
     options: ir::Options,
-) -> Result<(), Vec<Diagnostic>> {
-    compile_llvm(source, mcu, options).map(|_| ())
+) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
+    compile_llvm(source, mcu, options).map(|result| result.warnings)
 }
 
 pub fn compile_llvm(
     source: &str,
     mcu: &str,
     options: ir::Options,
-) -> Result<String, Vec<Diagnostic>> {
+) -> Result<Compilation, Vec<Diagnostic>> {
     compile_llvm_with_target(source, target_named(mcu)?, options)
 }
 
@@ -75,18 +90,23 @@ pub fn compile_llvm_with_target(
     source: &str,
     target: &'static Microcontroller,
     options: ir::Options,
-) -> Result<String, Vec<Diagnostic>> {
+) -> Result<Compilation, Vec<Diagnostic>> {
     let statements = analyze(source)?;
     let module = typed_ir_from_ast(&statements, target, options, true)?;
-    backend::llvm::emit(&module, false).map_err(|detail| {
-        vec![Diagnostic::new(
-            diagnostic::DiagnosticKind::InvalidIr {
-                stage: "LLVM emission",
-                detail,
-            },
-            None,
-        )]
-    })
+    backend::llvm::emit(&module, false)
+        .map(|output| Compilation {
+            output,
+            warnings: module.warnings.clone(),
+        })
+        .map_err(|detail| {
+            vec![Diagnostic::new(
+                diagnostic::DiagnosticKind::InvalidIr {
+                    stage: "LLVM emission",
+                    detail,
+                },
+                None,
+            )]
+        })
 }
 
 pub fn compile_typed_ir(
@@ -125,7 +145,8 @@ fn typed_ir_from_ast(
     support::validate_pins(statements, target, &mut reservations)?;
     support::validate_features(statements, machine)?;
     let timer = timer::resolve(target, statements, options.cpu_hz, &mut reservations)?;
-    let mut module = ir::lower(program, target, timer).map_err(|error| vec![error])?;
+    let uarts = uart::resolve(target, statements, options.cpu_hz, &mut reservations)?;
+    let mut module = ir::lower(program, target, timer, uarts).map_err(|error| vec![error])?;
     let internal_error = |stage, error: ir::verify::Error| {
         vec![Diagnostic::new(
             diagnostic::DiagnosticKind::InvalidIr {

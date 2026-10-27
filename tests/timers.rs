@@ -178,7 +178,7 @@ fn ir_and_llvm_preserve_handler_visibility_and_startup_order() {
         .unwrap()
         .contains("@__vector_11"));
     let mut broken = module.clone();
-    broken.devices[0].timer_mut().ticks = 0;
+    broken.devices[0].timer_mut().unwrap().ticks = 0;
     assert!(ir::verify::verify(&broken).is_err());
     let mut broken = module.clone();
     broken.functions[0].blocks[0].instructions.swap(0, 1);

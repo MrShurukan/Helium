@@ -14,6 +14,9 @@ use unicode_width::UnicodeWidthStr;
 /// Stable public identifiers, independent of wording and presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticCode {
+    IsrBlocking,
+    IrqRequirement,
+    Device,
     Timer,
     SharedAccess,
     InterruptContext,
@@ -43,6 +46,9 @@ pub enum DiagnosticCode {
 impl DiagnosticCode {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::IsrBlocking => "W_ISR_BLOCKING",
+            Self::IrqRequirement => "E_IRQ_REQUIREMENT",
+            Self::Device => "E_DEVICE",
             Self::InterruptContext => "E_INTERRUPT_CONTEXT",
             Self::Timer => "E_TIMER",
             Self::SharedAccess => "E_SHARED_ACCESS",
@@ -79,6 +85,7 @@ impl fmt::Display for DiagnosticCode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SharedAccessReason {
+    Device,
     SharedMemory,
     MultiByteMemory,
     SamePin,
@@ -88,6 +95,17 @@ pub enum SharedAccessReason {
 /// Structured facts about an error. Add translations at the presentation layer.
 #[derive(Debug, Clone)]
 pub enum DiagnosticKind {
+    IsrBlocking {
+        name: String,
+        reason: crate::effects::Reason,
+    },
+    IrqRequirement {
+        name: String,
+        reason: crate::effects::Reason,
+    },
+    Device {
+        detail: String,
+    },
     Timer {
         error: crate::timer::TimerError,
     },
@@ -197,6 +215,9 @@ pub enum DiagnosticKind {
 impl DiagnosticKind {
     pub fn code(&self) -> DiagnosticCode {
         match self {
+            Self::IsrBlocking { .. } => DiagnosticCode::IsrBlocking,
+            Self::IrqRequirement { .. } => DiagnosticCode::IrqRequirement,
+            Self::Device { .. } => DiagnosticCode::Device,
             Self::Timer { .. } => DiagnosticCode::Timer,
             Self::SharedAccess { .. } => DiagnosticCode::SharedAccess,
             Self::InterruptContext { .. } => DiagnosticCode::InterruptContext,
@@ -241,6 +262,7 @@ impl DiagnosticKind {
 /// Semantic labels stay independent of wording and terminal/editor rendering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LabelKind {
+    EffectCall,
     InterruptAccess,
     MainAccess,
     MainCall,
@@ -271,7 +293,20 @@ pub struct Diagnostic {
     pub labels: Vec<Label>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
 impl Diagnostic {
+    pub fn severity(&self) -> Severity {
+        if matches!(*self.kind, DiagnosticKind::IsrBlocking { .. }) {
+            Severity::Warning
+        } else {
+            Severity::Error
+        }
+    }
     pub fn new(kind: DiagnosticKind, location: Option<SourceLocation>) -> Self {
         Self {
             kind: Box::new(kind),
@@ -308,10 +343,20 @@ impl Diagnostic {
     pub fn render_with(&self, source: &str, options: RenderOptions) -> String {
         let label = if self.code() == DiagnosticCode::Internal {
             "internal compiler error"
+        } else if self.severity() == Severity::Warning {
+            "warning"
         } else {
             "error"
         };
-        let heading = paint(&format!("{label}[{}]", self.code()), "1;31", options.color);
+        let heading = paint(
+            &format!("{label}[{}]", self.code()),
+            if self.severity() == Severity::Warning {
+                "1;33"
+            } else {
+                "1;31"
+            },
+            options.color,
+        );
         let mut result = format!("{heading}: {}", self.message());
 
         if let Some(span) = self.location {
@@ -335,7 +380,17 @@ impl Diagnostic {
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "error[{}]: {}", self.code(), self.message())
+        write!(
+            f,
+            "{}[{}]: {}",
+            if self.severity() == Severity::Warning {
+                "warning"
+            } else {
+                "error"
+            },
+            self.code(),
+            self.message()
+        )
     }
 }
 

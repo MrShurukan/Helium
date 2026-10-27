@@ -170,21 +170,42 @@ fn run(args: Vec<String>) -> Result<String, String> {
     let level = llvm_toolchain::Optimization::parse(optimization.as_deref().unwrap_or("none"))?;
     if command == "check" {
         let llvm = compile_llvm_with_target(&source, target, ir_options).map_err(diagnostics)?;
+        if !llvm.warnings.is_empty() {
+            eprintln!("{}", diagnostics(llvm.warnings.clone()));
+        }
         return Ok(format!(
             "Checked {}{}",
             input.display(),
-            timer_report(&llvm)
+            device_report(&llvm)
         ));
     }
 
     let content = match emit {
-        "ast" => format!("{:#?}\n", analyze(&source).map_err(diagnostics)?),
-        "ir" => compile_typed_ir_with_target(&source, target, ir_options)
-            .map_err(diagnostics)?
-            .dump(),
-        _ => compile_llvm_with_target(&source, target, ir_options).map_err(diagnostics)?,
+        "ast" => {
+            let program = analyze(&source).map_err(diagnostics)?;
+            if !program.warnings().is_empty() {
+                eprintln!("{}", diagnostics(program.warnings().to_vec()));
+            }
+            format!("{program:#?}\n")
+        }
+        "ir" => {
+            let module =
+                compile_typed_ir_with_target(&source, target, ir_options).map_err(diagnostics)?;
+            if !module.warnings.is_empty() {
+                eprintln!("{}", diagnostics(module.warnings.clone()));
+            }
+            module.dump()
+        }
+        _ => {
+            let result =
+                compile_llvm_with_target(&source, target, ir_options).map_err(diagnostics)?;
+            if !result.warnings.is_empty() {
+                eprintln!("{}", diagnostics(result.warnings));
+            }
+            result.output
+        }
     };
-    let report = timer_report(&content);
+    let report = device_report(&content);
 
     let extension = if emit == "llvm" { "ll" } else { emit };
     let destination = output.map(PathBuf::from).unwrap_or_else(|| {
@@ -224,14 +245,13 @@ fn run(args: Vec<String>) -> Result<String, String> {
     Ok(format!("Built {}{report}", destination.display()))
 }
 
-fn timer_report(content: &str) -> String {
+fn device_report(content: &str) -> String {
     content
         .lines()
-        .find_map(|line| {
-            line.strip_prefix("; Timer1:")
-                .map(|report| format!("\nTimer1:{report}"))
-        })
-        .unwrap_or_default()
+        .filter_map(|line| line.strip_prefix("; "))
+        .filter(|line| line.starts_with("Timer1:") || line.starts_with("UART0:"))
+        .map(|line| format!("\n{line}"))
+        .collect()
 }
 
 fn timer_options(args: &[String]) -> Result<String, String> {

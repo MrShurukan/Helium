@@ -128,6 +128,34 @@ pub fn verify(module: &Module) -> Result<(), Error> {
         visit(function.id, module, &mut HashSet::new(), &mut done)?;
     }
 
+    if let Some(roles) = &module.lifecycle {
+        let mut pending = vec![roles.initialize];
+        let mut visited = HashSet::new();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            for i in module.functions[id.0]
+                .blocks
+                .iter()
+                .flat_map(|b| &b.instructions)
+            {
+                match &i.op {
+                    Op::Call(callee, _) => pending.push(*callee),
+                    Op::Intrinsic { .. } => {
+                        return Err(failure(
+                            ErrorKind::InvalidEntry,
+                            Some(id),
+                            None,
+                            "device used before startup",
+                        ))
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     if !module.interrupts.is_empty() {
         let mut pending: Vec<_> = module
             .interrupts
@@ -274,6 +302,35 @@ fn verify_devices(module: &Module) -> Result<(), Error> {
     }
     for (index, device) in module.devices.iter().enumerate() {
         match &device.config {
+            DeviceConfig::UartTx(config) => {
+                if device.phase != StartupPhase::BeforeSetup
+                    || !crate::uart::plan(module.target, config.cpu_hz, u64::from(config.baud))
+                        .is_ok_and(|expected| expected == *config)
+                    || module
+                        .interrupts
+                        .iter()
+                        .any(|b| b.device == DeviceId(index))
+                {
+                    return Err(error(
+                        "invalid polling UART configuration, phase or interrupt binding",
+                    ));
+                }
+                reservations
+                    .claim(
+                        HardwareResource::Peripheral(config.hardware.name.into()),
+                        (),
+                    )
+                    .map_err(|_| error("hardware peripheral is already reserved"))?;
+                reservations
+                    .claim(
+                        HardwareResource::Pin {
+                            port: config.hardware.tx_port.into(),
+                            bit: config.hardware.tx_bit,
+                        },
+                        (),
+                    )
+                    .map_err(|_| error("UART TX pin is already reserved"))?;
+            }
             DeviceConfig::PeriodicTimer(timer) => {
                 let valid = crate::timer::plan_with_direction(
                     module.target,
@@ -499,6 +556,36 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                 available(operand, position)?;
             }
             let expected = match &instruction.op {
+                Op::Intrinsic {
+                    device,
+                    operation,
+                    arguments,
+                } => {
+                    require(
+                        module
+                            .devices
+                            .get(device.0)
+                            .is_some_and(|d| matches!(d.config, DeviceConfig::UartTx(_))),
+                        "UART intrinsic requires a UART device",
+                    )?;
+                    let count = if *operation == crate::intrinsics::Intrinsic::UartFlush {
+                        0
+                    } else {
+                        1
+                    };
+                    require(arguments.len() == count, "invalid intrinsic argument count")?;
+                    for argument in arguments {
+                        require(
+                            value_type(*argument)? == Type::U8,
+                            "UART byte must have type u8",
+                        )?;
+                    }
+                    if *operation == crate::intrinsics::Intrinsic::UartTryWrite {
+                        Some(Type::Bool)
+                    } else {
+                        None
+                    }
+                }
                 Op::InterruptDisable | Op::InterruptEnable | Op::DeviceStart(_) => {
                     require(
                         function.id == module.entry && !module.devices.is_empty(),

@@ -12,6 +12,26 @@ pub struct Microcontroller {
     pub sreg_io: u8,
     pub gpio: &'static [GpioPort],
     pub timer: Timer1,
+    pub uart: Uart,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Uart {
+    pub name: &'static str,
+    pub tx_port: &'static str,
+    pub tx_bit: usize,
+    pub status: u16,
+    pub control: u16,
+    pub format: u16,
+    pub baud_low: u16,
+    pub baud_high: u16,
+    pub data: u16,
+    pub divider_max: u16,
+    pub tx_enable: u8,
+    pub format_8n1: u8,
+    pub empty: u8,
+    pub complete: u8,
+    pub double_speed: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +76,23 @@ impl Timer1 {
 }
 
 pub const ATMEGA328P: Microcontroller = Microcontroller {
+    uart: Uart {
+        name: "UART0",
+        tx_port: "D",
+        tx_bit: 1,
+        status: 0xc0,
+        control: 0xc1,
+        format: 0xc2,
+        baud_low: 0xc4,
+        baud_high: 0xc5,
+        data: 0xc6,
+        divider_max: 4095,
+        tx_enable: 8,
+        format_8n1: 6,
+        empty: 32,
+        complete: 64,
+        double_speed: 2,
+    },
     name: "atmega328p",
     avr_dude_name: "m328p",
     llvm_triple: "avr-unknown-unknown",

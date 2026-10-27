@@ -77,6 +77,55 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
+fn warnings_preserve_success_and_are_emitted_once_on_stderr() {
+    let fixture = Fixture::new();
+    fs::write(&fixture.source,"device debug=UART0{baud:38400,mode:TX,} fn send(){debug.write_byte(65);} timer t=Timer1{every:1ms,interrupt{send();}} loop{}").unwrap();
+    for emit in [None, Some("ast"), Some("ir"), Some("llvm")] {
+        let mut args = vec!["--cpu-hz", "16000000", "--color", "never"];
+        if let Some(emit) = emit {
+            args.extend(["--emit", emit]);
+        }
+        let output = fixture.run(if emit.is_some() { "build" } else { "check" }, &args, false);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(
+            stderr(&output).matches("warning[W_ISR_BLOCKING]").count(),
+            1
+        );
+        assert!(stderr(&output).contains("effect propagated through this call"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("warning["));
+    }
+}
+
+#[test]
+#[ignore = "requires LLVM AVR and AVR toolchain; no flashing"]
+fn warning_only_build_produces_hex_and_reports_baud() {
+    let fixture = Fixture::new();
+    fs::write(&fixture.source,"device debug=UART0{baud:38400,mode:TX,} timer t=Timer1{every:1ms,interrupt{debug.write_byte(65);}} loop{}").unwrap();
+    let destination = fixture.root.join("warning.hex");
+    let output = fixture.run(
+        "build",
+        &[
+            "--cpu-hz",
+            "16000000",
+            "--emit",
+            "hex",
+            "-o",
+            destination.to_str().unwrap(),
+        ],
+        true,
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stderr(&output).matches("warning[W_ISR_BLOCKING]").count(),
+        1
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("UART0: TX 8N1"));
+    assert!(fs::read_to_string(destination)
+        .unwrap()
+        .contains(":00000001FF"));
+}
+
+#[test]
 fn diagnostic_color_policy_is_explicit_and_auto_is_plain_when_captured() {
     let fixture = Fixture::new();
     fs::write(&fixture.source, "loop { @ }").unwrap();

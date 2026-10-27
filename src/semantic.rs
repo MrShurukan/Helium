@@ -18,6 +18,11 @@ pub enum BodyId {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SymbolKind {
+    Device,
+    Intrinsic {
+        device: SymbolId,
+        operation: crate::intrinsics::Intrinsic,
+    },
     Global,
     Local,
     Parameter,
@@ -84,12 +89,20 @@ impl SymbolTable {
 /// identities together; consumers cannot mutate one independently of the other.
 #[derive(Debug)]
 pub struct AnalyzedProgram {
+    pub(crate) warnings: Vec<crate::diagnostic::Diagnostic>,
+    pub(crate) effects: std::collections::BTreeMap<BodyId, crate::effects::Summary>,
     pub(crate) statements: Vec<Statement>,
     pub(crate) symbols: SymbolTable,
     pub(crate) shared: crate::middle_end::shared::Program,
 }
 
 impl AnalyzedProgram {
+    pub fn warnings(&self) -> &[crate::diagnostic::Diagnostic] {
+        &self.warnings
+    }
+    pub fn effects(&self) -> &std::collections::BTreeMap<BodyId, crate::effects::Summary> {
+        &self.effects
+    }
     pub fn statements(&self) -> &[Statement] {
         &self.statements
     }

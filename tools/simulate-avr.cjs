@@ -2,7 +2,7 @@
 // Usage: node tools/simulate-avr.cjs <build-directory> <input-hex-byte-list>
 const fs = require('node:fs');
 const path = require('node:path');
-const { CPU, avrInstruction, AVRTimer, timer1Config } = require(process.env.HELIUM_AVR8JS ||
+const { CPU, avrInstruction, AVRTimer, timer1Config, AVRUSART, usart0Config } = require(process.env.HELIUM_AVR8JS ||
     path.resolve(__dirname, '../build/toolchain/avr8js/package'));
 
 const directory = process.argv[2];
@@ -38,8 +38,15 @@ const stop = symbols.get('_exit') || symbols.get('exit');
 if (!stop) throw new Error('Missing avr-libc exit symbol');
 
 const cpu = new CPU(new Uint16Array(flash.buffer), 2048);
-const timerCycles = Number(process.env.HELIUM_TIMER_CYCLES || 0);
+const timerCycles = Number(process.env.HELIUM_TIMER_CYCLES || process.env.HELIUM_UART_CYCLES || 0);
 if (timerCycles) new AVRTimer(cpu, timer1Config);
+const uartBytes = [];
+const uartWrites = [];
+if (process.env.HELIUM_UART_CYCLES) {
+    const uart = new AVRUSART(cpu, usart0Config, 16000000);
+    // AVR8js reports accepted UDR writes, not bytes physically received by a peer.
+    uart.onByteTransmit = value => uartBytes.push(value);
+}
 // Adversarial GPIO regression mode: request a real ISR after each main
 // instruction once IRQs are enabled. This is fault scheduling, not timer timing.
 const racePort = process.env.HELIUM_GPIO_RACE_PORT;
@@ -81,6 +88,7 @@ for (const [port, address] of [['B', 0x23], ['C', 0x26], ['D', 0x29]]) {
         };
     }
     cpu.writeHooks[address + 2] = value => {
+        if (process.env.HELIUM_UART_CYCLES) uartWrites.push({ value, complete: !!(cpu.data[0xc0] & 64), irq: !!(cpu.data[0x5f] & 128) });
         checkOwnedBits(address + 2, value);
         events.push(`write:${port}:${value}`);
         if (process.env.HELIUM_TRACE_INTERRUPTS) {
@@ -122,5 +130,5 @@ const globals = [...symbols].filter(([name]) => /^helium_g\d+$/.test(name))
         return `${name}:${value}`;
     });
 const directions = [cpu.data[0x24], cpu.data[0x27], cpu.data[0x2a]];
-console.log(JSON.stringify({ globals, events, directions, gpioRace, interruptStates, interruptCycles, nestedInterrupt, cycles: cpu.cycles,
+console.log(JSON.stringify({ globals, events, directions, gpioRace, interruptStates, interruptCycles, nestedInterrupt, uartBytes, uartWrites, cycles: cpu.cycles,
     observedStackBytes: 0x8ff - minimumSP, steps }));

@@ -53,6 +53,7 @@ impl Analyzer {
         mut statements: Vec<Statement>,
     ) -> Result<AnalyzedProgram, Vec<Diagnostic>> {
         self.collect_signatures(&mut statements);
+        self.collect_devices(&mut statements);
 
         // Global initialization keeps source order. Function bodies see all globals,
         // but calls in global initializers are deferred until setup is available.
@@ -102,7 +103,28 @@ impl Analyzer {
         if !errors.is_empty() {
             return Err(errors);
         }
+        let contracts = self
+            .symbols
+            .iter()
+            .filter_map(|(id, symbol)| match symbol.kind {
+                SymbolKind::Intrinsic { operation, .. } => Some((id, operation.contract())),
+                _ => None,
+            })
+            .collect();
+        let runtime_irqs = statements
+            .iter()
+            .any(|s| matches!(s.statement_type, S::TimerDeclaration(_)));
+        let (effects, diagnostics) =
+            crate::effects::analyze(shared.bodies(), &self.symbols, &contracts, runtime_irqs);
+        if diagnostics
+            .iter()
+            .any(|d| d.severity() == crate::diagnostic::Severity::Error)
+        {
+            return Err(diagnostics);
+        }
         Ok(AnalyzedProgram {
+            warnings: diagnostics,
+            effects,
             statements,
             symbols: self.symbols,
             shared,
@@ -205,6 +227,7 @@ impl Analyzer {
         let span = statement.source_location;
 
         match &mut statement.statement_type {
+            S::DeviceDeclaration(_) => {}
             S::TimerDeclaration(timer) => {
                 if let Some(id) = statement.symbol {
                     self.current_body = BodyId::Interrupt(id);
@@ -484,8 +507,19 @@ impl Analyzer {
             }
             E::Identifier(name) if self.lookup(name) == Some(T::NoValue) => {
                 self.error(
-                    DiagnosticKind::Timer {
-                        error: crate::timer::TimerError::NotValue { name: name.clone() },
+                    if self
+                        .resolve(name)
+                        .is_some_and(|id| matches!(self.symbols.get(id).kind, SymbolKind::Device))
+                    {
+                        DiagnosticKind::Device {
+                            detail: format!(
+                                "Device '{name}' is a static resource, not a runtime value"
+                            ),
+                        }
+                    } else {
+                        DiagnosticKind::Timer {
+                            error: crate::timer::TimerError::NotValue { name: name.clone() },
+                        }
                     },
                     span,
                 );

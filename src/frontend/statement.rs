@@ -25,6 +25,7 @@ impl LocatableInSource for Statement {
 
 #[derive(Debug)]
 pub enum StatementType {
+    DeviceDeclaration(DeviceDeclaration),
     TimerDeclaration(TimerDeclaration),
     FunctionDeclaration {
         no_interrupt: Option<SourceLocation>,
@@ -114,7 +115,7 @@ impl Statement {
                 visit(to);
                 body.for_each_expression(visit);
             }
-            S::DefDeclaration(_) => {}
+            S::DefDeclaration(_) | S::DeviceDeclaration(_) => {}
         }
     }
 
@@ -163,7 +164,7 @@ impl Statement {
                 visit(to);
                 body.for_each_expression_mut(visit);
             }
-            S::DefDeclaration(_) => {}
+            S::DefDeclaration(_) | S::DeviceDeclaration(_) => {}
         }
     }
 
@@ -346,6 +347,11 @@ impl Display for Statement {
 impl Display for StatementType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::DeviceDeclaration(device) => write!(
+                f,
+                "device {} = {} {{ baud: {}, mode: TX, }}",
+                device.identifier, device.hardware, device.baud
+            ),
             Self::TimerDeclaration(timer) => {
                 write!(
                     f,
@@ -555,4 +561,14 @@ impl Display for DefDeclarationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.message)
     }
+}
+
+#[derive(Debug)]
+pub struct DeviceDeclaration {
+    pub identifier: String,
+    pub hardware: String,
+    pub baud: u64,
+    pub name_location: SourceLocation,
+    pub hardware_location: SourceLocation,
+    pub baud_location: SourceLocation,
 }

@@ -12,6 +12,51 @@ pub(super) struct Signature {
 }
 
 impl Analyzer {
+    pub(super) fn collect_devices(&mut self, statements: &mut [Statement]) {
+        for statement in statements {
+            let S::DeviceDeclaration(device) = &statement.statement_type else {
+                continue;
+            };
+            let Some(id) = self.declare(
+                &device.identifier,
+                T::NoValue,
+                device.name_location,
+                SymbolKind::Device,
+            ) else {
+                continue;
+            };
+            statement.symbol = Some(id);
+            for operation in crate::intrinsics::Intrinsic::ALL {
+                let name = format!("{}.{}", device.identifier, operation.name());
+                let parameters = operation.parameters();
+                let result = operation.result();
+                let callable = self.symbols.add(Symbol {
+                    name: name.clone(),
+                    kind: SymbolKind::Intrinsic {
+                        device: id,
+                        operation,
+                    },
+                    ty: result.unwrap_or(T::NoValue),
+                    declaration: device.name_location,
+                    owner: None,
+                });
+                self.functions.insert(
+                    name,
+                    Signature {
+                        id: callable,
+                        no_interrupt: (operation.contract().irq
+                            == crate::effects::IrqRequirement::Disabled)
+                            .then_some(device.name_location),
+                        parameter_locations: vec![device.name_location; parameters.len()],
+                        parameters,
+                        result,
+                        name_location: device.name_location,
+                        return_location: result.map(|_| device.name_location),
+                    },
+                );
+            }
+        }
+    }
     pub(super) fn collect_signatures(&mut self, statements: &mut [Statement]) {
         for statement in statements {
             let S::FunctionDeclaration {

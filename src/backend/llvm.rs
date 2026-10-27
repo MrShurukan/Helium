@@ -23,12 +23,11 @@ fn result_type(value: Option<Type>) -> &'static str {
 /// `export_symbols` is for differential tests, not a public C ABI contract.
 pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
     let target = module.target;
-    if module
-        .devices
-        .iter()
-        .any(|device| device.timer().hardware != &target.timer)
-    {
-        return Err("Timer configuration belongs to a different target description".into());
+    if module.devices.iter().any(|device| match &device.config {
+        DeviceConfig::PeriodicTimer(t) => t.hardware != &target.timer,
+        DeviceConfig::UartTx(u) => u.hardware != &target.uart,
+    }) {
+        return Err("Device configuration belongs to a different target description".into());
     }
 
     // Reject wider integers until their machine-level behavior is covered by tests.
@@ -61,7 +60,15 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
     let linkage = if export_symbols { "" } else { "internal " };
     let mut out = format!("; Helium LLVM prototype: wrapping arithmetic, explicit hardware effects\ntarget triple = \"{}\"\n\n", target.llvm_triple);
     for device in &module.devices {
-        writeln!(out, "; {}", device.timer().report()).unwrap();
+        writeln!(
+            out,
+            "; {}",
+            match &device.config {
+                DeviceConfig::PeriodicTimer(t) => t.report(),
+                DeviceConfig::UartTx(u) => u.report(),
+            }
+        )
+        .unwrap();
     }
     for line in super::timing::inventory(module) {
         writeln!(out, "; helium-timing: {line}").unwrap();
@@ -75,6 +82,11 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
         .unwrap();
     }
 
+    for (index, device) in module.devices.iter().enumerate() {
+        if let DeviceConfig::UartTx(config) = &device.config {
+            emit_uart(&mut out, index, config, target.sreg_io);
+        }
+    }
     for function in &module.functions {
         let mut emitter = FunctionEmitter {
             module,
@@ -143,6 +155,62 @@ struct FunctionEmitter<'a> {
     types: HashMap<ValueId, Type>,
     out: String,
     temporary: usize,
+}
+
+// Polling implementations have typed frontend contracts, but no synthetic Helium
+// bodies. Only the check/write transaction masks interrupts; waits never do.
+fn emit_uart(out: &mut String, id: usize, config: &crate::uart::UartConfig, sreg: u8) {
+    let h = config.hardware;
+    let status = h.status;
+    let data = h.data;
+    let empty = h.empty;
+    let complete = h.complete;
+    let clear = config.status_bits() | complete;
+    writeln!(
+        out,
+        r#"
+@helium_uart_sent_{id} = internal global i8 0, align 1
+define internal i1 @helium_uart_{id}_try_write_byte(i8 %byte) addrspace(1) {{
+entry:
+  %saved = call i8 asm sideeffect "in $0, {sreg}\0Acli", "=r,~{{memory}}"()
+  %status = load volatile i8, ptr inttoptr (i16 {status} to ptr), align 1
+  %mask = and i8 %status, {empty}
+  %ready = icmp ne i8 %mask, 0
+  br i1 %ready, label %send, label %done
+send:
+  store volatile i8 %byte, ptr inttoptr (i16 {data} to ptr), align 1
+  store volatile i8 {clear}, ptr inttoptr (i16 {status} to ptr), align 1
+  store volatile i8 1, ptr @helium_uart_sent_{id}, align 1
+  br label %done
+done:
+  call void asm sideeffect "out {sreg}, $0", "r,~{{memory}}"(i8 %saved)
+  ret i1 %ready
+}}
+define internal void @helium_uart_{id}_write_byte(i8 %byte) addrspace(1) {{
+entry:
+  br label %wait
+wait:
+  %ready = call addrspace(1) i1 @helium_uart_{id}_try_write_byte(i8 %byte)
+  br i1 %ready, label %done, label %wait
+done:
+  ret void
+}}
+define internal void @helium_uart_{id}_flush() addrspace(1) {{
+entry:
+  %sent = load volatile i8, ptr @helium_uart_sent_{id}, align 1
+  %idle = icmp eq i8 %sent, 0
+  br i1 %idle, label %done, label %wait
+wait:
+  %status = load volatile i8, ptr inttoptr (i16 {status} to ptr), align 1
+  %mask = and i8 %status, {complete}
+  %ready = icmp ne i8 %mask, 0
+  br i1 %ready, label %done, label %wait
+done:
+  ret void
+}}
+"#
+    )
+    .unwrap();
 }
 
 impl FunctionEmitter<'_> {
@@ -252,12 +320,26 @@ impl FunctionEmitter<'_> {
             Op::InterruptDisable => "call void asm sideeffect \"cli\", \"~{memory}\"()".into(),
             Op::InterruptEnable => "call void asm sideeffect \"sei\", \"~{memory}\"()".into(),
             Op::DeviceStart(id) => {
-                let timer = self
+                let device = self
                     .module
                     .devices
                     .get(id.0)
-                    .ok_or("missing device configuration")?
-                    .timer();
+                    .ok_or("missing device configuration")?;
+                if let DeviceConfig::UartTx(config) = &device.config {
+                    let h = config.hardware;
+                    self.write_register(h.control, "0");
+                    self.write_register(h.baud_high, &(config.divider >> 8).to_string());
+                    self.write_register(h.baud_low, &(config.divider & 255).to_string());
+                    self.write_register(h.format, &h.format_8n1.to_string());
+                    self.write_register(h.status, &(config.status_bits() | h.complete).to_string());
+                    self.line(&format!(
+                        "store volatile i8 0, ptr @helium_uart_sent_{}, align 1",
+                        id.0
+                    ));
+                    self.write_register(h.control, &h.tx_enable.to_string());
+                    return Ok(());
+                }
+                let timer = device.timer().ok_or("missing timer configuration")?;
                 let compare = timer.ticks - 1;
                 let hardware = &self.target.timer;
                 let control = hardware.ctc_mode
@@ -359,6 +441,27 @@ impl FunctionEmitter<'_> {
                     )?;
                 }
                 return Ok(());
+            }
+            Op::Intrinsic {
+                device,
+                operation,
+                arguments,
+            } => {
+                let args = arguments
+                    .iter()
+                    .map(|v| self.value(*v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let result = if *operation == crate::intrinsics::Intrinsic::UartTryWrite {
+                    "i1"
+                } else {
+                    "void"
+                };
+                format!(
+                    "call addrspace(1) {result} @helium_uart_{}_{}({args})",
+                    device.0,
+                    operation.name()
+                )
             }
             Op::Call(id, arguments) => {
                 let args = arguments
