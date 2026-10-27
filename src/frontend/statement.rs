@@ -349,8 +349,12 @@ impl Display for StatementType {
             Self::TimerDeclaration(timer) => {
                 write!(
                     f,
-                    "timer {} = {} {{ every: {}ns, tolerance: {}ns, interrupt ",
-                    timer.identifier, timer.hardware, timer.every_ns, timer.tolerance_ns
+                    "timer {} = {} {{ every: {}ns, tolerance: {}{}ns, interrupt ",
+                    timer.identifier,
+                    timer.hardware,
+                    timer.every_ns,
+                    timer.tolerance_direction.sign(),
+                    timer.tolerance_ns
                 )?;
                 Self::write_block(f, &timer.body)?;
                 write!(f, " }}")
@@ -470,6 +474,7 @@ pub struct TimerDeclaration {
     pub period_location: SourceLocation,
     pub every_ns: u64,
     pub tolerance_ns: u64,
+    pub tolerance_direction: crate::timer::ToleranceDirection,
     pub body: Vec<Statement>,
     pub handler_location: SourceLocation,
 }

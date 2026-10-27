@@ -62,6 +62,7 @@ impl Parser<'_> {
         );
         let mut every = None;
         let mut tolerance = None;
+        let mut tolerance_direction = crate::timer::ToleranceDirection::Either;
         let mut handler = None;
         loop {
             if matches!(
@@ -95,6 +96,19 @@ impl Parser<'_> {
                         TT::Punctuation(PT::Colon),
                         "Expected ':' after timer option"
                     );
+                    if field == "tolerance" {
+                        tolerance_direction = match self.peek(tokens)?.token_type {
+                            TT::Punctuation(PT::Minus) => {
+                                self.advance(tokens)?;
+                                crate::timer::ToleranceDirection::NotLonger
+                            }
+                            TT::Punctuation(PT::Plus) => {
+                                self.advance(tokens)?;
+                                crate::timer::ToleranceDirection::NotShorter
+                            }
+                            _ => crate::timer::ToleranceDirection::Either,
+                        };
+                    }
                     let value = self.timer_duration(tokens)?;
                     if field == "every" {
                         every = Some(value);
@@ -145,6 +159,7 @@ impl Parser<'_> {
                 period_location,
                 every_ns,
                 tolerance_ns: tolerance.map_or(0, |v| v.0),
+                tolerance_direction,
                 body,
                 handler_location,
             }),

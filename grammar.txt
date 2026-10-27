@@ -44,6 +44,6 @@ primary         -> INTEGER | FLOAT | STRING | BOOLEAN | PINSTATE | PINMODE
 // Global initializers cannot call functions. See docs/FUNCTIONS.md for the full contract.
 
 timerDecl       -> "timer" IDENTIFIER "=" IDENTIFIER "{" timerField* "}" ;
-timerField      -> "every" ":" duration "," | "tolerance" ":" duration "," | "interrupt" block ;
+timerField      -> "every" ":" duration "," | "tolerance" ":" ( "+" | "-" )? duration "," | "interrupt" block ;
 duration        -> INTEGER ( "ns" | "us" | "ms" | "s" ) ;
 // Require exactly one every and interrupt; at most one tolerance. Timer1 only.

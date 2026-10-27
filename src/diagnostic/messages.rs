@@ -11,9 +11,13 @@ impl crate::timer::TimerError {
             Self::Unsupported { hardware } => format!("Unsupported timer '{hardware}'; this target currently supports periodic Timer1 only"),
             Self::AlreadyReserved => "Timer1 is already reserved by another declaration".into(),
             Self::NotValue { name } => format!("Timer '{name}' names a hardware resource, not a runtime value; it cannot be copied or assigned"),
-            Self::Unrepresentable { cpu_hz, requested_ns, tolerance_ns, shorter, longer, minimum_tolerance_ns } => {
+            Self::Unrepresentable { cpu_hz, requested_ns, tolerance_ns, shorter, longer, direction, minimum_tolerance_ns } => {
                 let show = |c: &Option<crate::timer::TimerConfig>| c.as_ref().map(crate::timer::TimerConfig::report).unwrap_or_else(|| "not available".into());
-                format!("Cannot represent every: {requested_ns}ns within tolerance: {tolerance_ns}ns at CPU={cpu_hz} Hz.\nNearest shorter: {}\nNearest longer: {}\nNearest configuration needs tolerance of at least {minimum_tolerance_ns}ns. Use helium timer-options to inspect alternatives.", show(shorter), show(longer))
+                let requirement = match minimum_tolerance_ns {
+                    Some(minimum) => format!("Nearest configuration in the allowed direction needs tolerance of at least {minimum}ns."),
+                    None => "No representable period exists in the allowed direction; increasing tolerance cannot help.".into(),
+                };
+                format!("Cannot represent every: {requested_ns}ns within tolerance: {}{tolerance_ns}ns at CPU={cpu_hz} Hz.\nNearest shorter: {}\nNearest longer: {}\n{requirement} Use helium timer-options to inspect alternatives.", direction.sign(), show(shorter), show(longer))
             }
         }
     }

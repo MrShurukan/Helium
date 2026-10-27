@@ -245,8 +245,13 @@ fn verify_timer(module: &Module) -> Result<(), Error> {
             }
         }
         (Some(timer), Some(id)) => {
-            let valid = crate::timer::plan(timer.cpu_hz, timer.requested_ns, timer.tolerance_ns)
-                .is_ok_and(|expected| expected == *timer);
+            let valid = crate::timer::plan_with_direction(
+                timer.cpu_hz,
+                timer.requested_ns,
+                timer.tolerance_ns,
+                timer.direction,
+            )
+            .is_ok_and(|expected| expected == *timer);
             if !valid {
                 return Err(error("invalid Timer1 configuration"));
             }

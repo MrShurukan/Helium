@@ -6,11 +6,30 @@ use crate::frontend::{
     utils::SourceLocation,
 };
 
+/// Direction of the allowed period error, with exact matches included.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ToleranceDirection {
+    #[default]
+    Either,
+    NotLonger,
+    NotShorter,
+}
+impl ToleranceDirection {
+    pub fn sign(self) -> &'static str {
+        match self {
+            Self::Either => "",
+            Self::NotLonger => "-",
+            Self::NotShorter => "+",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimerConfig {
     pub cpu_hz: u32,
     pub requested_ns: u64,
     pub tolerance_ns: u64,
+    pub direction: ToleranceDirection,
     pub prescaler: u16,
     pub ticks: u32,
 }
@@ -35,7 +54,8 @@ pub enum TimerError {
         tolerance_ns: u64,
         shorter: Option<TimerConfig>,
         longer: Option<TimerConfig>,
-        minimum_tolerance_ns: u128,
+        direction: ToleranceDirection,
+        minimum_tolerance_ns: Option<u128>,
     },
 }
 
@@ -74,14 +94,16 @@ impl TimerConfig {
             self.numerator() as i128 - i128::from(self.requested_ns) * i128::from(self.cpu_hz);
         let error = delta as f64 / f64::from(self.cpu_hz) / 1e9;
         format!(
-            "{}: CPU={} Hz, period={actual:.12}s, error={:+.6}ns ({:+.6}%), prescaler={}, {}={}",
+            "{}: CPU={} Hz, period={actual:.12}s, error={:+.6}ns ({:+.6}%), prescaler={}, {}={}, tolerance={}{}ns",
             ATMEGA328P.timer.name,
             self.cpu_hz,
             error * 1e9,
             error * 1e11 / self.requested_ns as f64,
             self.prescaler,
             ATMEGA328P.timer.compare_name,
-            self.ticks - 1
+            self.ticks - 1,
+            self.direction.sign(),
+            self.tolerance_ns
         )
     }
 }
@@ -129,6 +151,7 @@ pub fn candidates(cpu_hz: u32, requested_ns: u64) -> Result<Vec<TimerConfig>, Ti
                 cpu_hz,
                 requested_ns,
                 tolerance_ns: 0,
+                direction: ToleranceDirection::Either,
                 prescaler,
                 ticks: ticks.clamp(1, u128::from(ATMEGA328P.timer.max_ticks)) as u32,
             };
@@ -142,30 +165,46 @@ pub fn candidates(cpu_hz: u32, requested_ns: u64) -> Result<Vec<TimerConfig>, Ti
 }
 
 pub fn plan(cpu_hz: u32, requested_ns: u64, tolerance_ns: u64) -> Result<TimerConfig, TimerError> {
-    let options = candidates(cpu_hz, requested_ns)?;
-    let mut best = options[0].clone();
-    best.tolerance_ns = tolerance_ns;
-    if best.error() <= u128::from(tolerance_ns) * u128::from(cpu_hz) {
-        return Ok(best);
-    }
+    plan_with_direction(
+        cpu_hz,
+        requested_ns,
+        tolerance_ns,
+        ToleranceDirection::Either,
+    )
+}
 
+pub fn plan_with_direction(
+    cpu_hz: u32,
+    requested_ns: u64,
+    tolerance_ns: u64,
+    direction: ToleranceDirection,
+) -> Result<TimerConfig, TimerError> {
+    let options = candidates(cpu_hz, requested_ns)?;
     let desired = u128::from(requested_ns) * u128::from(cpu_hz);
-    let lower = options
-        .iter()
-        .filter(|c| c.numerator() < desired)
-        .max_by_key(|c| c.numerator());
-    let upper = options
-        .iter()
-        .filter(|c| c.numerator() > desired)
-        .min_by_key(|c| c.numerator());
-    let minimum = best.error().div_ceil(u128::from(cpu_hz));
+    let best = options.iter().find(|c| match direction {
+        ToleranceDirection::Either => true,
+        ToleranceDirection::NotLonger => c.numerator() <= desired,
+        ToleranceDirection::NotShorter => c.numerator() >= desired,
+    });
+    if let Some(best) = best {
+        if best.error() <= u128::from(tolerance_ns) * u128::from(cpu_hz) {
+            let mut selected = best.clone();
+            selected.tolerance_ns = tolerance_ns;
+            selected.direction = direction;
+            return Ok(selected);
+        }
+    }
+    // Candidates are already ordered by error and deterministic tie-breaks.
+    let lower = options.iter().find(|c| c.numerator() < desired);
+    let upper = options.iter().find(|c| c.numerator() > desired);
     Err(TimerError::Unrepresentable {
         cpu_hz,
         requested_ns,
         tolerance_ns,
+        direction,
         shorter: lower.cloned(),
         longer: upper.cloned(),
-        minimum_tolerance_ns: minimum,
+        minimum_tolerance_ns: best.map(|c| c.error().div_ceil(u128::from(cpu_hz))),
     })
 }
 
@@ -212,7 +251,12 @@ pub(crate) fn resolve(
             fail(TimerError::MissingClock, timer.period_location);
             continue;
         };
-        match plan(cpu_hz, timer.every_ns, timer.tolerance_ns) {
+        match plan_with_direction(
+            cpu_hz,
+            timer.every_ns,
+            timer.tolerance_ns,
+            timer.tolerance_direction,
+        ) {
             Ok(config) => selected = Some(config),
             Err(detail) => fail(detail, timer.period_location),
         }
