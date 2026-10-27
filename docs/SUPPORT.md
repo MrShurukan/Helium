@@ -22,7 +22,8 @@ AVRA, the old linear IR and hand-written AVR assembly generation have been remov
 | Calls in global initializers | Rejected | — | — |
 | `noInterrupt` blocks and function requirements | Checked calls; nested scopes and early returns | Yes | Yes |
 | Timer1 CTC, embedded ISR, shared-access checks | Yes; explicit CPU clock | Verified IR; interpreter has no asynchronous dispatch | Yes |
-| Modules, heap, other timers, peripheral drivers | Not implemented | — | — |
+| UART0 TX polling, 8N1 | Typed methods, resources, ISR warnings | Verified IR; interpreter reports unsupported execution | Yes |
+| Modules, heap, other timers, other peripheral drivers | Not implemented | — | — |
 
 `analyze` parses, type-checks and returns one `AnalyzedProgram` with resolved symbol
 identities and a shared-access graph; use `statements()` to inspect its AST.
@@ -65,3 +66,8 @@ GPIO writes preserve other pins on the same port through explicit atomic bit
 instructions. Main/ISR accesses to distinct pins are allowed; a shared pin with
 writes or mode changes still requires noInterrupt. Shared memory rules are unchanged.
 See [atomic GPIO contract and validation](ATOMIC_GPIO.md).
+
+`compile_llvm[_with_target]` returns `Compilation { output, warnings }`;
+`check[_with_options]` returns warnings on success. AnalyzedProgram and Module also
+retain source warnings. Warnings do not fail compilation and have no suppression
+option yet. See [CALL_EFFECTS.md](CALL_EFFECTS.md) and [UART_API_PROPOSAL.md](UART_API_PROPOSAL.md).

@@ -148,3 +148,10 @@ Programs with a timer require an explicit clock, for example:
 cargo run --locked -- check examples/timer-seconds.he --mcu atmega328p --cpu-hz 16000000
 cargo run --locked -- timer-options --mcu atmega328p --cpu-hz 16000000 --timer Timer1 --every 1s
 ```
+
+## UART TX and warnings
+
+[UART TX](docs/UART_API_PROPOSAL.md) supports UART0 polling at a fixed 8N1 format.
+Try `cargo run -- check examples/uart-tx.he --mcu atmega328p --cpu-hz 16000000`.
+Blocking calls in an ISR are allowed with an unsuppressible `W_ISR_BLOCKING` warning;
+shared-access protection still applies. See [call contracts](docs/CALL_EFFECTS.md).

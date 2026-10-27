@@ -91,3 +91,13 @@ and an unrepresentable period. The period diagnostic includes nearest alternativ
 and the minimum tolerance. Duplicate resources link the earlier declaration.
 `E_SHARED_ACCESS` marks the unsafe access and links an ISR access to the same resource;
 GPIO conflicts are checked per port, including distinct pins. See [TIMERS.md](TIMERS.md).
+
+## Warnings and call contracts
+
+Diagnostics expose `Severity::Error` or `Severity::Warning`. `W_ISR_BLOCKING` is a
+warning at an ISR call that may wait, with related spans showing a helper path.
+It survives IR optimization, goes to CLI stderr once, and leaves a warning-only
+build successful. No suppression flag, attribute or warnings-as-errors mode exists.
+`E_IRQ_REQUIREMENT` is an error when progress needs interrupts but the context masks
+them. `E_DEVICE` covers UART configuration/ownership errors. This is not an exhaustive
+analyzer of loops or execution time. See [CALL_EFFECTS.md](CALL_EFFECTS.md).

@@ -1,0 +1,14 @@
+// ATmega328P: UART0 TX on PD1, 38400 baud, 8N1; --cpu-hz 16000000.
+device debug = UART0 {
+    baud: 38400,
+    mode: TX,
+}
+
+setup {
+    debug.write_byte(72);
+    debug.write_byte(105);
+    debug.write_byte(10);
+    debug.flush();
+}
+
+loop {}
