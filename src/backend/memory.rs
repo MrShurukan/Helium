@@ -53,6 +53,48 @@ fn table(
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Region {
+    Flash,
+    Sram,
+    Special(u32),
+}
+
+fn region(address: u32, size: u32, target: &Microcontroller) -> Result<Region, String> {
+    let end = address.checked_add(size).ok_or("ELF address overflow")?;
+    let (region, limit) = if address < 0x800000 {
+        (Region::Flash, 0x800000)
+    } else if (0x800000 + target.sram_start..0x810000).contains(&address) {
+        (Region::Sram, 0x810000)
+    } else if (0x810000..0x860000).contains(&address) {
+        (
+            Region::Special(address >> 16),
+            (address & !0xffff) + 0x10000,
+        )
+    } else {
+        return Err(format!("Unsupported ELF address 0x{address:x}"));
+    };
+    if end > limit {
+        return Err("ELF range crosses address-space boundary".into());
+    }
+    Ok(region)
+}
+
+struct Load {
+    offset: u32,
+    address: u32,
+    file_size: u32,
+    memory_size: u32,
+}
+
+fn file_range(bytes: &[u8], offset: u32, size: u32) -> Result<(), String> {
+    let offset = offset as usize;
+    if offset > bytes.len() || size as usize > bytes.len() - offset {
+        return Err("Truncated ELF load segment or section".into());
+    }
+    Ok(())
+}
+
 pub fn from_elf(bytes: &[u8], target: &Microcontroller) -> Result<MemoryReport, String> {
     if bytes.get(..7) != Some(b"\x7fELF\x01\x01\x01")
         || half(bytes, 16)? != 2
@@ -69,6 +111,9 @@ pub fn from_elf(bytes: &[u8], target: &Microcontroller) -> Result<MemoryReport, 
     table(bytes, ph, ps, pn, 32)?;
     table(bytes, sh, ss, sn, 40)?;
     let mut flash = 0;
+    let mut sram = 0;
+    let base = 0x800000 + target.sram_start;
+    let mut loads = Vec::new();
     for i in 0..pn {
         let p = ph + i * ps;
         if word(bytes, p)? != 1 {
@@ -76,21 +121,43 @@ pub fn from_elf(bytes: &[u8], target: &Microcontroller) -> Result<MemoryReport, 
         } // PT_LOAD
         let address = word(bytes, p + 12)?;
         let size = word(bytes, p + 16)?;
-        let offset = word(bytes, p + 4)? as usize;
-        if offset > bytes.len() || size as usize > bytes.len() - offset {
-            return Err("Truncated ELF load segment".into());
+        let offset = word(bytes, p + 4)?;
+        let virtual_address = word(bytes, p + 8)?;
+        let memory_size = word(bytes, p + 20)?;
+        if size > memory_size {
+            return Err("ELF segment file size exceeds memory size".into());
         }
-        if size == 0 {
+        file_range(bytes, offset, size)?;
+        if memory_size == 0 {
             continue;
         }
-        if address < 0x800000 {
-            flash = flash.max(address.checked_add(size).ok_or("ELF address overflow")?);
-        } else if !(0x810000..0x860000).contains(&address) {
-            return Err(format!("Unsupported ELF load address 0x{address:x}"));
+        let runtime = region(virtual_address, memory_size, target)?;
+        if runtime == Region::Sram {
+            sram = sram.max(virtual_address + memory_size - base);
         }
+        if size != 0 {
+            let storage = region(address, size, target)?;
+            match (runtime, storage) {
+                (Region::Flash, Region::Flash) if address == virtual_address => {}
+                (Region::Sram, Region::Flash) => {}
+                (Region::Special(a), Region::Special(b))
+                    if a == b && address == virtual_address => {}
+                _ => return Err("Unsupported ELF load/runtime address mapping".into()),
+            }
+            if storage == Region::Flash {
+                flash = flash.max(address + size);
+            }
+        }
+        loads.push(Load {
+            offset,
+            address: virtual_address,
+            file_size: size,
+            memory_size,
+        });
     }
-    let base = 0x800000 + target.sram_start;
-    let mut sram = 0;
+    if flash == 0 {
+        return Err("Missing nonempty Flash PT_LOAD segment".into());
+    }
     for i in 0..sn {
         let s = sh + i * ss;
         if word(bytes, s + 8)? & 2 == 0 {
@@ -104,10 +171,32 @@ pub fn from_elf(bytes: &[u8], target: &Microcontroller) -> Result<MemoryReport, 
         let end = address
             .checked_add(size)
             .ok_or("ELF section address overflow")?;
-        if (base..0x810000).contains(&address) {
+        let area = region(address, size, target)?;
+        let section_type = word(bytes, s + 4)?;
+        let offset = word(bytes, s + 16)?;
+        let nobits = section_type == 8;
+        if section_type == 0 || (nobits && area != Region::Sram) {
+            return Err("Unsupported allocated ELF section type".into());
+        }
+        if !nobits {
+            file_range(bytes, offset, size)?;
+        }
+        let covered = loads.iter().any(|load| {
+            let Some(delta) = address.checked_sub(load.address) else {
+                return false;
+            };
+            u64::from(delta) + u64::from(size) <= u64::from(load.memory_size)
+                && (nobits
+                    || (u64::from(delta) + u64::from(size) <= u64::from(load.file_size)
+                        && u64::from(offset) == u64::from(load.offset) + u64::from(delta)))
+        });
+        if !covered {
+            return Err(
+                "Allocated ELF section is not covered by a consistent PT_LOAD segment".into(),
+            );
+        }
+        if area == Region::Sram {
             sram = sram.max(end - base);
-        } else if address >= 0x800000 && !(0x810000..0x860000).contains(&address) {
-            return Err(format!("Unsupported ELF allocated address 0x{address:x}"));
         }
     }
     if flash > target.flash_bytes || sram > target.sram_bytes {
@@ -138,14 +227,20 @@ mod tests {
             (68, 300),
             (76, 0),
             (80, 100),
+            (84, 100),
             (96, 1),
             (100, 400),
+            (104, 0x800100),
             (108, 100),
             (112, data_size),
+            (116, 16 + bss_size),
+            (172, 1),
             (176, 2),
             (180, 0x800100),
+            (184, 400),
             (188, data_size),
             (216, 2),
+            (212, 8),
             (220, 0x800110),
             (228, bss_size),
         ] {
@@ -172,8 +267,34 @@ mod tests {
         }
         let mut oversized = b;
         oversized[76..80].copy_from_slice(&32768u32.to_le_bytes());
+        oversized[72..76].copy_from_slice(&32768u32.to_le_bytes());
         assert!(from_elf(&oversized, &ATMEGA328P)
             .unwrap_err()
             .contains("capacity exceeded"));
+    }
+
+    #[test]
+    fn rejects_inconsistent_sections_segments_and_address_spaces() {
+        for (offset, value) in [
+            (64, 0),         // No Flash LOAD.
+            (176, 2),        // A valid flag, followed below by a deliberately bad section address.
+            (184, 401),      // File/virtual offsets disagree.
+            (188, 200),      // Section contents truncated.
+            (180, 0x800200), // SRAM section outside LOAD.
+            (116, 2),        // File size exceeds memory size.
+            (104, 0x80fff0), // Segment crosses SRAM address space.
+            (108, 0x80fffe), // File image in SRAM is unsupported.
+        ] {
+            let mut b = fixture(4, 32);
+            b[offset..offset + 4].copy_from_slice(&u32::to_le_bytes(value));
+            if offset == 64 {
+                b[96..100].copy_from_slice(&0u32.to_le_bytes());
+            }
+            if offset == 176 {
+                b[180..184].copy_from_slice(&0u32.to_le_bytes());
+                b[188..192].copy_from_slice(&40000u32.to_le_bytes());
+            }
+            assert!(from_elf(&b, &ATMEGA328P).is_err(), "offset {offset}");
+        }
     }
 }

@@ -1,9 +1,9 @@
-//! A source inventory, deliberately not a timing bound or a reachability proof.
+//! An inventory of retained IR, not a complete source audit or a timing bound.
 use crate::ir::{FunctionId, Module, Op, Origin};
 use std::collections::BTreeSet;
 
 pub fn inventory(module: &Module) -> Vec<String> {
-    let mut lines = vec!["Timing inventory: before LLVM optimization; includes unused/unreachable code; durations unknown".into()];
+    let mut lines = vec!["Timing inventory: retained IR before LLVM; may include unused functions/unreachable branches; removed source is not included; durations unknown".into()];
     for f in &module.functions {
         let mut sites = Vec::new();
         if module.interrupt_handler == Some(f.id) {
@@ -61,6 +61,25 @@ pub fn inventory(module: &Module) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn inventory_tracks_retained_ir_not_removed_source() {
+        let source = "fn dead() { return; noInterrupt {} } fn branch() { if false { noInterrupt {} } } loop {}";
+        for optimize in [false, true] {
+            let m = crate::compile_typed_ir(
+                source,
+                "atmega328p",
+                crate::ir::Options {
+                    optimize,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let report = super::inventory(&m).join("\n");
+            assert!(!report.contains("dead:"));
+            assert_eq!(report.contains("branch:"), !optimize);
+            assert!(report.contains("removed source is not included"));
+        }
+    }
     #[test]
     fn reports_helper_and_source_without_promising_duration() {
         let source = "noInterrupt fn helper() {}\nloop { noInterrupt { helper(); } }";
