@@ -115,6 +115,29 @@ impl Checker<'_> {
 
     fn expression(&mut self, e: &Expression, consume: bool, state: &mut State) {
         match &e.expression_type {
+            E::Deref(reference) => {
+                self.expression(reference, false, state);
+                if consume && self.contracts.transfer_type(e.static_type) == Some(Transfer::Move) {
+                    self.errors.push(Diagnostic::new(
+                        DiagnosticKind::Array {
+                            detail: "Cannot move an owning value out of a reference".into(),
+                        },
+                        Some(e.source_location),
+                    ));
+                }
+            }
+            E::DerefAssignment { reference, value } => {
+                self.expression(reference, false, state);
+                self.expression(value, true, state);
+                if consume && self.contracts.transfer_type(e.static_type) == Some(Transfer::Move) {
+                    self.errors.push(Diagnostic::new(
+                        DiagnosticKind::Array {
+                            detail: "Cannot move an assignment result out of a reference".into(),
+                        },
+                        Some(e.source_location),
+                    ));
+                }
+            }
             E::Borrow { expression, .. } => self.expression(expression, false, state),
             E::Index { array, index } => {
                 self.expression(array, false, state);
@@ -137,7 +160,8 @@ impl Checker<'_> {
                         consume
                             && !matches!(
                                 e.static_type,
-                                crate::frontend::static_type::StaticType::ArrayRef(..)
+                                crate::frontend::static_type::StaticType::Ref(..)
+                                    | crate::frontend::static_type::StaticType::ArrayRef(..)
                                     | crate::frontend::static_type::StaticType::SliceRef(..)
                             ),
                         state,

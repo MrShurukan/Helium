@@ -84,6 +84,7 @@ impl Analyzer {
                         | T::PinState
                         | T::Text
                         | T::FixedArray(..)
+                        | T::Ref(..)
                         | T::ArrayRef(..)
                         | T::SliceRef(..)
                 ) {
@@ -91,8 +92,18 @@ impl Analyzer {
                 }
             }
 
-            if matches!(return_type, Some(T::ArrayRef(..) | T::SliceRef(..))) {
-                self.error(DiagnosticKind::Array { detail: "Returning array references is not supported; borrows must end with the call".into() }, return_location.unwrap());
+            if matches!(
+                return_type,
+                Some(T::Ref(..) | T::ArrayRef(..) | T::SliceRef(..))
+            ) {
+                self.error(
+                    DiagnosticKind::Array {
+                        detail:
+                            "Returning references is not supported; borrows must end with the call"
+                                .into(),
+                    },
+                    return_location.unwrap(),
+                );
             }
 
             if let Some(previous) = self.functions.get(identifier) {

@@ -68,6 +68,20 @@ pub fn verify(module: &Module) -> Result<(), Error> {
                 )
         }));
     for t in all_types {
+        if matches!(
+            t,
+            Type::Ref(
+                ElementType::Integer(crate::frontend::static_type::IntegerType::Literal),
+                _
+            )
+        ) {
+            return Err(failure(
+                ErrorKind::TypeMismatch,
+                None,
+                None,
+                "unresolved reference element type",
+            ));
+        }
         if let Some((e, n)) = t.sequence() {
             if n.is_some_and(|n| n == 0 || n > 1024)
                 || matches!(
@@ -84,20 +98,22 @@ pub fn verify(module: &Module) -> Result<(), Error> {
             }
         }
     }
-    if module
-        .globals
-        .iter()
-        .any(|g| matches!(g.ty, Type::ArrayRef(..) | Type::SliceRef(..)))
-        || module
-            .functions
-            .iter()
-            .any(|f| matches!(f.return_type, Some(Type::ArrayRef(..) | Type::SliceRef(..))))
-    {
+    if module.globals.iter().any(|g| {
+        matches!(
+            g.ty,
+            Type::Ref(..) | Type::ArrayRef(..) | Type::SliceRef(..)
+        )
+    }) || module.functions.iter().any(|f| {
+        matches!(
+            f.return_type,
+            Some(Type::Ref(..) | Type::ArrayRef(..) | Type::SliceRef(..))
+        )
+    }) {
         return Err(failure(
             ErrorKind::TypeMismatch,
             None,
             None,
-            "array references cannot escape through globals or returns",
+            "references cannot escape through globals or returns",
         ));
     }
     verify_devices(module)?;
@@ -642,25 +658,50 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                     )?;
                     t
                 }
-                Op::AddressLocal(l, m) => {
-                    let Type::Array(e, n) = local_type(*l)? else {
-                        return Err(error(
+                Op::AddressLocal(l, m) => Some(local_type(*l)?.address(*m).ok_or_else(|| {
+                    error(
+                        ErrorKind::TypeMismatch,
+                        Some(block.id),
+                        "address requires sized value storage",
+                    )
+                })?),
+                Op::AddressGlobal(g, m) => Some(global_type(*g)?.address(*m).ok_or_else(|| {
+                    error(
+                        ErrorKind::TypeMismatch,
+                        Some(block.id),
+                        "address requires sized value storage",
+                    )
+                })?),
+                Op::ReadRef(r) | Op::WriteRef(r, _) => {
+                    let (t, mutable) = value_type(*r)?.reference().ok_or_else(|| {
+                        error(
                             ErrorKind::TypeMismatch,
                             Some(block.id),
-                            "address requires array storage",
-                        ));
-                    };
-                    Some(Type::ArrayRef(e, n, *m))
+                            "reference operation requires sized reference",
+                        )
+                    })?;
+                    if let Op::WriteRef(_, v) = instruction.op {
+                        require(
+                            mutable && value_type(v)? == t,
+                            "reference write requires mutable reference and matching value",
+                        )?;
+                        None
+                    } else {
+                        Some(t)
+                    }
                 }
-                Op::AddressGlobal(g, m) => {
-                    let Type::Array(e, n) = global_type(*g)? else {
+                Op::ElementAddress(a, i, mutable) => {
+                    let (Type::ArrayRef(e, _, old) | Type::SliceRef(e, old)) = value_type(*a)?
+                    else {
                         return Err(error(
                             ErrorKind::TypeMismatch,
                             Some(block.id),
-                            "address requires array storage",
+                            "element address requires sequence reference",
                         ));
                     };
-                    Some(Type::ArrayRef(e, n, *m))
+                    require(!*mutable || old, "cannot upgrade shared reference")?;
+                    require(value_type(*i)? == Type::U16, "element index must be u16")?;
+                    Some(Type::Ref(e, *mutable))
                 }
                 Op::SliceLen(v) => {
                     require(
@@ -684,15 +725,15 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                     Some(Type::SliceRef(e, *m))
                 }
                 Op::Reborrow(v, m) => {
-                    let Type::ArrayRef(e, n, old) = value_type(*v)? else {
-                        return Err(error(
+                    let (t, old) = value_type(*v)?.reference().ok_or_else(|| {
+                        error(
                             ErrorKind::TypeMismatch,
                             Some(block.id),
-                            "reborrow requires reference",
-                        ));
-                    };
+                            "reborrow requires sized reference",
+                        )
+                    })?;
                     require(!*m || old, "cannot upgrade shared reference")?;
-                    Some(Type::ArrayRef(e, n, *m))
+                    t.address(*m)
                 }
                 Op::ArrayRead(a, i) | Op::ArrayWrite(a, i, _) => {
                     let (Type::ArrayRef(e, _, mutable) | Type::SliceRef(e, mutable)) =
@@ -832,7 +873,7 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                 }
                 Op::Const(value) => {
                     require(
-                        value.ty.sequence().is_none(),
+                        value.ty.sequence().is_none() && value.ty.reference().is_none(),
                         "arrays and references cannot be scalar constants",
                     )?;
                     require(
@@ -865,6 +906,7 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                     require(
                         !ty.is_text()
                             && ty.sequence().is_none()
+                            && ty.reference().is_none()
                             && (ty.integer().is_some()
                                 || matches!(op, Binary::Equal | Binary::NotEqual)),
                         "invalid binary operand type",
@@ -875,6 +917,7 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                     require(
                         !target.is_text()
                             && target.sequence().is_none()
+                            && target.reference().is_none()
                             && value_type(*value)?.can_widen_to(*target),
                         "conversion is not lossless widening",
                     )?;

@@ -110,7 +110,8 @@ fn values(op: &mut Op, mut apply: impl FnMut(&mut ValueId)) {
     match op {
         Op::ArrayLiteral(v) => v.iter_mut().for_each(apply),
         Op::ArrayRepeat(v, _) | Op::Reborrow(v, _) | Op::Slice(v, _) | Op::SliceLen(v) => apply(v),
-        Op::ArrayRead(a, b) => {
+        Op::ReadRef(v) => apply(v),
+        Op::WriteRef(a, b) | Op::ElementAddress(a, b, _) | Op::ArrayRead(a, b) => {
             apply(a);
             apply(b);
         }

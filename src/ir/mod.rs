@@ -37,6 +37,7 @@ function_id!(ValueId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Type {
+    Ref(ElementType, bool),
     Array(ElementType, u16),
     ArrayRef(ElementType, u16, bool),
     SliceRef(ElementType, bool),
@@ -55,6 +56,36 @@ pub enum Type {
 }
 
 impl Type {
+    pub fn reference(self) -> Option<(Self, bool)> {
+        match self {
+            Self::Ref(e, m) => Some((Self::element(e), m)),
+            Self::ArrayRef(e, n, m) => Some((Self::Array(e, n), m)),
+            _ => None,
+        }
+    }
+    pub fn address(self, mutable: bool) -> Option<Self> {
+        if let Self::Array(e, n) = self {
+            return Some(Self::ArrayRef(e, n, mutable));
+        }
+        use crate::frontend::static_type::{
+            IntegerType as I, SignedIntegerType as S, UnsignedIntegerType as U,
+        };
+        let e = match self {
+            Self::Bool => ElementType::Boolean,
+            Self::PinState => ElementType::PinState,
+            Self::U8 => ElementType::Integer(I::Unsigned(U::Uns8)),
+            Self::U16 => ElementType::Integer(I::Unsigned(U::Uns16)),
+            Self::U32 => ElementType::Integer(I::Unsigned(U::Uns32)),
+            Self::U64 => ElementType::Integer(I::Unsigned(U::Uns64)),
+            Self::I8 => ElementType::Integer(I::Signed(S::Int8)),
+            Self::I16 => ElementType::Integer(I::Signed(S::Int16)),
+            Self::I32 => ElementType::Integer(I::Signed(S::Int32)),
+            Self::I64 => ElementType::Integer(I::Signed(S::Int64)),
+            _ => return None,
+        };
+        Some(Self::Ref(e, mutable))
+    }
+
     pub fn sequence(self) -> Option<(ElementType, Option<u16>)> {
         if let Self::SliceRef(e, _) = self {
             Some((e, None))
@@ -110,7 +141,9 @@ impl Type {
         match self.integer() {
             Some((64, _)) => u64::MAX,
             Some((bits, _)) => (1u64 << bits) - 1,
-            None if self.is_text() || self.sequence().is_some() => u64::MAX,
+            None if self.is_text() || self.sequence().is_some() || self.reference().is_some() => {
+                u64::MAX
+            }
             None => 1,
         }
     }
@@ -141,6 +174,7 @@ impl Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
+            Self::Ref(e, m) => return write!(f, "&{}{}", if *m { "mut " } else { "" }, e.ty()),
             Self::Array(e, n) => return write!(f, "[{}; {n}]", e.ty()),
             Self::SliceRef(e, m) => {
                 return write!(f, "&{}[{}]", if *m { "mut " } else { "" }, e.ty())
@@ -243,6 +277,9 @@ pub enum TextSpace {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    ReadRef(ValueId),
+    WriteRef(ValueId, ValueId),
+    ElementAddress(ValueId, ValueId, bool),
     ArrayLiteral(Vec<ValueId>),
     ArrayRepeat(ValueId, u16),
     AddressLocal(LocalId, bool),
@@ -302,6 +339,8 @@ impl Op {
             | Self::Reborrow(v, _)
             | Self::Slice(v, _)
             | Self::SliceLen(v) => vec![*v],
+            Self::ReadRef(v) => vec![*v],
+            Self::WriteRef(a, b) | Self::ElementAddress(a, b, _) => vec![*a, *b],
             Self::ArrayRead(a, b) => vec![*a, *b],
             Self::ArrayWrite(a, b, c) => vec![*a, *b, *c],
             Self::TextLen(v)
@@ -596,6 +635,9 @@ impl fmt::Display for Op {
             Self::Slice(v, m) => write!(f, "slice {v:?} mutable={m}"),
             Self::SliceLen(v) => write!(f, "slice_len {v:?}"),
             Self::Reborrow(v, m) => write!(f, "reborrow {v:?} mutable={m}"),
+            Self::ReadRef(v) => write!(f, "read_ref {v:?}"),
+            Self::WriteRef(r, v) => write!(f, "write_ref {r:?}, {v:?}"),
+            Self::ElementAddress(a, i, m) => write!(f, "element_address {a:?}, {i:?}, {m}"),
             Self::ArrayRead(a, i) => write!(f, "array_read {a:?}, {i:?}"),
             Self::ArrayWrite(a, i, v) => write!(f, "array_write {a:?}, {i:?}, {v:?}"),
             Self::TextLiteral { text, space } => write!(f, "text {space:?} {text:?}"),

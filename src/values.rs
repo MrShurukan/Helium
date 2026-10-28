@@ -129,6 +129,10 @@ impl Contracts {
     pub fn transfer(&self, symbol: crate::semantic::SymbolId) -> Option<Transfer> {
         self.registry.transfer(self.type_of(symbol)?).ok()
     }
+    /// Capability of an addressable source value, including a reference's referent.
+    pub fn transfer_type(&self, ty: StaticType) -> Option<Transfer> {
+        self.registry.transfer(*self.registry.source.get(&ty)?).ok()
+    }
 }
 
 impl Registry {
@@ -189,6 +193,9 @@ impl Registry {
         if let Some(id) = self.source.get(&ty) {
             return *id;
         }
+        if let Some((referent, _)) = ty.reference() {
+            self.source_type(referent);
+        }
         let id = match ty {
             StaticType::Integer(_)
             | StaticType::Float(_)
@@ -203,12 +210,12 @@ impl Registry {
                     .unwrap();
                 array
             }
-            StaticType::ArrayRef(_, _, true) | StaticType::SliceRef(_, true) => {
-                self.exclusive_reference()
-            }
-            StaticType::ArrayRef(_, _, false) | StaticType::SliceRef(_, false) => {
-                self.shared_reference()
-            }
+            StaticType::Ref(_, true)
+            | StaticType::ArrayRef(_, _, true)
+            | StaticType::SliceRef(_, true) => self.exclusive_reference(),
+            StaticType::Ref(_, false)
+            | StaticType::ArrayRef(_, _, false)
+            | StaticType::SliceRef(_, false) => self.shared_reference(),
             StaticType::Array(element) => {
                 let element = self.source_type(*element);
                 let array = self.array(element).unwrap();
@@ -327,10 +334,22 @@ pub(crate) fn resolve_calls(
         implementation,
     } = &mut expression.expression_type
     {
+        fn receiver_type(
+            e: &crate::frontend::expression::Expression,
+            contracts: &Contracts,
+        ) -> Option<TypeId> {
+            match &e.expression_type {
+                E::Grouping { expression } => receiver_type(expression, contracts),
+                E::Identifier(_) => e.symbol.and_then(|id| contracts.type_of(id)),
+                E::Deref(_) | E::Index { .. } if e.place_root().is_some() => {
+                    contracts.registry.source.get(&e.static_type).copied()
+                }
+                _ => None,
+            }
+        }
         *implementation = arguments
             .first()
-            .and_then(|a| a.symbol)
-            .and_then(|id| contracts.type_of(id))
+            .and_then(|a| receiver_type(a, contracts))
             .and_then(|ty| contracts.registry().implementation(ty, *capability))
             .cloned();
         if implementation.is_none() {

@@ -376,8 +376,8 @@ impl Analyzer {
                     .unwrap_or(T::Unknown);
 
                 let target = static_type.unwrap_or_else(|| default_type(inferred));
-                if matches!(target, T::ArrayRef(..) | T::SliceRef(..)) {
-                    self.error(DiagnosticKind::Array { detail: "Array references are only allowed as temporary call arguments and parameters".into() }, *name_location);
+                if matches!(target, T::Ref(..) | T::ArrayRef(..) | T::SliceRef(..)) {
+                    self.error(DiagnosticKind::Array { detail: "References are only allowed as temporary call arguments and parameters".into() }, *name_location);
                 }
 
                 if let Some(expr) = initializer {
@@ -513,6 +513,53 @@ impl Analyzer {
         };
         let error_start = self.errors.len();
         let ty = match &mut expr.expression_type {
+            E::Deref(reference) => {
+                let t = self.expression(reference);
+                if reference.place_root().is_none() {
+                    self.error(
+                        DiagnosticKind::Array {
+                            detail: "Dereference requires a reference to a named place".into(),
+                        },
+                        span,
+                    );
+                }
+                if let Some((value, _)) = t.reference() {
+                    value
+                } else {
+                    self.error(
+                        DiagnosticKind::Array {
+                            detail: "Dereference requires a sized reference".into(),
+                        },
+                        span,
+                    );
+                    T::Unknown
+                }
+            }
+            E::DerefAssignment { reference, value } => {
+                let t = self.expression(reference);
+                if reference.place_root().is_none() {
+                    self.error(
+                        DiagnosticKind::Array {
+                            detail: "Dereference requires a reference to a named place".into(),
+                        },
+                        span,
+                    );
+                }
+                self.expression(value);
+                if let Some((target, true)) = t.reference() {
+                    self.coerce(value, target);
+                    target
+                } else {
+                    self.error(
+                        DiagnosticKind::Array {
+                            detail: "Writing through a reference requires &mut to a sized value"
+                                .into(),
+                        },
+                        span,
+                    );
+                    T::Unknown
+                }
+            }
             E::Array { elements, repeat } => {
                 let mut element = T::Unknown;
                 for e in elements.iter_mut() {
@@ -564,15 +611,32 @@ impl Analyzer {
                 mutable,
             } => {
                 let t = self.expression(expression);
-                if !matches!(expression.expression_type, E::Identifier(_)) {
+                if expression.place_root().is_none() {
                     self.error(
                         DiagnosticKind::Array {
-                            detail: "Borrow a named array or array parameter".into(),
+                            detail: "Borrow a named variable, reference target or array element"
+                                .into(),
+                        },
+                        span,
+                    );
+                }
+                let writable = expression.writable_place();
+                if *mutable && !writable {
+                    self.error(
+                        DiagnosticKind::Array {
+                            detail: "Cannot upgrade a shared reference".into(),
                         },
                         span,
                     );
                 }
                 match t {
+                    T::Ref(e, m) if !*mutable || m => T::Ref(e, *mutable),
+                    t if crate::frontend::static_type::ElementType::from_type(t).is_some() => {
+                        T::Ref(
+                            crate::frontend::static_type::ElementType::from_type(t).unwrap(),
+                            *mutable,
+                        )
+                    }
                     T::SliceRef(e, m) if !*mutable || m => T::SliceRef(e, *mutable),
                     T::FixedArray(e, n) => T::ArrayRef(e, n, *mutable),
                     T::ArrayRef(e, n, m) if !*mutable || m => T::ArrayRef(e, n, *mutable),
@@ -800,11 +864,11 @@ impl Analyzer {
                 let value = self.expression(expression);
                 if self
                     .lookup(identifier)
-                    .is_some_and(|t| matches!(t, T::ArrayRef(..) | T::SliceRef(..)))
+                    .is_some_and(|t| matches!(t, T::Ref(..) | T::ArrayRef(..) | T::SliceRef(..)))
                 {
                     self.error(
                         DiagnosticKind::Array {
-                            detail: "Array reference parameters cannot be rebound".into(),
+                            detail: "Reference parameters cannot be rebound".into(),
                         },
                         span,
                     );
@@ -950,6 +1014,12 @@ impl Analyzer {
             (from, target)
         {
             if e == f && (!target_mut || m) {
+                expr.static_type = target;
+                return;
+            }
+        }
+        if let (T::Ref(e, true), T::Ref(f, false)) = (from, target) {
+            if e == f {
                 expr.static_type = target;
                 return;
             }

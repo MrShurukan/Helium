@@ -16,6 +16,7 @@ AVRA, the old linear IR and hand-written AVR assembly generation have been remov
 | Temporary `&[T]` / `&mut [T]` slices | Whole-array loans, runtime element count; no subranges | Yes | Yes; SRAM pointer + u16 length |
 | `.clone()` on scalar arrays and Copy values | Resolved Clone capability; owners remain Move | Independent aggregate value | Yes |
 | Temporary `&[T; N]` / `&mut [T; N]` parameters and reborrow | Whole-array alias checks, helpers/globals/ISR | Yes; no escaping refs | Yes |
+| Temporary scalar references, dereference/write, element references | Whole-object loans, reborrow, no escaping refs; referent Clone | Yes; element bounds at address creation | Yes; SRAM pointers, 8/16-bit scalars |
 | Comparisons, short-circuit and/or, ternary, if, while | Yes | Yes | Yes |
 | fn, arguments by value, explicit return | Yes | Yes | Yes for supported types |
 | Direct or indirect recursion | Rejected | — | — |
@@ -53,7 +54,8 @@ constant (including grouped/chained) pin mode statements remain supported.
 ## Semantic rules
 
 Array syntax, ownership, call-scoped borrows and bounds failure policy: [ARRAYS.md](ARRAYS.md).
-Array/slice-reference variables and returns, subranges, general scalar references and nested arrays are not yet supported.
+Temporary scalar/element references and explicit dereference are described in [REFERENCES.md](REFERENCES.md).
+Reference variables/returns (except existing local &str), subranges, references to references and nested arrays are not yet supported.
 
 - Names cannot shadow a visible variable, parameter, pin or function. Separate sibling scopes
   can reuse local names. Functions can be called before declaration.

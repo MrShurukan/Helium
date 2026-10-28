@@ -1,0 +1,35 @@
+device debug=UART0{baud:38400,mode:TX,}
+def input=PortB.0 INPUT;
+var global:u16=0;
+
+fn inc(x:&mut u16){*x=*x+1;}
+fn read(x:&u16):u16{return *x;}
+fn twice(x:&mut u16){inc(x);inc(&mut *x);}
+fn reset(a:&mut [u16;2]){*a=[1000;2];twice(&mut a[1]);}
+fn copy(a:&[u16;2]):[u16;2]{return (*a).clone();}
+fn signed(x:&mut i16){*x=-300;}
+fn flag(x:&mut bool){*x=!*x;}
+fn state(x:&mut PinState){*x=HIGH;}
+fn text(t:&str,u:&str,x:&mut u16){*x=t.len()+u.len();}
+fn put(x:&mut u8,value:u8){*x=value;}
+fn next(device out:UartTx):u8{out.write_byte(76);return 90;}
+
+setup{
+    var n:u16=1000;
+    twice(&mut n);
+    var a:[u16;2]=[0;2];reset(&mut a);
+    var independent=copy(&a);independent[0]=7;
+    var s:[i16;2]=[0;2];signed(&mut s[1]);
+    var flags:[bool;2]=[false;2];flag(&mut flags[1]);
+    var states:[PinState;2]=[LOW;2];state(&mut states[1]);
+    text("abc","de",&mut global);
+    if read(&n)==1002 and a[0]==1000 and independent[0]==7 and a[1]==1002 and s[1]==-300 and flags[1] and states[1]==HIGH and global==5 {
+        debug.write_byte(84);
+    }else{debug.write_byte(70);}
+    var bytes:[u8;2]=[0;2];
+    var index:u16=0;if input==HIGH{index=2;}
+    debug.flush();
+    put(&mut bytes[index],next(debug));
+    debug.write_byte(bytes[0]);debug.write_byte(33);debug.flush();
+}
+loop{}

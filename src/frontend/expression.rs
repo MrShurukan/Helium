@@ -24,6 +24,11 @@ impl LocatableInSource for Expression {
 
 #[derive(Debug, Clone)]
 pub enum ExpressionType {
+    Deref(Box<Expression>),
+    DerefAssignment {
+        reference: Box<Expression>,
+        value: Box<Expression>,
+    },
     CapabilityCall {
         capability: crate::values::Capability,
         arguments: Vec<Expression>,
@@ -94,9 +99,43 @@ pub enum TextOperation {
 // TODO: (like `PinRef`)
 // I'm not sure of the solution as of right now
 impl Expression {
+    pub fn writable_place(&self) -> bool {
+        use crate::frontend::static_type::StaticType as T;
+        use ExpressionType as E;
+        match &self.expression_type {
+            E::Grouping { expression } => expression.writable_place(),
+            E::Deref(r) => r.static_type.reference().is_some_and(|(_, m)| m),
+            E::Index { array, .. } => !matches!(
+                array.static_type,
+                T::ArrayRef(_, _, false) | T::SliceRef(_, false)
+            ),
+            E::Identifier(_) => !matches!(
+                self.static_type,
+                T::Ref(_, false) | T::ArrayRef(_, _, false) | T::SliceRef(_, false)
+            ),
+            _ => false,
+        }
+    }
+    /// Root storage identity for whole-object loans, including element projections.
+    pub fn place_root(&self) -> Option<crate::semantic::SymbolId> {
+        match &self.expression_type {
+            ExpressionType::Identifier(_) => self.symbol,
+            ExpressionType::Deref(e)
+            | ExpressionType::Borrow { expression: e, .. }
+            | ExpressionType::Grouping { expression: e } => e.place_root(),
+            ExpressionType::Index { array, .. } => array.place_root(),
+            _ => None,
+        }
+    }
+
     /// Visit immediate operands in source evaluation order (not recursively).
     pub fn for_each_child(&self, mut visit: impl FnMut(&Expression)) {
         match &self.expression_type {
+            ExpressionType::Deref(e) => visit(e),
+            ExpressionType::DerefAssignment { reference, value } => {
+                visit(reference);
+                visit(value);
+            }
             ExpressionType::Array { elements, .. } => elements.iter().for_each(visit),
             ExpressionType::Index { array, index } => {
                 visit(array);
@@ -138,6 +177,11 @@ impl Expression {
     /// Mutable counterpart for type finalization.
     pub fn for_each_child_mut(&mut self, mut visit: impl FnMut(&mut Expression)) {
         match &mut self.expression_type {
+            ExpressionType::Deref(e) => visit(e),
+            ExpressionType::DerefAssignment { reference, value } => {
+                visit(reference);
+                visit(value);
+            }
             ExpressionType::Array { elements, .. } => elements.iter_mut().for_each(visit),
             ExpressionType::Index { array, index } => {
                 visit(array);
@@ -323,6 +367,10 @@ impl Display for Expression {
         }
 
         match &self.expression_type {
+            ExpressionType::Deref(e) => write!(f, "*({e})"),
+            ExpressionType::DerefAssignment { reference, value } => {
+                write!(f, "*({reference}) = {value}")
+            }
             ExpressionType::Array { elements, repeat } => write!(
                 f,
                 "[{}{}]",

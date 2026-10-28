@@ -35,6 +35,7 @@ fn invalid(detail: &str, location: SourceLocation) -> Diagnostic {
 
 fn ty(ty: T, location: SourceLocation) -> Result<Type, Diagnostic> {
     Ok(match ty {
+        T::Ref(e, m) => Type::Ref(e, m),
         T::FixedArray(e, n) => Type::Array(e, n),
         T::SliceRef(e, m) => Type::SliceRef(e, m),
         T::ArrayRef(e, n, m) => Type::ArrayRef(e, n, m),
@@ -752,6 +753,20 @@ impl<'a> Builder<'a> {
         }
 
         let value = match &expr.expression_type {
+            E::Deref(r) => {
+                let reference = self.value(r)?;
+                let native = self.value_types[&reference]
+                    .reference()
+                    .ok_or_else(|| invalid("dereference type", expr.source_location))?
+                    .0;
+                self.emit(Op::ReadRef(reference), native, origin.clone())
+            }
+            E::DerefAssignment { reference, value } => {
+                let reference = self.value(reference)?;
+                let value = self.value(value)?;
+                self.effect(Op::WriteRef(reference, value), origin.clone());
+                value
+            }
             E::Array { elements, repeat } => {
                 let values = elements
                     .iter()
@@ -770,9 +785,9 @@ impl<'a> Builder<'a> {
             E::Borrow {
                 expression,
                 mutable,
-            } => self.array_address(expression, *mutable)?,
+            } => self.place_address(expression, *mutable)?,
             E::Index { array, index } => {
-                let reference = self.array_address(array, false)?;
+                let reference = self.place_address(array, false)?;
                 let index = self.value(index)?;
                 self.emit(
                     Op::ArrayRead(reference, index),
@@ -785,7 +800,7 @@ impl<'a> Builder<'a> {
                 index,
                 value,
             } => {
-                let reference = self.array_address(array, true)?;
+                let reference = self.place_address(array, true)?;
                 let index = self.value(index)?;
                 let value = self.value(value)?;
                 self.effect(Op::ArrayWrite(reference, index, value), origin.clone());
@@ -1022,19 +1037,63 @@ impl<'a> Builder<'a> {
             Ok(value)
         } else if let Type::SliceRef(_, m) = expected {
             Ok(self.emit(Op::Slice(value, m), expected, origin))
-        } else if let Type::ArrayRef(_, _, m) = expected {
+        } else if let Type::Ref(_, m) | Type::ArrayRef(_, _, m) = expected {
             Ok(self.emit(Op::Reborrow(value, m), expected, origin))
         } else {
             Ok(self.emit(Op::Widen(value, expected), expected, origin))
         }
     }
 
-    fn array_address(
+    fn place_address(
         &mut self,
         expression: &Expression,
         mutable: bool,
     ) -> Result<ValueId, Diagnostic> {
         let origin = Origin::Source(expression.source_location);
+        match &expression.expression_type {
+            E::Grouping { expression } => return self.place_address(expression, mutable),
+            E::Deref(r) => {
+                let value = self.value(r)?;
+                let result = self.value_types[&value]
+                    .reference()
+                    .and_then(|(t, _)| t.address(mutable))
+                    .ok_or_else(|| invalid("reference place", expression.source_location))?;
+                return Ok(self.emit(Op::Reborrow(value, mutable), result, origin));
+            }
+            E::Index { array, index } => {
+                let reference = self.place_address(array, mutable)?;
+                let index = self.value(index)?;
+                let result = Type::Ref(array.static_type.sequence().unwrap().0, mutable);
+                return Ok(self.emit(
+                    Op::ElementAddress(reference, index, mutable),
+                    result,
+                    origin,
+                ));
+            }
+            _ => {}
+        }
+        if let T::Ref(e, _) = expression.static_type {
+            let v = self.value(expression)?;
+            return Ok(self.emit(Op::Reborrow(v, mutable), Type::Ref(e, mutable), origin));
+        }
+        if let Some(element) =
+            crate::frontend::static_type::ElementType::from_type(expression.static_type)
+        {
+            let symbol = expression.symbol.ok_or_else(|| {
+                invalid(
+                    "scalar address requires a place",
+                    expression.source_location,
+                )
+            })?;
+            let op = if let Some(local) = self.bindings.get(&symbol) {
+                Op::AddressLocal(*local, mutable)
+            } else if let Some((global, _)) = self.globals.get(&symbol) {
+                Op::AddressGlobal(*global, mutable)
+            } else {
+                return Err(invalid("missing scalar place", expression.source_location));
+            };
+            return Ok(self.emit(op, Type::Ref(element, mutable), origin));
+        }
         if let T::SliceRef(e, _) = expression.static_type {
             let v = self.value(expression)?;
             return Ok(self.emit(Op::Slice(v, mutable), Type::SliceRef(e, mutable), origin));

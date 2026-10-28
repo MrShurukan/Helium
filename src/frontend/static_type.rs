@@ -26,6 +26,17 @@ impl ElementType {
     }
 }
 impl StaticType {
+    pub fn reference(self) -> Option<(Self, bool)> {
+        match self {
+            Self::Ref(e, m) => Some((e.ty(), m)),
+            Self::ArrayRef(e, n, m) => Some((Self::FixedArray(e, n), m)),
+            _ => None,
+        }
+    }
+    pub fn is_reference(self) -> bool {
+        self.reference().is_some() || matches!(self, Self::SliceRef(..))
+    }
+
     pub fn sequence(self) -> Option<(ElementType, Option<u16>)> {
         if let Self::SliceRef(e, _) = self {
             Some((e, None))
@@ -104,6 +115,7 @@ pub enum StaticType {
 
     Boolean,
     Text,
+    Ref(ElementType, bool),
     FixedArray(ElementType, u16),
     ArrayRef(ElementType, u16, bool),
     SliceRef(ElementType, bool),
@@ -166,6 +178,7 @@ pub enum FloatType {
 impl Display for StaticType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Ref(e, m) => write!(f, "&{}{}", if *m { "mut " } else { "" }, e.ty()),
             Self::FixedArray(element, count) => write!(f, "[{}; {count}]", element.ty()),
             Self::SliceRef(e, m) => {
                 write!(f, "&{}[{}]", if *m { "mut " } else { "" }, e.ty())

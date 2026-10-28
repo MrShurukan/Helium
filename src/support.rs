@@ -71,6 +71,10 @@ pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), 
         utils::SourceLocation,
     };
     fn check_type(ty: T, span: SourceLocation, machine: bool, errors: &mut Vec<Diagnostic>) {
+        if let T::Ref(element, _) = ty {
+            check_type(element.ty(), span, machine, errors);
+            return;
+        }
         if let Some((element, _)) = ty.sequence() {
             check_type(element.ty(), span, machine, errors);
             return;

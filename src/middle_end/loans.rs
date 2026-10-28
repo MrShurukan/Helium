@@ -24,9 +24,7 @@ pub(super) fn check(
             let mut accesses = BTreeMap::new();
             for a in &b.accesses {
                 if let ResourceId::GlobalMemory(g) = a.resource {
-                    if symbols.get(g).ty.sequence().is_some() {
-                        *accesses.entry(g).or_insert(false) |= a.kind == AccessKind::WriteMemory;
-                    }
+                    *accesses.entry(g).or_insert(false) |= a.kind == AccessKind::WriteMemory;
                 }
             }
             (*id, accesses)
@@ -95,9 +93,60 @@ impl Checker<'_> {
             );
         }
     }
+    // Only address computations run here; reading a place's value is a separate access.
+    fn place_operands(&mut self, e: &Expression) {
+        match &e.expression_type {
+            E::Index { array, index } => {
+                self.place_operands(array);
+                self.expression(index, true);
+            }
+            E::Deref(r) | E::Borrow { expression: r, .. } | E::Grouping { expression: r } => {
+                self.place_operands(r)
+            }
+            _ => {}
+        }
+    }
+    fn borrow(&mut self, place: &Expression, mutable: bool, at: SourceLocation) {
+        if let Some(id) = place.place_root() {
+            self.access(id, mutable, at);
+            let start = self.active.len();
+            // Reserve the root while an element index is evaluated.
+            self.active.push((id, false, at));
+            self.place_operands(place);
+            self.active.truncate(start);
+            self.active.push((id, mutable, at));
+        } else {
+            self.errors.push(Diagnostic::new(
+                DiagnosticKind::Array {
+                    detail: "Reference arguments must borrow a place or reborrow a parameter"
+                        .into(),
+                },
+                Some(at),
+            ));
+        }
+    }
     fn expression(&mut self, e: &Expression, consume: bool) {
         match &e.expression_type {
-            E::Identifier(_) if e.static_type.sequence().is_some() => {
+            E::Deref(r) => {
+                let start = self.active.len();
+                if let Some(id) = r.place_root() {
+                    self.access(id, false, e.source_location);
+                    self.active.push((id, false, e.source_location));
+                }
+                self.place_operands(r);
+                self.active.truncate(start);
+            }
+            E::DerefAssignment { reference, value } => {
+                let start = self.active.len();
+                if let Some(id) = reference.place_root() {
+                    self.access(id, true, e.source_location);
+                    self.active.push((id, false, e.source_location));
+                }
+                self.place_operands(reference);
+                self.expression(value, true);
+                self.active.truncate(start);
+            }
+            E::Identifier(_) => {
                 if let Some(id) = e.symbol {
                     self.access(
                         id,
@@ -110,26 +159,26 @@ impl Checker<'_> {
                 expression,
                 mutable,
             } => {
-                if let Some(id) = expression.symbol {
-                    self.access(id, *mutable, e.source_location);
-                }
+                let start = self.active.len();
+                self.borrow(expression, *mutable, e.source_location);
+                self.active.truncate(start);
             }
             E::Call { arguments, .. } => {
                 let start = self.active.len();
                 for argument in arguments {
-                    if let T::ArrayRef(_, _, mutable) | T::SliceRef(_, mutable) =
-                        argument.static_type
+                    if let T::Ref(_, mutable)
+                    | T::ArrayRef(_, _, mutable)
+                    | T::SliceRef(_, mutable) = argument.static_type
                     {
                         let place = match &argument.expression_type {
                             E::Borrow { expression, .. } => Some(expression.as_ref()),
                             E::Identifier(_) => Some(argument),
                             _ => None,
                         };
-                        if let Some(id) = place.and_then(|p| p.symbol) {
-                            self.access(id, mutable, argument.source_location);
-                            self.active.push((id, mutable, argument.source_location));
+                        if let Some(place) = place {
+                            self.borrow(place, mutable, argument.source_location);
                         } else {
-                            self.errors.push(Diagnostic::new(DiagnosticKind::Array {detail:"Reference arguments must directly borrow a named array or reborrow a parameter".into()},Some(argument.source_location)));
+                            self.errors.push(Diagnostic::new(DiagnosticKind::Array {detail:"Reference arguments must directly borrow a place or reborrow a parameter".into()},Some(argument.source_location)));
                         }
                     } else {
                         self.expression(argument, true);
@@ -175,9 +224,7 @@ impl Checker<'_> {
             E::Assignment { expression, .. } => {
                 self.expression(expression, true);
                 if let Some(id) = e.symbol {
-                    if e.static_type.sequence().is_some() {
-                        self.access(id, true, e.source_location);
-                    }
+                    self.access(id, true, e.source_location);
                 }
             }
             E::CapabilityCall { arguments, .. } | E::Text { arguments, .. } => {

@@ -194,3 +194,7 @@ of different lengths; cloning an array creates an independent owner.
 
 Текстовый вывод: [пример print_n](examples/uart-text.he), [контракт &str и результаты](docs/TEXT.md).
 UTF-8 литералы находятся во Flash; std::uart::UartText предоставляет print/println.
+
+Временные ссылки на скаляры и элементы, `*r` / `*r = value`, reborrow и Clone
+объекта: [REFERENCES.md](docs/REFERENCES.md). Машинный пример —
+[uart-references.he](examples/uart-references.he). Сохраняемые ссылки пока не поддержаны.

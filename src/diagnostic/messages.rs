@@ -150,7 +150,7 @@ impl DiagnosticKind {
 impl super::LabelKind {
     pub fn message(&self) -> String {
         match self {
-            Self::ArrayBorrow => "array is borrowed here until the call or access completes".into(),
+            Self::ArrayBorrow => "value is borrowed here until the call or access completes".into(),
             Self::ValueMoved => {
                 "ownership was transferred here (possibly on a previous loop iteration)".into()
             }

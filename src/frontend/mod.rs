@@ -442,7 +442,21 @@ impl Parser<'_> {
                 source_location: utils::SourceLocation::new_from_start_end(start, end),
             });
         }
-        if reference.is_some() {
+        if let Some(mutable) = reference {
+            let token =
+                check_and_consume!(self, tokens, TT::Type(_), "Expected referenced scalar type")
+                    .clone();
+            if let TT::Type(t) = token.token_type {
+                if let Some(e) = ElementType::from_type(t) {
+                    return Some(Token {
+                        token_type: TT::Type(T::Ref(e, mutable)),
+                        source_location: utils::SourceLocation::new_from_start_end(
+                            start,
+                            token.source_location,
+                        ),
+                    });
+                }
+            }
             self.errors.push(
                 self.missing_token_error("Expected fixed array type after reference", tokens),
             );
@@ -1033,6 +1047,22 @@ impl Parser<'_> {
 
         let equals = self.peek(tokens)?;
         if let TT::Punctuation(PT::Equal) = equals.token_type {
+            if let ExpressionType::Deref(reference) = &l_value.expression_type {
+                tokens.advance();
+                let value = self.assignment(tokens)?;
+                return Some(Expression {
+                    symbol: None,
+                    source_location: utils::SourceLocation::new_from_start_end(
+                        l_value.source_location,
+                        value.source_location,
+                    ),
+                    static_type: static_type::StaticType::Unknown,
+                    expression_type: ExpressionType::DerefAssignment {
+                        reference: reference.clone(),
+                        value: Box::new(value),
+                    },
+                });
+            }
             if let ExpressionType::Index { array, index } = &l_value.expression_type {
                 tokens.advance();
                 let value = self.assignment(tokens)?;
@@ -1152,6 +1182,7 @@ impl Parser<'_> {
         let expr = parse_binary_with_error_produce!(
             self,
             TT::Punctuation(PT::Star | PT::Slash),
+            TT::Punctuation(PT::Slash),
             tokens,
             unary
         );
@@ -1161,6 +1192,19 @@ impl Parser<'_> {
 
     // ! - (as unary operator)
     fn unary(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
+        if matches!(self.peek(tokens)?.token_type, TT::Punctuation(PT::Star)) {
+            let start = tokens.advance()?.source_location;
+            let reference = self.unary(tokens)?;
+            return Some(Expression {
+                symbol: None,
+                source_location: utils::SourceLocation::new_from_start_end(
+                    start,
+                    reference.source_location,
+                ),
+                static_type: static_type::StaticType::Unknown,
+                expression_type: ExpressionType::Deref(Box::new(reference)),
+            });
+        }
         if matches!(
             self.peek(tokens)?.token_type,
             TT::Punctuation(PT::Ampersand)
@@ -1251,6 +1295,36 @@ impl Parser<'_> {
             let method =
                 check_and_consume!(self, tokens, TT::Identifier(_), "Expected device method")
                     .clone();
+            if matches!(&method.token_type, TT::Identifier(name) if name == "clone")
+                && !matches!(callee.expression_type, ExpressionType::Identifier(_))
+            {
+                check_and_consume!(
+                    self,
+                    tokens,
+                    TT::Punctuation(PT::LeftParen),
+                    "Expected '(' after clone"
+                );
+                let end = check_and_consume!(
+                    self,
+                    tokens,
+                    TT::Punctuation(PT::RightParen),
+                    "Clone takes no arguments"
+                )
+                .source_location;
+                return Some(Expression {
+                    symbol: None,
+                    source_location: utils::SourceLocation::new_from_start_end(
+                        callee.source_location,
+                        end,
+                    ),
+                    static_type: static_type::StaticType::Unknown,
+                    expression_type: ExpressionType::CapabilityCall {
+                        capability: crate::values::Capability::Clone,
+                        arguments: vec![callee],
+                        implementation: None,
+                    },
+                });
+            }
             let (ExpressionType::Identifier(device), TT::Identifier(method)) =
                 (&mut callee.expression_type, method.token_type)
             else {

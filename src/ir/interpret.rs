@@ -26,6 +26,13 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+#[derive(Clone, Copy)]
+enum Reference {
+    Local(usize),
+    Global(usize),
+    Element(usize, usize),
+}
+
 pub struct Interpreter<'a> {
     module: &'a Module,
     pub globals: Vec<Constant>,
@@ -37,10 +44,52 @@ pub struct Interpreter<'a> {
     pub levels: HashMap<PinId, bool>,
     texts: Vec<(String, TextSpace)>,
     arrays: Vec<Vec<Constant>>,
+    cells: Vec<Constant>,
+    references: Vec<Reference>,
     remaining: usize,
 }
 
 impl<'a> Interpreter<'a> {
+    fn reference(&mut self, ty: Type, place: Reference) -> Constant {
+        let id = self.references.len();
+        self.references.push(place);
+        Constant::new(ty, id as u64)
+    }
+    fn read_reference(&mut self, r: Constant) -> Result<Constant, Error> {
+        if let Type::ArrayRef(e, n, _) = r.ty {
+            return self.snapshot(Constant::new(Type::Array(e, n), r.bits));
+        }
+        match self
+            .references
+            .get(r.bits as usize)
+            .ok_or(Error::InvalidInvocation)?
+        {
+            Reference::Local(i) => self.cells.get(*i),
+            Reference::Global(i) => self.globals.get(*i),
+            Reference::Element(a, i) => self.arrays.get(*a).and_then(|a| a.get(*i)),
+        }
+        .copied()
+        .ok_or(Error::InvalidInvocation)
+    }
+    fn write_reference(&mut self, r: Constant, value: Constant) -> Result<(), Error> {
+        if let Type::ArrayRef(e, n, _) = r.ty {
+            self.store_value(Some(Constant::new(Type::Array(e, n), r.bits)), value)?;
+            return Ok(());
+        }
+        let slot = match self
+            .references
+            .get(r.bits as usize)
+            .ok_or(Error::InvalidInvocation)?
+        {
+            Reference::Local(i) => self.cells.get_mut(*i),
+            Reference::Global(i) => self.globals.get_mut(*i),
+            Reference::Element(a, i) => self.arrays.get_mut(*a).and_then(|a| a.get_mut(*i)),
+        }
+        .ok_or(Error::InvalidInvocation)?;
+        *slot = value;
+        Ok(())
+    }
+
     fn array_value(&mut self, ty: Type, value: Vec<Constant>) -> Constant {
         let id = self.arrays.len();
         self.arrays.push(value);
@@ -97,6 +146,8 @@ impl<'a> Interpreter<'a> {
             .collect();
         Ok(Self {
             arrays,
+            cells: vec![],
+            references: vec![],
             module,
             interrupts_enabled: false,
             globals,
@@ -162,7 +213,7 @@ impl<'a> Interpreter<'a> {
             .zip(args)
             .map(|((id, _), value)| (*id, *value))
             .collect();
-        let mut locals: Vec<Option<Constant>> = vec![None; function.locals.len()];
+        let mut locals: Vec<Option<usize>> = vec![None; function.locals.len()];
         let mut block_id = function.entry;
 
         loop {
@@ -180,6 +231,20 @@ impl<'a> Interpreter<'a> {
                         .ok_or_else(|| Error::InvalidIr("unavailable value".into()))
                 };
                 let result = match &instruction.op {
+                    Op::ReadRef(r) => Some(self.read_reference(get(r)?)?),
+                    Op::WriteRef(r, v) => {
+                        self.write_reference(get(r)?, get(v)?)?;
+                        None
+                    }
+                    Op::ElementAddress(a, i, _) => {
+                        let (a, i) = (get(a)?.bits as usize, get(i)?.bits as usize);
+                        if self.arrays.get(a).and_then(|a| a.get(i)).is_none() {
+                            return Err(Error::Bounds);
+                        }
+                        Some(
+                            self.reference(instruction.result.unwrap().1, Reference::Element(a, i)),
+                        )
+                    }
                     Op::ArrayLiteral(v) => {
                         let a = v.iter().map(get).collect::<Result<Vec<_>, _>>()?;
                         Some(self.array_value(instruction.result.unwrap().1, a))
@@ -191,12 +256,21 @@ impl<'a> Interpreter<'a> {
                     Op::AddressLocal(l, _) => {
                         let v = locals[l.index]
                             .ok_or_else(|| Error::InvalidIr("uninitialized array".into()))?;
-                        Some(Constant::new(instruction.result.unwrap().1, v.bits))
+                        let ty = instruction.result.unwrap().1;
+                        Some(if matches!(ty, Type::Ref(..)) {
+                            self.reference(ty, Reference::Local(v))
+                        } else {
+                            Constant::new(ty, self.cells[v].bits)
+                        })
                     }
-                    Op::AddressGlobal(g, _) => Some(Constant::new(
-                        instruction.result.unwrap().1,
-                        self.globals[g.0].bits,
-                    )),
+                    Op::AddressGlobal(g, _) => {
+                        let ty = instruction.result.unwrap().1;
+                        Some(if matches!(ty, Type::Ref(..)) {
+                            self.reference(ty, Reference::Global(g.0))
+                        } else {
+                            Constant::new(ty, self.globals[g.0].bits)
+                        })
+                    }
                     Op::SliceLen(v) => Some(Constant::new(
                         Type::U16,
                         self.arrays
@@ -313,13 +387,19 @@ impl<'a> Interpreter<'a> {
                     }
                     Op::LoadLocal(local) => Some(
                         self.snapshot(
-                            locals[local.index]
-                                .ok_or_else(|| Error::InvalidIr("uninitialized local".into()))?,
+                            self.cells[locals[local.index]
+                                .ok_or_else(|| Error::InvalidIr("uninitialized local".into()))?],
                         )?,
                     ),
                     Op::StoreLocal(local, value) => {
-                        locals[local.index] =
-                            Some(self.store_value(locals[local.index], get(value)?)?);
+                        let old = locals[local.index].map(|i| self.cells[i]);
+                        let value = self.store_value(old, get(value)?)?;
+                        if let Some(i) = locals[local.index] {
+                            self.cells[i] = value;
+                        } else {
+                            locals[local.index] = Some(self.cells.len());
+                            self.cells.push(value);
+                        }
                         None
                     }
                     Op::LoadGlobal(global) => Some(self.snapshot(self.globals[global.0])?),

@@ -4,7 +4,7 @@ libraryModule   -> ( importDecl | functionDecl | extensionDecl )* EOF ;
 lateDecl        -> functionDecl | timerDecl | deviceDecl | importDecl | extensionDecl ;
 topLevelDecl    -> defDecl | varDecl | lateDecl ;
 functionDecl    -> "pub"? "noInterrupt"? "fn" IDENTIFIER "(" parameters? ")" ( ":" sourceType )? block ;
-sourceType      -> TYPE | "&" "str" | arrayType | "&" "mut"? ( arrayType | "[" TYPE "]" ) ;
+sourceType      -> TYPE | "&" "str" | arrayType | "&" "mut"? ( TYPE | arrayType | "[" TYPE "]" ) ;
 arrayType       -> "[" TYPE ";" INTEGER "]" ;
 parameters      -> parameter ( "," parameter )* ;
 parameter       -> IDENTIFIER ":" sourceType | "device" IDENTIFIER ":" IDENTIFIER ;
@@ -33,7 +33,7 @@ block           -> "{" declaration* "}" ;
 
 // Precedence: lowest to highest. Assignment is right-associative; binary operators are left-associative.
 expression      -> assignment ;
-assignment      -> IDENTIFIER "=" assignment | indexed "=" assignment | ternary ;
+assignment      -> IDENTIFIER "=" assignment | indexed "=" assignment | "*" unary "=" assignment | ternary ;
 indexed         -> primary "[" expression "]" ;
 ternary         -> logic_or ( "?" logic_or ":" logic_or )? ;
 logic_or        -> logic_and ( "or" logic_and )* ;
@@ -42,8 +42,8 @@ equality        -> comparison ( ( "!=" | "==" ) comparison )* ;
 comparison      -> term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
 term            -> factor ( ( "-" | "+" ) factor )* ;
 factor          -> unary ( ( "*" | "/" ) unary )* ;
-unary           -> ( "!" | "-" ) unary | "&" "mut"? unary | call ;
-call            -> qualifiedName "(" arguments? ")" | IDENTIFIER "." IDENTIFIER "(" arguments? ")" | indexed | primary ;
+unary           -> ( "!" | "-" | "*" ) unary | "&" "mut"? unary | call ;
+call            -> qualifiedName "(" arguments? ")" | IDENTIFIER "." IDENTIFIER "(" arguments? ")" | primary "." "clone" "(" ")" | indexed | primary ;
 arguments       -> expression ( "," expression )* ;
 primary         -> INTEGER | FLOAT | STRING | BOOLEAN | PINSTATE | PINMODE
                  | IDENTIFIER | "(" expression ")" | arrayLiteral ;
@@ -52,14 +52,19 @@ arrayLiteral    -> "[" expression ";" INTEGER "]" | "[" expression ( "," express
 // Array-reference and slice types are call arguments/parameters only; no stored or returned refs.
 // &[T] / &mut [T] accept whole-array borrows and reborrows; len():u16 is runtime length.
 // No subranges yet. Named value.clone() takes no arguments and requires Clone.
+// &T supports integer/bool/PinState; &mut a[i] checks bounds before remaining call arguments.
+// Element loans conflict with the entire root array. *r accesses a sized referent;
+// *r=value needs mutable access; moving an owner out is forbidden; (*r).clone() copies the object.
+// Clone on a non-named receiver requires a place (grouping, dereference, grouped element).
+// References cannot be rebound/stored/returned; &&T and computed reference selection are unsupported.
 // mut is contextual, not a globally reserved keyword. See docs/ARRAYS.md for bounds/borrowing.
 
 // alias and not remain reserved, but have no implemented productions.
 // Only named functions and methods of named devices/text references/arrays can be called; no chained calls,
-// computed receivers or method values. Functions are top-level or extension members;
+// general computed receivers or method values (place Clone is the exception). Functions are top-level or extension members;
 // hardware devices are declared only at application top level, never in libraries.
 // No trailing commas in function parameters or call arguments.
-// Signature types: integers, bool, PinState, fixed arrays; &str and array refs as parameters.
+// Signature types: integers, bool, PinState, fixed arrays; &str and scalar/array refs as parameters.
 // &str results and globals are parsed but rejected until escaping-borrow analysis exists.
 // Local &str requires an initializer. Assignment copies the view, not its bytes.
 // Text methods: len():u16; byte_or(index:u16, fallback:u8):u8 (fallback outside bounds).

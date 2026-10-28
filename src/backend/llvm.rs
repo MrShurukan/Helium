@@ -8,7 +8,7 @@ use std::fmt::Write;
 fn ty(value: Type) -> String {
     match value {
         Type::Array(e, n) => return format!("[{n} x {}]", ty(Type::element(e))),
-        Type::ArrayRef(..) => "ptr",
+        Type::Ref(..) | Type::ArrayRef(..) => "ptr",
         Type::SliceRef(..) => "{ ptr, i16 }",
         Type::Text => super::text::LLVM_TYPE,
         Type::TextIn(_) => "{ i16, i16 }",
@@ -58,7 +58,10 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
         }));
     if types.into_iter().any(|t| {
         t.sequence()
-            .map_or(t, |(e, _)| Type::element(e))
+            .map_or_else(
+                || t.reference().map_or(t, |(t, _)| t),
+                |(e, _)| Type::element(e),
+            )
             .integer()
             .is_some_and(|(w, _)| w > 16)
     }) {
@@ -89,7 +92,12 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
         .iter()
         .flat_map(|f| &f.blocks)
         .flat_map(|b| &b.instructions)
-        .any(|i| matches!(i.op, Op::ArrayRead(..) | Op::ArrayWrite(..)))
+        .any(|i| {
+            matches!(
+                i.op,
+                Op::ArrayRead(..) | Op::ArrayWrite(..) | Op::ElementAddress(..)
+            )
+        })
     {
         out.push_str(
             r#"
@@ -310,6 +318,16 @@ impl FunctionEmitter<'_> {
 
     fn instruction(&mut self, instruction: &Instruction) -> Result<(), String> {
         let expression = match &instruction.op {
+            Op::ReadRef(r) => format!(
+                "load volatile {}, {}, align 1",
+                ty(self.types[r].reference().ok_or("reference type")?.0),
+                self.value(*r)
+            ),
+            Op::WriteRef(r, v) => format!(
+                "store volatile {}, {}, align 1",
+                self.value(*v),
+                self.value(*r)
+            ),
             Op::ArrayLiteral(values) => self.array_literal(instruction.result.unwrap().1, values),
             Op::ArrayRepeat(v, n) => {
                 self.array_literal(instruction.result.unwrap().1, &vec![*v; usize::from(*n)])
@@ -333,7 +351,7 @@ impl FunctionEmitter<'_> {
                 }
             }
             Op::Reborrow(v, _) => format!("getelementptr i8, ptr %v{}, i16 0", v.index),
-            Op::ArrayRead(a, i) | Op::ArrayWrite(a, i, _) => {
+            Op::ElementAddress(a, i, _) | Op::ArrayRead(a, i) | Op::ArrayWrite(a, i, _) => {
                 let (e, n) = self.types[a].sequence().ok_or("array reference type")?;
                 let (base, len) = if let Some(n) = n {
                     (format!("%v{}", a.index), n.to_string())
@@ -352,7 +370,9 @@ impl FunctionEmitter<'_> {
                     ty(Type::element(e)),
                     self.value(*i)
                 ));
-                if let Op::ArrayWrite(_, _, v) = instruction.op {
+                if matches!(instruction.op, Op::ElementAddress(..)) {
+                    format!("getelementptr i8, ptr {p}, i16 0")
+                } else if let Op::ArrayWrite(_, _, v) = instruction.op {
                     format!("store volatile {}, ptr {p}, align 1", self.value(v))
                 } else {
                     format!("load volatile {}, ptr {p}, align 1", ty(Type::element(e)))

@@ -247,13 +247,30 @@ impl Program {
         });
     }
 
+    fn place_operands(
+        e: &Expression,
+        protection: Protection,
+        symbols: &SymbolTable,
+        body: &mut Body,
+    ) {
+        match &e.expression_type {
+            E::Index { array, index } => {
+                Self::place_operands(array, protection, symbols, body);
+                Self::expression(index, protection, symbols, body);
+            }
+            E::Deref(r) | E::Borrow { expression: r, .. } | E::Grouping { expression: r } => {
+                Self::place_operands(r, protection, symbols, body)
+            }
+            _ => {}
+        }
+    }
     fn expression(e: &Expression, protection: Protection, symbols: &SymbolTable, body: &mut Body) {
         match &e.expression_type {
             E::Borrow {
                 expression,
                 mutable,
             } => {
-                if let Some(id) = expression.symbol {
+                if let Some(id) = expression.place_root() {
                     Self::access(
                         id,
                         *mutable,
@@ -264,6 +281,22 @@ impl Program {
                         body,
                     );
                 }
+                Self::place_operands(expression, protection, symbols, body);
+            }
+            E::DerefAssignment { reference, value } => {
+                if let Some(id) = reference.place_root() {
+                    Self::access(
+                        id,
+                        true,
+                        false,
+                        protection,
+                        e.source_location,
+                        symbols,
+                        body,
+                    );
+                }
+                Self::place_operands(reference, protection, symbols, body);
+                Self::expression(value, protection, symbols, body);
             }
             E::IndexAssignment {
                 array,
