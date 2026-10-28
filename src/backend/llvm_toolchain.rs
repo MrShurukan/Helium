@@ -58,7 +58,7 @@ pub enum Intermediates<'a> {
 pub struct BuildOptions<'a> {
     pub intermediates: Intermediates<'a>,
     pub internal_ir: Option<&'a str>,
-    /// Loaded sources must never be replaced by named artifacts.
+    /// Loaded sources must never be replaced by output or named artifacts.
     pub protected_paths: &'a [PathBuf],
 }
 
@@ -77,6 +77,17 @@ const ARTIFACTS: &[&str] = &[
     "symbols.txt",
     "disassembly.txt",
 ];
+
+fn output_artifact(emit: &str) -> Result<&'static str, String> {
+    match emit {
+        "asm" => Ok("program.s"),
+        "elf" => Ok("program.elf"),
+        "hex" => Ok("program.hex"),
+        _ => Err(format!(
+            "LLVM machine output must be asm, elf or hex, got {emit}"
+        )),
+    }
+}
 
 struct Workspace {
     path: PathBuf,
@@ -119,7 +130,7 @@ fn artifact_directory(
                 .ok()
                 .zip(destination.canonicalize().ok())
                 .is_some_and(|(a, b)| a == b))
-            && *name != format!("program.{emit}")
+            && *name != output_artifact(emit)?
         {
             return Err("Output must not overlap a named intermediate artifact".into());
         }
@@ -216,11 +227,8 @@ pub fn build_with_options(
     optimization: Optimization,
     options: BuildOptions<'_>,
 ) -> Result<Build, String> {
-    if !matches!(emit, "asm" | "elf" | "hex") {
-        return Err(format!(
-            "LLVM machine output must be asm, elf or hex, got {emit}"
-        ));
-    }
+    let artifact_name = output_artifact(emit)?;
+    super::output::check(destination, options.protected_paths)?;
     let started = Instant::now();
     let parent = destination
         .parent()
@@ -317,9 +325,7 @@ pub fn build_with_options(
 
     let mut sections = String::new();
     let mut memory = None;
-    let artifact = if emit == "asm" {
-        &assembly
-    } else {
+    if emit != "asm" {
         let mut arguments = machine_args.to_vec();
         arguments.extend([arg("-filetype=obj"), arg("-o"), arg(&object)]);
         run("llc", &arguments)?;
@@ -360,13 +366,13 @@ pub fn build_with_options(
                     arg(&hex),
                 ],
             )?;
-            &hex
-        } else {
-            &elf
         }
-    };
-    fs::copy(artifact, destination)
-        .map_err(|e| format!("Cannot write {}: {e}", destination.display()))?;
+    }
+    super::output::copy(
+        &directory.join(artifact_name),
+        destination,
+        options.protected_paths,
+    )?;
 
     let retained_directory = match options.intermediates {
         Intermediates::Generated => Some(directory.clone()),

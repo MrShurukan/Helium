@@ -246,9 +246,13 @@ fn run(args: Vec<String>) -> Result<String, String> {
             ))
     });
 
-    if destination.canonicalize().ok() == Some(input.canonicalize().map_err(|e| e.to_string())?) {
-        return Err("Output must not overwrite the source file".into());
-    }
+    let protected_paths: Vec<_> = project
+        .sources
+        .files
+        .iter()
+        .map(|f| PathBuf::from(&f.name))
+        .collect();
+    helium::backend::output::check(&destination, &protected_paths)?;
 
     if matches!(emit, "asm" | "elf" | "hex") {
         let retention = match &intermediates {
@@ -256,12 +260,6 @@ fn run(args: Vec<String>) -> Result<String, String> {
             Some(None) => llvm_toolchain::Intermediates::Generated,
             Some(Some(path)) => llvm_toolchain::Intermediates::Directory(path),
         };
-        let protected_paths: Vec<_> = project
-            .sources
-            .files
-            .iter()
-            .map(|f| PathBuf::from(&f.name))
-            .collect();
         let result = llvm_toolchain::build_with_options(
             &content,
             target,
@@ -290,12 +288,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
         ));
     }
 
-    if let Some(parent) = destination.parent().filter(|p| !p.as_os_str().is_empty()) {
-        fs::create_dir_all(parent).map_err(|e| format!("Cannot create output directory: {e}"))?;
-    }
-
-    fs::write(&destination, content)
-        .map_err(|e| format!("Cannot write {}: {e}", destination.display()))?;
+    helium::backend::output::write(&destination, content.as_bytes(), &protected_paths)?;
     Ok(format!("Built {}{report}", destination.display()))
 }
 
