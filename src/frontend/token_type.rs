@@ -12,7 +12,7 @@ pub enum TokenType {
     // see those hashmaps below in a lazy_static! block
     Keyword(&'static KeywordType),
     Constant(&'static ConstantType),
-    Type(&'static StaticType),
+    Type(StaticType),
     Punctuation(PunctuationType),
 
     Eof,
@@ -136,6 +136,8 @@ pub enum PinModeConstantType {
 
 #[derive(Debug, Clone)]
 pub enum PunctuationType {
+    LeftBracket,
+    RightBracket,
     // Single-character tokens.
     LeftParen,
     RightParen,
@@ -166,6 +168,8 @@ pub enum PunctuationType {
 impl Display for PunctuationType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let str = match self {
+            Self::LeftBracket => "[",
+            Self::RightBracket => "]",
             PunctuationType::LeftParen => "(",
             PunctuationType::RightParen => ")",
             PunctuationType::LeftBrace => "{",

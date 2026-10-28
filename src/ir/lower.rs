@@ -35,6 +35,9 @@ fn invalid(detail: &str, location: SourceLocation) -> Diagnostic {
 
 fn ty(ty: T, location: SourceLocation) -> Result<Type, Diagnostic> {
     Ok(match ty {
+        T::FixedArray(e, n) => Type::Array(e, n),
+        T::SliceRef(e, m) => Type::SliceRef(e, m),
+        T::ArrayRef(e, n, m) => Type::ArrayRef(e, n, m),
         T::Text => Type::Text,
         T::Boolean => Type::Bool,
         T::PinState => Type::PinState,
@@ -749,6 +752,45 @@ impl<'a> Builder<'a> {
         }
 
         let value = match &expr.expression_type {
+            E::Array { elements, repeat } => {
+                let values = elements
+                    .iter()
+                    .map(|e| self.value(e))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.emit(
+                    if let Some(n) = repeat {
+                        Op::ArrayRepeat(values[0], *n)
+                    } else {
+                        Op::ArrayLiteral(values)
+                    },
+                    expected,
+                    origin.clone(),
+                )
+            }
+            E::Borrow {
+                expression,
+                mutable,
+            } => self.array_address(expression, *mutable)?,
+            E::Index { array, index } => {
+                let reference = self.array_address(array, false)?;
+                let index = self.value(index)?;
+                self.emit(
+                    Op::ArrayRead(reference, index),
+                    Type::element(array.static_type.sequence().unwrap().0),
+                    origin.clone(),
+                )
+            }
+            E::IndexAssignment {
+                array,
+                index,
+                value,
+            } => {
+                let reference = self.array_address(array, true)?;
+                let index = self.value(index)?;
+                let value = self.value(value)?;
+                self.effect(Op::ArrayWrite(reference, index, value), origin.clone());
+                value
+            }
             E::Literal {
                 value: L::String(text),
             } => self.emit(
@@ -759,23 +801,61 @@ impl<'a> Builder<'a> {
                 Type::Text,
                 origin.clone(),
             ),
+            E::CapabilityCall {
+                arguments,
+                implementation,
+                ..
+            } => {
+                // Current structural arrays contain only scalar, bitwise-Clone elements.
+                // Loading an owning aggregate produces a value snapshot, not an address.
+                match implementation {
+                    Some(crate::values::Implementation::Bitwise) => self.value(&arguments[0])?,
+                    Some(crate::values::Implementation::Structural)
+                        if matches!(arguments[0].static_type, T::FixedArray(..)) =>
+                    {
+                        self.value(&arguments[0])?
+                    }
+                    _ => {
+                        return Err(invalid(
+                            "unsupported resolved capability implementation",
+                            expr.source_location,
+                        ))
+                    }
+                }
+            }
             E::Text {
                 operation,
                 arguments,
             } => {
-                let values = arguments
-                    .iter()
-                    .map(|a| self.value(a))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let op = match operation {
-                    crate::frontend::expression::TextOperation::Len => Op::TextLen(values[0]),
-                    crate::frontend::expression::TextOperation::ByteOr => Op::TextByteOr {
-                        text: values[0],
-                        index: values[1],
-                        fallback: values[2],
-                    },
-                };
-                self.emit(op, expected, origin.clone())
+                if matches!(arguments[0].static_type, T::SliceRef(..)) {
+                    let v = self.value(&arguments[0])?;
+                    self.emit(Op::SliceLen(v), Type::U16, origin.clone())
+                } else if let Some((_, n)) = arguments[0].static_type.array() {
+                    self.emit(
+                        Op::Const(Constant::new(Type::U16, u64::from(n))),
+                        Type::U16,
+                        origin.clone(),
+                    )
+                } else {
+                    let values = arguments
+                        .iter()
+                        .map(|a| self.value(a))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let (op, native) = match operation {
+                        crate::frontend::expression::TextOperation::Len => {
+                            (Op::TextLen(values[0]), Type::U16)
+                        }
+                        crate::frontend::expression::TextOperation::ByteOr => (
+                            Op::TextByteOr {
+                                text: values[0],
+                                index: values[1],
+                                fallback: values[2],
+                            },
+                            Type::U8,
+                        ),
+                    };
+                    self.emit(op, native, origin.clone())
+                }
             }
             E::Call { arguments, .. } => self
                 .call(expr.symbol.unwrap(), arguments, origin.clone())?
@@ -940,8 +1020,47 @@ impl<'a> Builder<'a> {
 
         if self.value_types[&value] == expected {
             Ok(value)
+        } else if let Type::SliceRef(_, m) = expected {
+            Ok(self.emit(Op::Slice(value, m), expected, origin))
+        } else if let Type::ArrayRef(_, _, m) = expected {
+            Ok(self.emit(Op::Reborrow(value, m), expected, origin))
         } else {
             Ok(self.emit(Op::Widen(value, expected), expected, origin))
         }
+    }
+
+    fn array_address(
+        &mut self,
+        expression: &Expression,
+        mutable: bool,
+    ) -> Result<ValueId, Diagnostic> {
+        let origin = Origin::Source(expression.source_location);
+        if let T::SliceRef(e, _) = expression.static_type {
+            let v = self.value(expression)?;
+            return Ok(self.emit(Op::Slice(v, mutable), Type::SliceRef(e, mutable), origin));
+        }
+        let (e, n) = expression
+            .static_type
+            .array()
+            .ok_or_else(|| invalid("array address type", expression.source_location))?;
+        if matches!(expression.static_type, T::ArrayRef(..)) {
+            let v = self.value(expression)?;
+            return Ok(self.emit(
+                Op::Reborrow(v, mutable),
+                Type::ArrayRef(e, n, mutable),
+                origin,
+            ));
+        }
+        let symbol = expression
+            .symbol
+            .ok_or_else(|| invalid("array address requires a place", expression.source_location))?;
+        let op = if let Some(local) = self.bindings.get(&symbol) {
+            Op::AddressLocal(*local, mutable)
+        } else if let Some((global, _)) = self.globals.get(&symbol) {
+            Op::AddressGlobal(*global, mutable)
+        } else {
+            return Err(invalid("missing array place", expression.source_location));
+        };
+        Ok(self.emit(op, Type::ArrayRef(e, n, mutable), origin))
     }
 }

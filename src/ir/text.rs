@@ -108,6 +108,17 @@ pub fn specialize(input: &Module) -> Result<Module, String> {
 
 fn values(op: &mut Op, mut apply: impl FnMut(&mut ValueId)) {
     match op {
+        Op::ArrayLiteral(v) => v.iter_mut().for_each(apply),
+        Op::ArrayRepeat(v, _) | Op::Reborrow(v, _) | Op::Slice(v, _) | Op::SliceLen(v) => apply(v),
+        Op::ArrayRead(a, b) => {
+            apply(a);
+            apply(b);
+        }
+        Op::ArrayWrite(a, b, c) => {
+            apply(a);
+            apply(b);
+            apply(c);
+        }
         Op::TextLen(v)
         | Op::TextIsFlash(v)
         | Op::TextNarrow(v, _)
@@ -151,7 +162,7 @@ fn remap(f: &mut Function, id: FunctionId) {
                 v.function = id;
             }
             values(&mut i.op, |v| v.function = id);
-            if let Op::LoadLocal(l) | Op::StoreLocal(l, _) = &mut i.op {
+            if let Op::LoadLocal(l) | Op::StoreLocal(l, _) | Op::AddressLocal(l, _) = &mut i.op {
                 l.function = id;
             }
         }

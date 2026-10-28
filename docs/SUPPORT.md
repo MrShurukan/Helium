@@ -12,6 +12,10 @@ AVRA, the old linear IR and hand-written AVR assembly generation have been remov
 | UTF-8 literals, `&str` parameters/locals, len/byte_or | Yes; no escaping references | Universal Flash/SRAM text; byte interpreter | Yes; source literals in Flash |
 | std::uart print/println | Ordinary Helium extension functions | UART requires machine simulator | Yes |
 | Variables, assignment, widening, + / - / * | Yes | Yes | Yes for supported types |
+| Fixed scalar arrays `[T; N]`, literals/repeat, len/indexing, move | Yes; full initialization, N=1..1024 | Yes; checked bounds | Yes; SRAM, no heap |
+| Temporary `&[T]` / `&mut [T]` slices | Whole-array loans, runtime element count; no subranges | Yes | Yes; SRAM pointer + u16 length |
+| `.clone()` on scalar arrays and Copy values | Resolved Clone capability; owners remain Move | Independent aggregate value | Yes |
+| Temporary `&[T; N]` / `&mut [T; N]` parameters and reborrow | Whole-array alias checks, helpers/globals/ISR | Yes; no escaping refs | Yes |
 | Comparisons, short-circuit and/or, ternary, if, while | Yes | Yes | Yes |
 | fn, arguments by value, explicit return | Yes | Yes | Yes for supported types |
 | Direct or indirect recursion | Rejected | — | — |
@@ -47,6 +51,9 @@ Computed PinMode expressions and first-class pin selection are rejected before l
 constant (including grouped/chained) pin mode statements remain supported.
 
 ## Semantic rules
+
+Array syntax, ownership, call-scoped borrows and bounds failure policy: [ARRAYS.md](ARRAYS.md).
+Array/slice-reference variables and returns, subranges, general scalar references and nested arrays are not yet supported.
 
 - Names cannot shadow a visible variable, parameter, pin or function. Separate sibling scopes
   can reuse local names. Functions can be called before declaration.

@@ -14,6 +14,7 @@ use unicode_width::UnicodeWidthStr;
 /// Stable public identifiers, independent of wording and presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticCode {
+    Ownership,
     Module,
     IsrBlocking,
     IrqRequirement,
@@ -47,6 +48,7 @@ pub enum DiagnosticCode {
 impl DiagnosticCode {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Ownership => "E_OWNERSHIP",
             Self::Module => "E_MODULE",
             Self::IsrBlocking => "W_ISR_BLOCKING",
             Self::IrqRequirement => "E_IRQ_REQUIREMENT",
@@ -97,6 +99,15 @@ pub enum SharedAccessReason {
 /// Structured facts about an error. Add translations at the presentation layer.
 #[derive(Debug, Clone)]
 pub enum DiagnosticKind {
+    Array {
+        detail: String,
+    },
+    MovedValue {
+        name: String,
+    },
+    GlobalMove {
+        name: String,
+    },
     Module {
         detail: String,
     },
@@ -220,6 +231,8 @@ pub enum DiagnosticKind {
 impl DiagnosticKind {
     pub fn code(&self) -> DiagnosticCode {
         match self {
+            Self::Array { .. } => DiagnosticCode::Type,
+            Self::MovedValue { .. } | Self::GlobalMove { .. } => DiagnosticCode::Ownership,
             Self::Module { .. } => DiagnosticCode::Module,
             Self::IsrBlocking { .. } => DiagnosticCode::IsrBlocking,
             Self::IrqRequirement { .. } => DiagnosticCode::IrqRequirement,
@@ -268,6 +281,8 @@ impl DiagnosticKind {
 /// Semantic labels stay independent of wording and terminal/editor rendering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LabelKind {
+    ArrayBorrow,
+    ValueMoved,
     EffectCall,
     InterruptAccess,
     MainAccess,

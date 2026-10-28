@@ -209,7 +209,7 @@ impl Statement {
                 unreachable!("Non-type passed to var statement")
             };
 
-            st_t = Some(*t);
+            st_t = Some(t);
         }
 
         let type_location = static_type.as_ref().map(|t| t.source_location);

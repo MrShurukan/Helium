@@ -524,7 +524,7 @@ impl Expander {
                         "byte_or" => Some(TextOperation::ByteOr),
                         _ => None,
                     };
-                    if let Some(operation) = operation {
+                    if operation.is_some() || method == "clone" {
                         let mut args = vec![Expression {
                             symbol: None,
                             expression_type: E::Identifier(name.into()),
@@ -535,9 +535,17 @@ impl Expander {
                         for a in &mut args {
                             self.expression(a, module, own, bindings, locals)?;
                         }
-                        e.expression_type = E::Text {
-                            operation,
-                            arguments: args,
+                        e.expression_type = if let Some(operation) = operation {
+                            E::Text {
+                                operation,
+                                arguments: args,
+                            }
+                        } else {
+                            E::CapabilityCall {
+                                capability: crate::values::Capability::Clone,
+                                arguments: args,
+                                implementation: None,
+                            }
                         };
                         return Ok(());
                     }

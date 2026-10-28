@@ -5,6 +5,7 @@ pub mod optimize;
 pub mod text;
 pub mod verify;
 
+pub use crate::frontend::static_type::ElementType;
 use crate::frontend::utils::SourceLocation;
 use std::fmt::{self, Write};
 
@@ -36,6 +37,9 @@ function_id!(ValueId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Type {
+    Array(ElementType, u16),
+    ArrayRef(ElementType, u16, bool),
+    SliceRef(ElementType, bool),
     Text,
     TextIn(TextSpace),
     Bool,
@@ -51,6 +55,39 @@ pub enum Type {
 }
 
 impl Type {
+    pub fn sequence(self) -> Option<(ElementType, Option<u16>)> {
+        if let Self::SliceRef(e, _) = self {
+            Some((e, None))
+        } else {
+            self.array().map(|(e, n)| (e, Some(n)))
+        }
+    }
+    pub fn array(self) -> Option<(ElementType, u16)> {
+        match self {
+            Self::Array(e, n) | Self::ArrayRef(e, n, _) => Some((e, n)),
+            _ => None,
+        }
+    }
+    pub fn element(e: ElementType) -> Self {
+        use crate::frontend::static_type::{
+            IntegerType as I, SignedIntegerType as S, UnsignedIntegerType as U,
+        };
+        match e {
+            ElementType::Boolean => Self::Bool,
+            ElementType::PinState => Self::PinState,
+            ElementType::Integer(i) => match i {
+                I::Signed(S::Int8) => Self::I8,
+                I::Signed(S::Int16) => Self::I16,
+                I::Signed(S::Int32) => Self::I32,
+                I::Signed(S::Int64) => Self::I64,
+                I::Unsigned(U::Uns8) => Self::U8,
+                I::Unsigned(U::Uns16) => Self::U16,
+                I::Unsigned(U::Uns32) => Self::U32,
+                I::Unsigned(U::Uns64) => Self::U64,
+                I::Literal => Self::I32,
+            },
+        }
+    }
     pub fn is_text(self) -> bool {
         matches!(self, Self::Text | Self::TextIn(_))
     }
@@ -73,7 +110,7 @@ impl Type {
         match self.integer() {
             Some((64, _)) => u64::MAX,
             Some((bits, _)) => (1u64 << bits) - 1,
-            None if self.is_text() => u64::MAX,
+            None if self.is_text() || self.sequence().is_some() => u64::MAX,
             None => 1,
         }
     }
@@ -104,6 +141,13 @@ impl Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
+            Self::Array(e, n) => return write!(f, "[{}; {n}]", e.ty()),
+            Self::SliceRef(e, m) => {
+                return write!(f, "&{}[{}]", if *m { "mut " } else { "" }, e.ty())
+            }
+            Self::ArrayRef(e, n, m) => {
+                return write!(f, "&{}[{}; {n}]", if *m { "mut " } else { "" }, e.ty())
+            }
             Self::Text => "&str",
             Self::TextIn(TextSpace::Flash) => "&str[Flash]",
             Self::TextIn(TextSpace::Sram) => "&str[SRAM]",
@@ -199,6 +243,15 @@ pub enum TextSpace {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    ArrayLiteral(Vec<ValueId>),
+    ArrayRepeat(ValueId, u16),
+    AddressLocal(LocalId, bool),
+    AddressGlobal(GlobalId, bool),
+    Reborrow(ValueId, bool),
+    Slice(ValueId, bool),
+    SliceLen(ValueId),
+    ArrayRead(ValueId, ValueId),
+    ArrayWrite(ValueId, ValueId, ValueId),
     /// Immutable UTF-8 storage. Source literals always use Flash; SRAM is also
     /// available to IR producers and machine fixtures. No raw pointers are exposed.
     TextLiteral {
@@ -244,6 +297,13 @@ pub enum Op {
 impl Op {
     pub fn operands(&self) -> Vec<ValueId> {
         match self {
+            Self::ArrayLiteral(elements) => elements.clone(),
+            Self::ArrayRepeat(v, _)
+            | Self::Reborrow(v, _)
+            | Self::Slice(v, _)
+            | Self::SliceLen(v) => vec![*v],
+            Self::ArrayRead(a, b) => vec![*a, *b],
+            Self::ArrayWrite(a, b, c) => vec![*a, *b, *c],
             Self::TextLen(v)
             | Self::TextIsFlash(v)
             | Self::TextNarrow(v, _)
@@ -529,6 +589,15 @@ impl Module {
 impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ArrayLiteral(v) => write!(f, "array {v:?}"),
+            Self::ArrayRepeat(v, n) => write!(f, "array_repeat {v:?}; {n}"),
+            Self::AddressLocal(l, m) => write!(f, "address_local {l:?} mutable={m}"),
+            Self::AddressGlobal(g, m) => write!(f, "address_global {g:?} mutable={m}"),
+            Self::Slice(v, m) => write!(f, "slice {v:?} mutable={m}"),
+            Self::SliceLen(v) => write!(f, "slice_len {v:?}"),
+            Self::Reborrow(v, m) => write!(f, "reborrow {v:?} mutable={m}"),
+            Self::ArrayRead(a, i) => write!(f, "array_read {a:?}, {i:?}"),
+            Self::ArrayWrite(a, i, v) => write!(f, "array_write {a:?}, {i:?}, {v:?}"),
             Self::TextLiteral { text, space } => write!(f, "text {space:?} {text:?}"),
             Self::TextIsFlash(v) => write!(f, "text_is_flash v{}", v.index),
             Self::TextNarrow(v, space) => write!(f, "text_narrow v{} {space:?}", v.index),

@@ -249,6 +249,41 @@ impl Program {
 
     fn expression(e: &Expression, protection: Protection, symbols: &SymbolTable, body: &mut Body) {
         match &e.expression_type {
+            E::Borrow {
+                expression,
+                mutable,
+            } => {
+                if let Some(id) = expression.symbol {
+                    Self::access(
+                        id,
+                        *mutable,
+                        false,
+                        protection,
+                        e.source_location,
+                        symbols,
+                        body,
+                    );
+                }
+            }
+            E::IndexAssignment {
+                array,
+                index,
+                value,
+            } => {
+                if let Some(id) = array.symbol {
+                    Self::access(
+                        id,
+                        true,
+                        false,
+                        protection,
+                        array.source_location,
+                        symbols,
+                        body,
+                    );
+                }
+                Self::expression(index, protection, symbols, body);
+                Self::expression(value, protection, symbols, body);
+            }
             E::Identifier(_) => Self::access(
                 e.symbol.unwrap(),
                 false,

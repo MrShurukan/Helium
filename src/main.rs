@@ -16,6 +16,7 @@ const USAGE: &str = concat!(
     "Options: --color auto|always|never (default: auto; NO_COLOR disables automatic color)\n",
     "  --verify-ir (check/build; enabled by default in debug and release)\n",
     "  --opt none|speed|size (machine output only; default: none)\n",
+    "  --intermediates [directory] (machine build only; retain IR, LLVM and toolchain artifacts)\n",
     "  --optimize-ir (build --emit ir only; constant folding, CFG cleanup and dead values)"
 );
 
@@ -58,9 +59,29 @@ fn run(args: Vec<String>) -> Result<String, String> {
     let mut cpu_hz = None;
     let mut ir_options = ir::Options::default();
     let mut explicit_verify = false;
+    let mut intermediates: Option<Option<PathBuf>> = None;
 
-    let mut options = args[2..].iter();
+    let mut options = args[2..].iter().peekable();
     while let Some(option) = options.next() {
+        if (option == "--intermediates" || option.starts_with("--intermediates="))
+            && command == "build"
+        {
+            if intermediates.is_some() {
+                return Err("Repeated option --intermediates".into());
+            }
+            let directory = if let Some((_, path)) = option.split_once('=') {
+                if path.is_empty() {
+                    return Err("Intermediates directory must not be empty".into());
+                }
+                Some(PathBuf::from(path))
+            } else if options.peek().is_some_and(|next| !next.starts_with('-')) {
+                Some(PathBuf::from(options.next().unwrap()))
+            } else {
+                None
+            };
+            intermediates = Some(directory);
+            continue;
+        }
         if option == "--verify-ir" && command != "flash" {
             if explicit_verify {
                 return Err("Repeated option --verify-ir".into());
@@ -167,6 +188,9 @@ fn run(args: Vec<String>) -> Result<String, String> {
     if optimization.is_some() && matches!(emit, "ast" | "ir" | "llvm") {
         return Err("--opt applies only to machine output (asm, elf, hex)".into());
     }
+    if intermediates.is_some() && !matches!(emit, "asm" | "elf" | "hex") {
+        return Err("--intermediates requires machine output (asm, elf, hex)".into());
+    }
     let level = llvm_toolchain::Optimization::parse(optimization.as_deref().unwrap_or("none"))?;
     if command == "check" {
         let llvm = compile_project_llvm(&mut project, target, ir_options).map_err(diagnostics)?;
@@ -180,6 +204,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
         ));
     }
 
+    let mut internal_ir = None;
     let content = match emit {
         "ast" => {
             let program = project.analyze().map_err(diagnostics)?;
@@ -197,8 +222,10 @@ fn run(args: Vec<String>) -> Result<String, String> {
             module.dump()
         }
         _ => {
-            let result =
-                compile_project_llvm(&mut project, target, ir_options).map_err(diagnostics)?;
+            let artifacts = helium::compile_project_artifacts(&mut project, target, ir_options)
+                .map_err(diagnostics)?;
+            internal_ir = Some(artifacts.ir);
+            let result = artifacts.llvm;
             if !result.warnings.is_empty() {
                 eprintln!("{}", diagnostics(result.warnings));
             }
@@ -224,12 +251,39 @@ fn run(args: Vec<String>) -> Result<String, String> {
     }
 
     if matches!(emit, "asm" | "elf" | "hex") {
-        let result = llvm_toolchain::build(&content, target, &destination, emit, level)?;
+        let retention = match &intermediates {
+            None => llvm_toolchain::Intermediates::Discard,
+            Some(None) => llvm_toolchain::Intermediates::Generated,
+            Some(Some(path)) => llvm_toolchain::Intermediates::Directory(path),
+        };
+        let protected_paths: Vec<_> = project
+            .sources
+            .files
+            .iter()
+            .map(|f| PathBuf::from(&f.name))
+            .collect();
+        let result = llvm_toolchain::build_with_options(
+            &content,
+            target,
+            &destination,
+            emit,
+            level,
+            llvm_toolchain::BuildOptions {
+                intermediates: retention,
+                internal_ir: internal_ir.as_deref(),
+                protected_paths: &protected_paths,
+            },
+        )?;
+        let retained = result
+            .retained_directory
+            .as_ref()
+            .map(|p| format!("\nIntermediates: {}", p.display()))
+            .unwrap_or_default();
         return Ok(format!(
-            "Built {} (external stages: {} ms)\nIntermediates: {}\n{}",
+            "Built {} (external stages: {} ms){}\n{}",
             destination.display(),
             result.elapsed_ms,
-            result.directory.display(),
+            retained,
             result.memory.map(|m| m.render()).unwrap_or_else(|| {
                 "Memory: unavailable for assembly output; link ELF/HEX for a final report\n".into()
             }) + &report

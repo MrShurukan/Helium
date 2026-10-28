@@ -24,6 +24,28 @@ impl LocatableInSource for Expression {
 
 #[derive(Debug, Clone)]
 pub enum ExpressionType {
+    CapabilityCall {
+        capability: crate::values::Capability,
+        arguments: Vec<Expression>,
+        implementation: Option<crate::values::Implementation>,
+    },
+    Array {
+        elements: Vec<Expression>,
+        repeat: Option<u16>,
+    },
+    Index {
+        array: Box<Expression>,
+        index: Box<Expression>,
+    },
+    IndexAssignment {
+        array: Box<Expression>,
+        index: Box<Expression>,
+        value: Box<Expression>,
+    },
+    Borrow {
+        expression: Box<Expression>,
+        mutable: bool,
+    },
     Text {
         operation: TextOperation,
         arguments: Vec<Expression>,
@@ -75,9 +97,24 @@ impl Expression {
     /// Visit immediate operands in source evaluation order (not recursively).
     pub fn for_each_child(&self, mut visit: impl FnMut(&Expression)) {
         match &self.expression_type {
-            ExpressionType::Call { arguments, .. } | ExpressionType::Text { arguments, .. } => {
-                arguments.iter().for_each(visit)
+            ExpressionType::Array { elements, .. } => elements.iter().for_each(visit),
+            ExpressionType::Index { array, index } => {
+                visit(array);
+                visit(index);
             }
+            ExpressionType::IndexAssignment {
+                array,
+                index,
+                value,
+            } => {
+                visit(array);
+                visit(index);
+                visit(value);
+            }
+            ExpressionType::Borrow { expression, .. } => visit(expression),
+            ExpressionType::CapabilityCall { arguments, .. }
+            | ExpressionType::Call { arguments, .. }
+            | ExpressionType::Text { arguments, .. } => arguments.iter().for_each(visit),
             ExpressionType::Binary { left, right, .. } => {
                 visit(left);
                 visit(right);
@@ -101,9 +138,24 @@ impl Expression {
     /// Mutable counterpart for type finalization.
     pub fn for_each_child_mut(&mut self, mut visit: impl FnMut(&mut Expression)) {
         match &mut self.expression_type {
-            ExpressionType::Call { arguments, .. } | ExpressionType::Text { arguments, .. } => {
-                arguments.iter_mut().for_each(visit)
+            ExpressionType::Array { elements, .. } => elements.iter_mut().for_each(visit),
+            ExpressionType::Index { array, index } => {
+                visit(array);
+                visit(index);
             }
+            ExpressionType::IndexAssignment {
+                array,
+                index,
+                value,
+            } => {
+                visit(array);
+                visit(index);
+                visit(value);
+            }
+            ExpressionType::Borrow { expression, .. } => visit(expression),
+            ExpressionType::CapabilityCall { arguments, .. }
+            | ExpressionType::Call { arguments, .. }
+            | ExpressionType::Text { arguments, .. } => arguments.iter_mut().for_each(visit),
             ExpressionType::Binary { left, right, .. } => {
                 visit(left);
                 visit(right);
@@ -271,6 +323,26 @@ impl Display for Expression {
         }
 
         match &self.expression_type {
+            ExpressionType::Array { elements, repeat } => write!(
+                f,
+                "[{}{}]",
+                elements
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                repeat.map_or(String::new(), |n| format!("; {n}"))
+            ),
+            ExpressionType::Index { array, index } => write!(f, "{array}[{index}]"),
+            ExpressionType::IndexAssignment {
+                array,
+                index,
+                value,
+            } => write!(f, "{array}[{index}] = {value}"),
+            ExpressionType::Borrow {
+                expression,
+                mutable,
+            } => write!(f, "&{}{expression}", if *mutable { "mut " } else { "" }),
             ExpressionType::Call {
                 identifier,
                 arguments,
@@ -304,6 +376,11 @@ impl Display for Expression {
                 identifier,
                 expression,
             } => write!(f, "{identifier} = {expression}"),
+            ExpressionType::CapabilityCall {
+                capability,
+                arguments,
+                ..
+            } => write!(f, "{capability:?}({arguments:?})"),
             ExpressionType::Text {
                 operation,
                 arguments,

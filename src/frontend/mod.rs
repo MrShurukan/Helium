@@ -363,27 +363,113 @@ impl Parser<'_> {
     }
 
     fn type_token(&mut self, tokens: &mut TokenIterator) -> Option<Token> {
+        use static_type::{ElementType, StaticType as T};
+        let start = self.peek(tokens)?.source_location;
+        let mut reference = None;
         if matches!(
             self.peek(tokens)?.token_type,
             TT::Punctuation(PT::Ampersand)
         ) {
-            let start = self.advance(tokens)?.source_location;
-            let end = check_and_consume!(self, tokens, TT::Identifier(_), "Expected str after '&'")
-                .clone();
-            if !matches!(&end.token_type, TT::Identifier(name) if name == "str") {
-                self.errors
-                    .push(self.missing_token_error("Only &str references are supported", tokens));
-                return None;
+            tokens.advance();
+            if matches!(&self.peek(tokens)?.token_type, TT::Identifier(name) if name == "str") {
+                let end = tokens.advance()?.source_location;
+                return Some(Token {
+                    token_type: TT::Type(T::Text),
+                    source_location: utils::SourceLocation::new_from_start_end(start, end),
+                });
             }
+            let mutable =
+                matches!(&self.peek(tokens)?.token_type, TT::Identifier(name) if name == "mut");
+            if mutable {
+                tokens.advance();
+            }
+            reference = Some(mutable);
+        }
+        if matches!(
+            self.peek(tokens)?.token_type,
+            TT::Punctuation(PT::LeftBracket)
+        ) {
+            tokens.advance();
+            let element = check_and_consume!(
+                self,
+                tokens,
+                TT::Type(_),
+                "Expected scalar array element type"
+            )
+            .clone();
+            let TT::Type(t) = element.token_type else {
+                unreachable!()
+            };
+            let Some(element) = ElementType::from_type(t) else {
+                self.errors.push(self.missing_token_error(
+                    "Array elements must be integer, bool or PinState",
+                    tokens,
+                ));
+                return None;
+            };
+            if let Some(mutable) = reference {
+                if matches!(
+                    self.peek(tokens)?.token_type,
+                    TT::Punctuation(PT::RightBracket)
+                ) {
+                    let end = self.peek(tokens)?.source_location;
+                    tokens.advance();
+                    return Some(Token {
+                        token_type: TT::Type(T::SliceRef(element, mutable)),
+                        source_location: utils::SourceLocation::new_from_start_end(start, end),
+                    });
+                }
+            }
+            check_and_consume!(
+                self,
+                tokens,
+                TT::Punctuation(PT::Semicolon),
+                "Expected ';' before array length"
+            );
+            let count = self.array_count(tokens)?;
+            let end = check_and_consume!(
+                self,
+                tokens,
+                TT::Punctuation(PT::RightBracket),
+                "Expected ']' after array type"
+            )
+            .source_location;
+            let ty = reference.map_or(T::FixedArray(element, count), |m| {
+                T::ArrayRef(element, count, m)
+            });
             return Some(Token {
-                token_type: TT::Type(&static_type::StaticType::Text),
-                source_location: crate::frontend::utils::SourceLocation::new_from_start_end(
-                    start,
-                    end.source_location,
-                ),
+                token_type: TT::Type(ty),
+                source_location: utils::SourceLocation::new_from_start_end(start, end),
             });
         }
+        if reference.is_some() {
+            self.errors.push(
+                self.missing_token_error("Expected fixed array type after reference", tokens),
+            );
+            return None;
+        }
         Some(check_and_consume!(self, tokens, TT::Type(_), "Expected type").clone())
+    }
+
+    fn array_count(&mut self, tokens: &mut TokenIterator) -> Option<u16> {
+        let token = check_and_consume!(
+            self,
+            tokens,
+            TT::Literal(LT::Integer(_)),
+            "Expected constant array length"
+        )
+        .clone();
+        let TT::Literal(LT::Integer(n)) = token.token_type else {
+            unreachable!()
+        };
+        if n == 0 || n > 1024 {
+            self.errors.push(self.get_error_marked_line(
+                ParserErrorType::IncorrectToken("Array length must be 1..1024".into()),
+                token,
+            ));
+            return None;
+        }
+        Some(n as u16)
     }
 
     fn function_declaration(&mut self, tokens: &mut TokenIterator) -> Option<Statement> {
@@ -440,7 +526,7 @@ impl Parser<'_> {
                     let TT::Type(kind_type) = kind.token_type else {
                         unreachable!()
                     };
-                    (*kind_type, None, kind.source_location)
+                    (kind_type, None, kind.source_location)
                 };
                 parameters.push(Parameter {
                     device_type,
@@ -471,7 +557,7 @@ impl Parser<'_> {
             let TT::Type(kind) = kind.token_type else {
                 unreachable!()
             };
-            Some(*kind)
+            Some(kind)
         } else {
             None
         };
@@ -947,6 +1033,23 @@ impl Parser<'_> {
 
         let equals = self.peek(tokens)?;
         if let TT::Punctuation(PT::Equal) = equals.token_type {
+            if let ExpressionType::Index { array, index } = &l_value.expression_type {
+                tokens.advance();
+                let value = self.assignment(tokens)?;
+                return Some(Expression {
+                    symbol: None,
+                    source_location: utils::SourceLocation::new_from_start_end(
+                        l_value.source_location,
+                        value.source_location,
+                    ),
+                    static_type: static_type::StaticType::Unknown,
+                    expression_type: ExpressionType::IndexAssignment {
+                        array: array.clone(),
+                        index: index.clone(),
+                        value: Box::new(value),
+                    },
+                });
+            }
             if let ExpressionType::Identifier(_) = &l_value.expression_type {
                 tokens.advance();
                 // Assignments are right associative
@@ -1058,6 +1161,29 @@ impl Parser<'_> {
 
     // ! - (as unary operator)
     fn unary(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
+        if matches!(
+            self.peek(tokens)?.token_type,
+            TT::Punctuation(PT::Ampersand)
+        ) {
+            let start = tokens.advance()?.source_location;
+            let mutable = matches!(&self.peek(tokens)?.token_type,TT::Identifier(n) if n == "mut");
+            if mutable {
+                tokens.advance();
+            }
+            let expression = self.unary(tokens)?;
+            return Some(Expression {
+                symbol: None,
+                source_location: utils::SourceLocation::new_from_start_end(
+                    start,
+                    expression.source_location,
+                ),
+                static_type: static_type::StaticType::Unknown,
+                expression_type: ExpressionType::Borrow {
+                    expression: Box::new(expression),
+                    mutable,
+                },
+            });
+        }
         let token = self.peek(tokens)?;
         if let TT::Punctuation(PT::Bang | PT::Minus) = &token.token_type {
             let token = token.clone();
@@ -1072,6 +1198,32 @@ impl Parser<'_> {
 
     fn call(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
         let mut callee = self.primary(tokens)?;
+        if matches!(
+            self.peek(tokens)?.token_type,
+            TT::Punctuation(PT::LeftBracket)
+        ) {
+            tokens.advance();
+            let index = self.expression(tokens)?;
+            let end = check_and_consume!(
+                self,
+                tokens,
+                TT::Punctuation(PT::RightBracket),
+                "Expected ']' after index"
+            )
+            .source_location;
+            return Some(Expression {
+                symbol: None,
+                source_location: utils::SourceLocation::new_from_start_end(
+                    callee.source_location,
+                    end,
+                ),
+                static_type: static_type::StaticType::Unknown,
+                expression_type: ExpressionType::Index {
+                    array: Box::new(callee),
+                    index: Box::new(index),
+                },
+            });
+        }
         while matches!(
             tokens.lookahead(0).map(|t| &t.token_type),
             Some(TT::Punctuation(PT::Colon))
@@ -1168,6 +1320,45 @@ impl Parser<'_> {
         let token = self.peek(tokens)?.clone();
 
         let result = match token.token_type {
+            TT::Punctuation(PT::LeftBracket) => {
+                tokens.advance();
+                let mut elements = vec![self.expression(tokens)?];
+                let mut repeat = None;
+                if matches!(
+                    self.peek(tokens)?.token_type,
+                    TT::Punctuation(PT::Semicolon)
+                ) {
+                    tokens.advance();
+                    repeat = Some(self.array_count(tokens)?);
+                } else {
+                    while matches!(self.peek(tokens)?.token_type, TT::Punctuation(PT::Comma)) {
+                        tokens.advance();
+                        if matches!(
+                            self.peek(tokens)?.token_type,
+                            TT::Punctuation(PT::RightBracket)
+                        ) {
+                            break;
+                        }
+                        elements.push(self.expression(tokens)?);
+                    }
+                }
+                let end = check_and_consume!(
+                    self,
+                    tokens,
+                    TT::Punctuation(PT::RightBracket),
+                    "Expected ']' after array literal"
+                )
+                .source_location;
+                return Some(Expression {
+                    symbol: None,
+                    source_location: utils::SourceLocation::new_from_start_end(
+                        token.source_location,
+                        end,
+                    ),
+                    static_type: static_type::StaticType::Unknown,
+                    expression_type: ExpressionType::Array { elements, repeat },
+                });
+            }
             TT::Identifier(_) => Some(Expression::new_identifier(&token)),
             TT::Literal(_) => Some(Expression::new_literal(&token)),
             TT::Constant(CT::Boolean(constant)) => match constant {

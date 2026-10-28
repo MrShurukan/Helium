@@ -89,6 +89,7 @@ impl SymbolTable {
 /// identities together; consumers cannot mutate one independently of the other.
 #[derive(Debug)]
 pub struct AnalyzedProgram {
+    pub(crate) values: crate::values::Contracts,
     pub sources: std::sync::Arc<crate::diagnostic::source::SourceSet>,
     pub(crate) template_checks: Vec<Statement>,
     pub(crate) warnings: Vec<crate::diagnostic::Diagnostic>,
@@ -99,6 +100,9 @@ pub struct AnalyzedProgram {
 }
 
 impl AnalyzedProgram {
+    pub fn value_contracts(&self) -> &crate::values::Contracts {
+        &self.values
+    }
     pub fn warnings(&self) -> &[crate::diagnostic::Diagnostic] {
         &self.warnings
     }

@@ -37,10 +37,109 @@ impl Optimization {
 
 #[derive(Debug)]
 pub struct Build {
+    /// Retained artifact directory; None when the temporary workspace was removed.
+    pub retained_directory: Option<PathBuf>,
+    /// Build workspace (may already be removed for Intermediates::Discard).
     pub directory: PathBuf,
     pub elapsed_ms: u128,
     pub sections: String,
     pub memory: Option<super::memory::MemoryReport>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum Intermediates<'a> {
+    #[default]
+    Discard,
+    Generated,
+    Directory(&'a Path),
+}
+
+#[derive(Default)]
+pub struct BuildOptions<'a> {
+    pub intermediates: Intermediates<'a>,
+    pub internal_ir: Option<&'a str>,
+    /// Loaded sources must never be replaced by named artifacts.
+    pub protected_paths: &'a [PathBuf],
+}
+
+const ARTIFACTS: &[&str] = &[
+    "module.ir",
+    "module.ll",
+    "optimized.ll",
+    "program.o",
+    "program.s",
+    "program.elf",
+    "program.hex",
+    "program.map",
+    "memory.txt",
+    "timing.txt",
+    "sections.txt",
+    "symbols.txt",
+    "disassembly.txt",
+];
+
+struct Workspace {
+    path: PathBuf,
+    retain: bool,
+}
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        // Only our exclusively created directory, never a user-supplied directory.
+        if !self.retain {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+fn artifact_directory(
+    path: &Path,
+    destination: &Path,
+    emit: &str,
+    protected: &[PathBuf],
+) -> Result<(), String> {
+    fs::create_dir_all(path).map_err(|e| format!("Cannot create intermediates directory: {e}"))?;
+    let root = path.canonicalize().map_err(|e| e.to_string())?;
+    let output_parent = destination
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let output = output_parent
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .join(destination.file_name().ok_or("Missing output filename")?);
+    for name in ARTIFACTS {
+        let file = root.join(name);
+        if (file == output
+            || (cfg!(windows)
+                && file
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&output.to_string_lossy()))
+            || file
+                .canonicalize()
+                .ok()
+                .zip(destination.canonicalize().ok())
+                .is_some_and(|(a, b)| a == b))
+            && *name != format!("program.{emit}")
+        {
+            return Err("Output must not overlap a named intermediate artifact".into());
+        }
+        if protected
+            .iter()
+            .filter_map(|p| p.canonicalize().ok())
+            .any(|p| p == file || Some(p) == file.canonicalize().ok())
+        {
+            return Err("Intermediates must not overwrite a source file".into());
+        }
+        if let Ok(metadata) = fs::symlink_metadata(&file) {
+            if !metadata.file_type().is_file() {
+                return Err(format!(
+                    "Intermediate path must be a regular file: {}",
+                    file.display()
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Overrides are directories containing the executable and its DLL dependencies.
@@ -95,6 +194,28 @@ pub fn build(
     emit: &str,
     optimization: Optimization,
 ) -> Result<Build, String> {
+    // Retain the established library API used by simulator/inspection clients.
+    build_with_options(
+        ir,
+        target,
+        destination,
+        emit,
+        optimization,
+        BuildOptions {
+            intermediates: Intermediates::Generated,
+            ..Default::default()
+        },
+    )
+}
+
+pub fn build_with_options(
+    ir: &str,
+    target: &Microcontroller,
+    destination: &Path,
+    emit: &str,
+    optimization: Optimization,
+    options: BuildOptions<'_>,
+) -> Result<Build, String> {
     if !matches!(emit, "asm" | "elf" | "hex") {
         return Err(format!(
             "LLVM machine output must be asm, elf or hex, got {emit}"
@@ -106,6 +227,9 @@ pub fn build(
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    if let Intermediates::Directory(path) = options.intermediates {
+        artifact_directory(path, destination, emit, options.protected_paths)?;
+    }
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
@@ -121,6 +245,13 @@ pub fn build(
             .map_err(|e| e.to_string())?
             .join(directory)
     };
+    let mut workspace = Workspace {
+        path: directory.clone(),
+        retain: matches!(options.intermediates, Intermediates::Generated),
+    };
+    if let Some(ir) = options.internal_ir {
+        fs::write(directory.join("module.ir"), ir).map_err(|e| e.to_string())?;
+    }
     let raw = directory.join("module.ll");
     let optimized = directory.join("optimized.ll");
     let object = directory.join("program.o");
@@ -237,8 +368,42 @@ pub fn build(
     fs::copy(artifact, destination)
         .map_err(|e| format!("Cannot write {}: {e}", destination.display()))?;
 
+    let retained_directory = match options.intermediates {
+        Intermediates::Generated => Some(directory.clone()),
+        Intermediates::Discard => None,
+        Intermediates::Directory(path) => {
+            // Publish only after successful external stages. Do not recursively
+            // clear a chosen folder: unrelated files belong to the user.
+            artifact_directory(path, destination, emit, options.protected_paths)?;
+            for name in ARTIFACTS {
+                let source = directory.join(name);
+                let output = path.join(name);
+                if source.is_file() {
+                    // Remove the directory entry first so an existing hard link
+                    // cannot cause another file's contents to be overwritten.
+                    if output.exists() {
+                        fs::remove_file(&output).map_err(|e| e.to_string())?;
+                    }
+                    fs::copy(source, output).map_err(|e| e.to_string())?;
+                } else if output.exists() {
+                    fs::remove_file(output).map_err(|e| e.to_string())?;
+                }
+            }
+            Some(if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                env::current_dir().map_err(|e| e.to_string())?.join(path)
+            })
+        }
+    };
+    if !workspace.retain {
+        fs::remove_dir_all(&workspace.path)
+            .map_err(|e| format!("Cannot remove temporary build workspace: {e}"))?;
+        workspace.retain = true;
+    }
     Ok(Build {
-        directory,
+        directory: retained_directory.clone().unwrap_or(directory),
+        retained_directory,
         elapsed_ms: started.elapsed().as_millis(),
         sections,
         memory,

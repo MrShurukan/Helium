@@ -13,6 +13,7 @@ mod support;
 pub use semantic::AnalyzedProgram;
 pub mod timer;
 pub mod uart;
+pub mod values;
 
 use backend::microcontroller::{self, Microcontroller};
 use diagnostic::Diagnostic;
@@ -155,12 +156,30 @@ pub fn compile_project_llvm(
     target: &'static Microcontroller,
     options: ir::Options,
 ) -> Result<Compilation, Vec<Diagnostic>> {
+    compile_project_artifacts(project, target, options).map(|artifacts| artifacts.llvm)
+}
+
+/// Textual artifacts from one analysis and lowering, with machine-subset validation.
+pub struct ProjectArtifacts {
+    pub llvm: Compilation,
+    /// Same pre-machine-preparation view as build --emit ir.
+    pub ir: String,
+}
+
+pub fn compile_project_artifacts(
+    project: &mut modules::Project,
+    target: &'static Microcontroller,
+    options: ir::Options,
+) -> Result<ProjectArtifacts, Vec<Diagnostic>> {
     let program = project.analyze()?;
     let module = project_ir(&program, target, options, true)?;
     backend::llvm::emit(&module, false)
-        .map(|output| Compilation {
-            output,
-            warnings: module.warnings.clone(),
+        .map(|output| ProjectArtifacts {
+            ir: module.dump(),
+            llvm: Compilation {
+                output,
+                warnings: module.warnings.clone(),
+            },
         })
         .map_err(|detail| {
             vec![Diagnostic::new(

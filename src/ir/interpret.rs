@@ -11,6 +11,7 @@ pub enum Event {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
+    Bounds,
     StepLimit,
     CallDepthLimit,
     InvalidInvocation,
@@ -35,21 +36,70 @@ pub struct Interpreter<'a> {
     /// Physical level used when the scripted readings are exhausted; defaults to LOW.
     pub levels: HashMap<PinId, bool>,
     texts: Vec<(String, TextSpace)>,
+    arrays: Vec<Vec<Constant>>,
     remaining: usize,
 }
 
 impl<'a> Interpreter<'a> {
+    fn array_value(&mut self, ty: Type, value: Vec<Constant>) -> Constant {
+        let id = self.arrays.len();
+        self.arrays.push(value);
+        Constant::new(ty, id as u64)
+    }
+    fn snapshot(&mut self, value: Constant) -> Result<Constant, Error> {
+        if matches!(value.ty, Type::Array(..)) {
+            let a = self
+                .arrays
+                .get(value.bits as usize)
+                .ok_or(Error::InvalidInvocation)?
+                .clone();
+            Ok(self.array_value(value.ty, a))
+        } else {
+            Ok(value)
+        }
+    }
+    fn store_value(&mut self, old: Option<Constant>, value: Constant) -> Result<Constant, Error> {
+        if matches!(value.ty, Type::Array(..)) {
+            let data = self
+                .arrays
+                .get(value.bits as usize)
+                .ok_or(Error::InvalidInvocation)?
+                .clone();
+            if let Some(old) = old {
+                *self
+                    .arrays
+                    .get_mut(old.bits as usize)
+                    .ok_or(Error::InvalidInvocation)? = data;
+                Ok(old)
+            } else {
+                Ok(self.array_value(value.ty, data))
+            }
+        } else {
+            Ok(value)
+        }
+    }
     pub fn new(module: &'a Module, step_limit: usize) -> Result<Self, verify::Error> {
         verify::verify(module)?;
 
+        let mut arrays = vec![];
+        let globals = module
+            .globals
+            .iter()
+            .map(|g| {
+                if let Type::Array(e, n) = g.ty {
+                    let id = arrays.len();
+                    arrays.push(vec![Constant::new(Type::element(e), 0); usize::from(n)]);
+                    Constant::new(g.ty, id as u64)
+                } else {
+                    Constant::new(g.ty, 0)
+                }
+            })
+            .collect();
         Ok(Self {
+            arrays,
             module,
             interrupts_enabled: false,
-            globals: module
-                .globals
-                .iter()
-                .map(|g| Constant::new(g.ty, 0))
-                .collect(),
+            globals,
             events: vec![],
             inputs: HashMap::new(),
             levels: HashMap::new(),
@@ -112,7 +162,7 @@ impl<'a> Interpreter<'a> {
             .zip(args)
             .map(|((id, _), value)| (*id, *value))
             .collect();
-        let mut locals = vec![None; function.locals.len()];
+        let mut locals: Vec<Option<Constant>> = vec![None; function.locals.len()];
         let mut block_id = function.entry;
 
         loop {
@@ -130,6 +180,49 @@ impl<'a> Interpreter<'a> {
                         .ok_or_else(|| Error::InvalidIr("unavailable value".into()))
                 };
                 let result = match &instruction.op {
+                    Op::ArrayLiteral(v) => {
+                        let a = v.iter().map(get).collect::<Result<Vec<_>, _>>()?;
+                        Some(self.array_value(instruction.result.unwrap().1, a))
+                    }
+                    Op::ArrayRepeat(v, n) => Some(self.array_value(
+                        instruction.result.unwrap().1,
+                        vec![get(v)?; usize::from(*n)],
+                    )),
+                    Op::AddressLocal(l, _) => {
+                        let v = locals[l.index]
+                            .ok_or_else(|| Error::InvalidIr("uninitialized array".into()))?;
+                        Some(Constant::new(instruction.result.unwrap().1, v.bits))
+                    }
+                    Op::AddressGlobal(g, _) => Some(Constant::new(
+                        instruction.result.unwrap().1,
+                        self.globals[g.0].bits,
+                    )),
+                    Op::SliceLen(v) => Some(Constant::new(
+                        Type::U16,
+                        self.arrays
+                            .get(get(v)?.bits as usize)
+                            .ok_or(Error::InvalidInvocation)?
+                            .len() as u64,
+                    )),
+                    Op::Slice(v, _) | Op::Reborrow(v, _) => {
+                        Some(Constant::new(instruction.result.unwrap().1, get(v)?.bits))
+                    }
+                    Op::ArrayRead(a, i) => Some(
+                        *self
+                            .arrays
+                            .get(get(a)?.bits as usize)
+                            .and_then(|a| a.get(get(i).ok()?.bits as usize))
+                            .ok_or(Error::Bounds)?,
+                    ),
+                    Op::ArrayWrite(a, i, v) => {
+                        let (a, i, v) = (get(a)?.bits as usize, get(i)?.bits as usize, get(v)?);
+                        *self
+                            .arrays
+                            .get_mut(a)
+                            .and_then(|a| a.get_mut(i))
+                            .ok_or(Error::Bounds)? = v;
+                        None
+                    }
                     Op::InterruptDisable => {
                         self.interrupts_enabled = false;
                         None
@@ -219,16 +312,20 @@ impl<'a> Interpreter<'a> {
                         ))
                     }
                     Op::LoadLocal(local) => Some(
-                        locals[local.index]
-                            .ok_or_else(|| Error::InvalidIr("uninitialized local".into()))?,
+                        self.snapshot(
+                            locals[local.index]
+                                .ok_or_else(|| Error::InvalidIr("uninitialized local".into()))?,
+                        )?,
                     ),
                     Op::StoreLocal(local, value) => {
-                        locals[local.index] = Some(get(value)?);
+                        locals[local.index] =
+                            Some(self.store_value(locals[local.index], get(value)?)?);
                         None
                     }
-                    Op::LoadGlobal(global) => Some(self.globals[global.0]),
+                    Op::LoadGlobal(global) => Some(self.snapshot(self.globals[global.0])?),
                     Op::StoreGlobal(global, value) => {
-                        self.globals[global.0] = get(value)?;
+                        self.globals[global.0] =
+                            self.store_value(Some(self.globals[global.0]), get(value)?)?;
                         None
                     }
                     Op::ReadPin(pin) => {

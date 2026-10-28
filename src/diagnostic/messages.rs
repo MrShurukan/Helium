@@ -25,6 +25,9 @@ impl crate::timer::TimerError {
 impl DiagnosticKind {
     pub fn message(&self) -> String {
         match self {
+            Self::Array { detail } => detail.clone(),
+            Self::MovedValue { name } => format!("Value '{name}' may already have been moved; assign a new value before using it again"),
+            Self::GlobalMove { name } => format!("Cannot move global owner '{name}'; access global storage through a temporary borrow"),
             Self::Device { detail } => detail.clone(),
             Self::Module { detail } => detail.clone(),
             Self::IrqRequirement { name, reason } => format!("Call to '{name}' requires enabled interrupts: {}", reason.message()),
@@ -147,6 +150,10 @@ impl DiagnosticKind {
 impl super::LabelKind {
     pub fn message(&self) -> String {
         match self {
+            Self::ArrayBorrow => "array is borrowed here until the call or access completes".into(),
+            Self::ValueMoved => {
+                "ownership was transferred here (possibly on a previous loop iteration)".into()
+            }
             Self::OpeningDelimiter => "block opened here".into(),
             Self::PreviousDeclaration => "first declared here".into(),
             Self::ExpectedType(ty) => format!("expected type {ty} comes from here"),

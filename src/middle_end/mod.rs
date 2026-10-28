@@ -1,4 +1,6 @@
 mod functions;
+mod loans;
+mod ownership;
 pub mod shared;
 
 use crate::diagnostic::{Diagnostic, DiagnosticKind, LabelKind};
@@ -98,7 +100,25 @@ impl Analyzer {
         if !self.errors.is_empty() {
             return Err(self.errors);
         }
+        let values = crate::values::Contracts::collect(&self.symbols);
+        let mut errors = vec![];
+        for statement in &mut statements {
+            statement.for_each_expression_mut(&mut |e| {
+                crate::values::resolve_calls(e, &values, &mut errors)
+            });
+        }
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        let errors = ownership::check(&statements, &self.symbols, &values);
+        if !errors.is_empty() {
+            return Err(errors);
+        }
         let shared = shared::Program::collect(&statements, &self.symbols);
+        let errors = loans::check(&statements, &self.symbols, &shared);
+        if !errors.is_empty() {
+            return Err(errors);
+        }
         let errors = shared.check(&self.symbols);
         if !errors.is_empty() {
             return Err(errors);
@@ -123,6 +143,7 @@ impl Analyzer {
             return Err(diagnostics);
         }
         Ok(AnalyzedProgram {
+            values,
             sources: Default::default(),
             template_checks: vec![],
             warnings: diagnostics,
@@ -150,7 +171,7 @@ impl Analyzer {
             stamp(expr, target);
             return;
         }
-        if literal_type(expr.static_type) {
+        if literal_type(expr.static_type) || matches!(expr.static_type, T::FixedArray(..)) {
             self.coerce(expr, target);
         }
         expr.for_each_child_mut(|child| self.finalize_expression(child));
@@ -355,6 +376,9 @@ impl Analyzer {
                     .unwrap_or(T::Unknown);
 
                 let target = static_type.unwrap_or_else(|| default_type(inferred));
+                if matches!(target, T::ArrayRef(..) | T::SliceRef(..)) {
+                    self.error(DiagnosticKind::Array { detail: "Array references are only allowed as temporary call arguments and parameters".into() }, *name_location);
+                }
 
                 if let Some(expr) = initializer {
                     self.coerce_with_origin(expr, target, type_location.unwrap_or(*name_location));
@@ -489,6 +513,96 @@ impl Analyzer {
         };
         let error_start = self.errors.len();
         let ty = match &mut expr.expression_type {
+            E::Array { elements, repeat } => {
+                let mut element = T::Unknown;
+                for e in elements.iter_mut() {
+                    let t = self.expression(e);
+                    if element == T::Unknown
+                        || literal_type(element)
+                        || (numeric(t) && !literal_type(t) && widening(element, t))
+                    {
+                        element = t;
+                    }
+                }
+                let count = repeat.map_or(elements.len(), usize::from);
+                if count == 0 || count > 1024 {
+                    self.error(
+                        DiagnosticKind::Array {
+                            detail: "Array length must be 1..1024".into(),
+                        },
+                        span,
+                    );
+                }
+                if let Some(element) = crate::frontend::static_type::ElementType::from_type(element)
+                {
+                    // Defer element coercions until the enclosing declaration,
+                    // argument or return supplies its contextual array type.
+                    T::FixedArray(element, count as u16)
+                } else {
+                    self.error(
+                        DiagnosticKind::Array {
+                            detail: "Array elements must be scalar values".into(),
+                        },
+                        span,
+                    );
+                    T::Unknown
+                }
+            }
+            E::Index { array, index } => self.array_index(array, index, false),
+            E::IndexAssignment {
+                array,
+                index,
+                value,
+            } => {
+                let t = self.array_index(array, index, true);
+                self.expression(value);
+                self.coerce(value, t);
+                t
+            }
+            E::Borrow {
+                expression,
+                mutable,
+            } => {
+                let t = self.expression(expression);
+                if !matches!(expression.expression_type, E::Identifier(_)) {
+                    self.error(
+                        DiagnosticKind::Array {
+                            detail: "Borrow a named array or array parameter".into(),
+                        },
+                        span,
+                    );
+                }
+                match t {
+                    T::SliceRef(e, m) if !*mutable || m => T::SliceRef(e, *mutable),
+                    T::FixedArray(e, n) => T::ArrayRef(e, n, *mutable),
+                    T::ArrayRef(e, n, m) if !*mutable || m => T::ArrayRef(e, n, *mutable),
+                    _ => {
+                        self.error(
+                            DiagnosticKind::Array {
+                                detail: "Cannot borrow this value with the requested access".into(),
+                            },
+                            span,
+                        );
+                        T::Unknown
+                    }
+                }
+            }
+            E::CapabilityCall { arguments, .. } => {
+                for a in arguments.iter_mut() {
+                    self.expression(a);
+                }
+                if arguments.len() != 1 {
+                    self.error(
+                        DiagnosticKind::ArgumentCount {
+                            name: "clone".into(),
+                            expected: 0,
+                            actual: arguments.len().saturating_sub(1),
+                        },
+                        span,
+                    );
+                }
+                arguments.first().map_or(T::Unknown, |a| a.static_type)
+            }
             E::Text {
                 operation,
                 arguments,
@@ -514,7 +628,12 @@ impl Analyzer {
                 for (i, a) in arguments.iter_mut().enumerate() {
                     self.expression(a);
                     if let Some(t) = expected.get(i) {
-                        self.coerce_with_origin(a, *t, span);
+                        if !(i == 0
+                            && *operation == TextOperation::Len
+                            && a.static_type.sequence().is_some())
+                        {
+                            self.coerce_with_origin(a, *t, span);
+                        }
                     }
                 }
                 if *operation == TextOperation::Len {
@@ -679,6 +798,17 @@ impl Analyzer {
                 expression,
             } => {
                 let value = self.expression(expression);
+                if self
+                    .lookup(identifier)
+                    .is_some_and(|t| matches!(t, T::ArrayRef(..) | T::SliceRef(..)))
+                {
+                    self.error(
+                        DiagnosticKind::Array {
+                            detail: "Array reference parameters cannot be rebound".into(),
+                        },
+                        span,
+                    );
+                }
 
                 match self.lookup(identifier) {
                     Some(T::Pin) if matches!(value, T::PinState | T::PinMode) => value,
@@ -816,6 +946,46 @@ impl Analyzer {
     fn coerce(&mut self, expr: &mut Expression, target: T) {
         let from = expr.static_type;
 
+        if let (T::ArrayRef(e, _, m) | T::SliceRef(e, m), T::SliceRef(f, target_mut)) =
+            (from, target)
+        {
+            if e == f && (!target_mut || m) {
+                expr.static_type = target;
+                return;
+            }
+        }
+        if let (T::ArrayRef(e, n, true), T::ArrayRef(f, m, false)) = (from, target) {
+            if e == f && n == m {
+                expr.static_type = target;
+                return;
+            }
+        }
+        if let (T::FixedArray(_, n), T::FixedArray(element, m)) = (from, target) {
+            if n == m {
+                match &mut expr.expression_type {
+                    E::Array { elements, .. } => {
+                        for e in elements {
+                            self.coerce(e, element.ty());
+                        }
+                        expr.static_type = target;
+                        return;
+                    }
+                    E::Grouping { expression } => {
+                        self.coerce(expression, target);
+                        expr.static_type = target;
+                        return;
+                    }
+                    E::Ternary { second, third, .. } => {
+                        self.coerce(second, target);
+                        self.coerce(third, target);
+                        expr.static_type = target;
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         if from == T::Unknown || target == T::Unknown {
             return;
         }
@@ -906,6 +1076,49 @@ impl Analyzer {
 
         expr.static_type = target;
     }
+
+    fn array_index(&mut self, array: &mut Expression, index: &mut Expression, write: bool) -> T {
+        let ty = self.expression(array);
+        self.expression(index);
+        self.coerce(index, T::Integer(I::Unsigned(UI::Uns16)));
+        if !matches!(array.expression_type, E::Identifier(_)) {
+            self.error(
+                DiagnosticKind::Array {
+                    detail: "Indexing requires a named array or array parameter".into(),
+                },
+                array.source_location,
+            );
+        }
+        if write && matches!(ty, T::ArrayRef(_, _, false) | T::SliceRef(_, false)) {
+            self.error(
+                DiagnosticKind::Array {
+                    detail: "Cannot write through a shared array reference".into(),
+                },
+                array.source_location,
+            );
+        }
+        if let Some((e, n)) = ty.sequence() {
+            if let Some(n) =
+                n.filter(|n| constant_integer(index).is_some_and(|i| i < 0 || i >= i128::from(*n)))
+            {
+                self.error(
+                    DiagnosticKind::Array {
+                        detail: format!("Array index is outside 0..{n}"),
+                    },
+                    index.source_location,
+                );
+            }
+            e.ty()
+        } else {
+            self.error(
+                DiagnosticKind::Array {
+                    detail: "Indexing requires an array".into(),
+                },
+                array.source_location,
+            );
+            T::Unknown
+        }
+    }
 }
 
 fn numeric(ty: T) -> bool {
@@ -914,10 +1127,15 @@ fn numeric(ty: T) -> bool {
 
 fn literal_type(ty: T) -> bool {
     matches!(ty, T::Integer(I::Literal) | T::Float(F::Literal))
+        || matches!(ty,T::FixedArray(e,_) if literal_type(e.ty()))
 }
 
 fn default_type(ty: T) -> T {
     match ty {
+        T::FixedArray(e, n) => T::FixedArray(
+            crate::frontend::static_type::ElementType::from_type(default_type(e.ty())).unwrap(),
+            n,
+        ),
         T::Integer(I::Literal) => T::Integer(I::Signed(SI::Int32)),
         T::Float(F::Literal) => T::Float(F::Float32),
         _ => ty,
@@ -937,6 +1155,33 @@ fn integer_literal(expr: &Expression) -> Option<i128> {
         } => integer_literal(right)?.checked_neg(),
         _ => None,
     }
+}
+
+// Pure arithmetic constant indices follow the same wrapping width as runtime.
+fn constant_integer(expr: &Expression) -> Option<i128> {
+    if let Some(v) = integer_literal(expr) {
+        return Some(v);
+    }
+    let raw = match &expr.expression_type {
+        E::Grouping { expression } => return constant_integer(expression),
+        E::Binary {
+            left,
+            right,
+            operator: Token::Punctuation(op),
+            ..
+        } => {
+            let (a, b) = (constant_integer(left)?, constant_integer(right)?);
+            match op {
+                P::Plus => a.checked_add(b)?,
+                P::Minus => a.checked_sub(b)?,
+                P::Star => a.checked_mul(b)?,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    let (min, max) = integer_bounds(expr.static_type)?;
+    Some((raw - min).rem_euclid(max - min + 1) + min)
 }
 
 fn integer_bounds(ty: T) -> Option<(i128, i128)> {

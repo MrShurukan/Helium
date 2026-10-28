@@ -77,9 +77,22 @@ impl Analyzer {
                 .map(|p| (p.static_type, p.type_location))
                 .chain(return_type.map(|t| (t, return_location.unwrap())))
             {
-                if !matches!(ty, T::Integer(_) | T::Boolean | T::PinState | T::Text) {
+                if !matches!(
+                    ty,
+                    T::Integer(_)
+                        | T::Boolean
+                        | T::PinState
+                        | T::Text
+                        | T::FixedArray(..)
+                        | T::ArrayRef(..)
+                        | T::SliceRef(..)
+                ) {
                     self.error(DiagnosticKind::FunctionSignatureType { ty }, span);
                 }
+            }
+
+            if matches!(return_type, Some(T::ArrayRef(..) | T::SliceRef(..))) {
+                self.error(DiagnosticKind::Array { detail: "Returning array references is not supported; borrows must end with the call".into() }, return_location.unwrap());
             }
 
             if let Some(previous) = self.functions.get(identifier) {

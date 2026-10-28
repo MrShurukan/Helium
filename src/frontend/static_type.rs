@@ -2,6 +2,45 @@ use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum ElementType {
+    Integer(IntegerType),
+    Boolean,
+    PinState,
+}
+impl ElementType {
+    pub fn from_type(ty: StaticType) -> Option<Self> {
+        match ty {
+            StaticType::Integer(i) => Some(Self::Integer(i)),
+            StaticType::Boolean => Some(Self::Boolean),
+            StaticType::PinState => Some(Self::PinState),
+            _ => None,
+        }
+    }
+    pub fn ty(self) -> StaticType {
+        match self {
+            Self::Integer(i) => StaticType::Integer(i),
+            Self::Boolean => StaticType::Boolean,
+            Self::PinState => StaticType::PinState,
+        }
+    }
+}
+impl StaticType {
+    pub fn sequence(self) -> Option<(ElementType, Option<u16>)> {
+        if let Self::SliceRef(e, _) = self {
+            Some((e, None))
+        } else {
+            self.array().map(|(e, n)| (e, Some(n)))
+        }
+    }
+    pub fn array(self) -> Option<(ElementType, u16)> {
+        match self {
+            Self::FixedArray(e, n) | Self::ArrayRef(e, n, _) => Some((e, n)),
+            _ => None,
+        }
+    }
+}
+
 lazy_static! {
     pub static ref TYPES: HashMap<&'static str, StaticType> = {
         let mut m = HashMap::new();
@@ -65,6 +104,9 @@ pub enum StaticType {
 
     Boolean,
     Text,
+    FixedArray(ElementType, u16),
+    ArrayRef(ElementType, u16, bool),
+    SliceRef(ElementType, bool),
     String,
 
     Array(&'static StaticType),
@@ -124,6 +166,16 @@ pub enum FloatType {
 impl Display for StaticType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::FixedArray(element, count) => write!(f, "[{}; {count}]", element.ty()),
+            Self::SliceRef(e, m) => {
+                write!(f, "&{}[{}]", if *m { "mut " } else { "" }, e.ty())
+            }
+            Self::ArrayRef(element, count, mutable) => write!(
+                f,
+                "&{}[{}; {count}]",
+                if *mutable { "mut " } else { "" },
+                element.ty()
+            ),
             StaticType::Integer(IntegerType::Signed(SignedIntegerType::Int8)) => write!(f, "i8"),
             StaticType::Integer(IntegerType::Signed(SignedIntegerType::Int16)) => write!(f, "i16"),
             StaticType::Integer(IntegerType::Signed(SignedIntegerType::Int32)) => write!(f, "i32"),

@@ -71,11 +71,25 @@ on `--emit ir` only. `--opt none|speed|size` controls machine optimization throu
 AST/Helium IR inspection can accept features outside the current machine subset.
 
 Outputs default to `build/` beside the source; `-o path/to/output.hex` selects another path.
-Machine builds retain intermediate artifacts in a unique directory reported by the command.
+Machine builds discard temporary artifacts by default. Add `--intermediates` to retain
+them in a unique directory beside the output, or `--intermediates build/inspect` to
+update the same directory on each successful build (relative paths use the current directory):
+
+```text
+helium build examples/uart-array.he --mcu atmega328p --cpu-hz 16000000 --opt size --intermediates build/inspect
+```
+
+That folder contains `module.ir` (Helium IR, matching `--emit ir`), `module.ll`
+(LLVM input), `optimized.ll` (LLVM after the selected optimization) and `program.hex`,
+plus assembly, ELF and reports. No repeated builds or output-extension changes are needed.
+The flag also works with explicit `--emit hex|elf|asm`; it does not apply to textual emits
+or `check`. `--intermediates=path` is also accepted. Known compiler artifact names are
+replaced, stale compiler artifacts are removed, and unrelated files are preserved.
+Do not run concurrent builds into the same fixed artifact directory.
 Failed external stages do not replace an existing destination firmware.
 ELF/HEX builds report Flash occupation, static SRAM reservation and remaining SRAM
 for the stack using the linked ELF and target capacities. Maximum stack and ISR
-latency remain explicitly unknown. The artifact directory retains `memory.txt` and
+latency remain explicitly unknown. With `--intermediates`, the artifact directory retains `memory.txt` and
 `timing.txt` (source IRQ-mask/call inventory, not a timing bound). See
 [memory and timing](docs/MEMORY_AND_TIMING.md) for accounting and limitations.
 
@@ -170,8 +184,13 @@ See [the runnable example](examples/uart-extensions.he) and
 [the module/extension contract](docs/STD_EXTENSIONS_PROPOSAL.md). Std source lives in
 `lib/std/` and is bundled with the compiler. Application modules resolve relative
 to the entry file, not the shell working directory. Static `device output: UartTx`
-parameters preserve hardware identity without runtime pointers. Strings, arrays
-and owning wrapper structs remain future work.
+parameters preserve hardware identity without runtime pointers. Owning strings
+and wrapper structs remain future work.
+
+Fixed scalar arrays, temporary slices and `.clone()` are implemented: see
+[the runnable slice/clone example](examples/uart-slice.he) and
+[the array and borrowing contract](docs/ARRAYS.md). A slice helper accepts arrays
+of different lengths; cloning an array creates an independent owner.
 
 Текстовый вывод: [пример print_n](examples/uart-text.he), [контракт &str и результаты](docs/TEXT.md).
 UTF-8 литералы находятся во Flash; std::uart::UartText предоставляет print/println.

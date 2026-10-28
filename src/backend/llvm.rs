@@ -5,8 +5,11 @@ use crate::ir::*;
 use std::collections::HashMap;
 use std::fmt::Write;
 
-fn ty(value: Type) -> &'static str {
+fn ty(value: Type) -> String {
     match value {
+        Type::Array(e, n) => return format!("[{n} x {}]", ty(Type::element(e))),
+        Type::ArrayRef(..) => "ptr",
+        Type::SliceRef(..) => "{ ptr, i16 }",
         Type::Text => super::text::LLVM_TYPE,
         Type::TextIn(_) => "{ i16, i16 }",
         Type::Bool | Type::PinState => "i1",
@@ -15,10 +18,11 @@ fn ty(value: Type) -> &'static str {
         Type::U32 | Type::I32 => "i32",
         Type::U64 | Type::I64 => "i64",
     }
+    .into()
 }
 
-fn result_type(value: Option<Type>) -> &'static str {
-    value.map(ty).unwrap_or("void")
+fn result_type(value: Option<Type>) -> String {
+    value.map(ty).unwrap_or_else(|| "void".into())
 }
 
 /// Produce unoptimized LLVM IR from a well-formed Helium module.
@@ -52,10 +56,12 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
                         .filter_map(|i| i.result.map(|(_, t)| t)),
                 )
         }));
-    if types
-        .into_iter()
-        .any(|t| t.integer().is_some_and(|(w, _)| w > 16))
-    {
+    if types.into_iter().any(|t| {
+        t.sequence()
+            .map_or(t, |(e, _)| Type::element(e))
+            .integer()
+            .is_some_and(|(w, _)| w > 16)
+    }) {
         return Err(
             "LLVM prototype currently supports only bool, PinState and 8/16-bit integers".into(),
         );
@@ -78,6 +84,30 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
         writeln!(out, "; helium-timing: {line}").unwrap();
     }
     super::text::emit(module, &mut out);
+    if module
+        .functions
+        .iter()
+        .flat_map(|f| &f.blocks)
+        .flat_map(|b| &b.instructions)
+        .any(|i| matches!(i.op, Op::ArrayRead(..) | Op::ArrayWrite(..)))
+    {
+        out.push_str(
+            r#"
+define internal void @helium_array_bounds(i16 %index, i16 %length) addrspace(1) alwaysinline {
+entry:
+  %valid = icmp ult i16 %index, %length
+  br i1 %valid, label %ok, label %fail
+ok:
+  ret void
+fail:
+  call void asm sideeffect "cli", "~{memory}"()
+  br label %halt
+halt:
+  br label %halt
+}
+"#,
+        );
+    }
     for (index, storage) in module.globals.iter().enumerate() {
         writeln!(
             out,
@@ -280,6 +310,54 @@ impl FunctionEmitter<'_> {
 
     fn instruction(&mut self, instruction: &Instruction) -> Result<(), String> {
         let expression = match &instruction.op {
+            Op::ArrayLiteral(values) => self.array_literal(instruction.result.unwrap().1, values),
+            Op::ArrayRepeat(v, n) => {
+                self.array_literal(instruction.result.unwrap().1, &vec![*v; usize::from(*n)])
+            }
+            Op::AddressLocal(l, _) => format!("getelementptr i8, ptr %l{}, i16 0", l.index),
+            Op::AddressGlobal(g, _) => format!("getelementptr i8, ptr @helium_g{}, i16 0", g.0),
+            Op::SliceLen(v) => format!("extractvalue {}, 1", self.value(*v)),
+            Op::Slice(v, _) => {
+                if let Type::ArrayRef(_, n, _) = self.types[v] {
+                    let p = self.temp(&format!(
+                        "insertvalue {{ ptr, i16 }} poison, ptr %v{}, 0",
+                        v.index
+                    ));
+                    format!("insertvalue {{ ptr, i16 }} {p}, i16 {n}, 1")
+                } else {
+                    format!(
+                        "select i1 true, {}, {} zeroinitializer",
+                        self.value(*v),
+                        ty(self.types[v])
+                    )
+                }
+            }
+            Op::Reborrow(v, _) => format!("getelementptr i8, ptr %v{}, i16 0", v.index),
+            Op::ArrayRead(a, i) | Op::ArrayWrite(a, i, _) => {
+                let (e, n) = self.types[a].sequence().ok_or("array reference type")?;
+                let (base, len) = if let Some(n) = n {
+                    (format!("%v{}", a.index), n.to_string())
+                } else {
+                    (
+                        self.temp(&format!("extractvalue {}, 0", self.value(*a))),
+                        self.temp(&format!("extractvalue {}, 1", self.value(*a))),
+                    )
+                };
+                self.line(&format!(
+                    "call addrspace(1) void @helium_array_bounds({}, i16 {len})",
+                    self.value(*i)
+                ));
+                let p = self.temp(&format!(
+                    "getelementptr {}, ptr {base}, {}",
+                    ty(Type::element(e)),
+                    self.value(*i)
+                ));
+                if let Op::ArrayWrite(_, _, v) = instruction.op {
+                    format!("store volatile {}, ptr {p}, align 1", self.value(v))
+                } else {
+                    format!("load volatile {}, ptr {p}, align 1", ty(Type::element(e)))
+                }
+            }
             Op::TextLiteral { text, space } => {
                 let id = super::text::literals(self.module)
                     .iter()
@@ -571,5 +649,21 @@ impl FunctionEmitter<'_> {
             None => self.line(&expression),
         }
         Ok(())
+    }
+
+    fn array_literal(&mut self, array: Type, values: &[ValueId]) -> String {
+        let mut current = "zeroinitializer".to_string();
+        for (i, v) in values.iter().enumerate() {
+            let expression = format!(
+                "insertvalue {} {current}, {}, {i}",
+                ty(array),
+                self.value(*v)
+            );
+            if i + 1 == values.len() {
+                return expression;
+            }
+            current = self.temp(&expression);
+        }
+        unreachable!("verified nonempty array")
     }
 }

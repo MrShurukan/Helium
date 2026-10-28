@@ -93,6 +93,8 @@ impl Scanner<'_> {
             "(" => Some(Self::produce_token(P(PT::LeftParen), position_info)),
             ")" => Some(Self::produce_token(P(PT::RightParen), position_info)),
             "{" => Some(Self::produce_token(P(PT::LeftBrace), position_info)),
+            "[" => Some(Self::produce_token(P(PT::LeftBracket), position_info)),
+            "]" => Some(Self::produce_token(P(PT::RightBracket), position_info)),
             "}" => Some(Self::produce_token(P(PT::RightBrace), position_info)),
             "," => Some(Self::produce_token(P(PT::Comma), position_info)),
             "." => Some(Self::produce_token(P(PT::Dot), position_info)),
@@ -400,7 +402,7 @@ impl Scanner<'_> {
             ))
         } else if let Some(static_type) = TYPES.get(lexeme.as_str()) {
             Ok(Self::produce_token(
-                TokenType::Type(static_type),
+                TokenType::Type(*static_type),
                 position_info,
             ))
         }

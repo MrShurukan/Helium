@@ -252,6 +252,194 @@ fn build_reports_missing_llvm_without_panicking() {
     assert!(!result.status.success());
     assert!(stderr(&result).contains("Cannot run"));
     assert!(!stderr(&result).contains("panicked"));
+    assert_eq!(
+        fs::read_dir(fixture.source.parent().unwrap().join("build"))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn intermediates_options_and_failed_rebuild_preserve_existing_files() {
+    let fixture = Fixture::new();
+    for args in [
+        vec!["--intermediates", "--intermediates"],
+        vec!["--intermediates="],
+        vec!["--emit", "ir", "--intermediates"],
+        vec!["--emit", "llvm", "--intermediates"],
+    ] {
+        let result = fixture.run("build", &args, false);
+        assert!(!result.status.success());
+        assert!(
+            !stderr(&result).contains("Cannot run"),
+            "{}",
+            stderr(&result)
+        );
+    }
+    assert!(!fixture
+        .run("check", &["--intermediates"], false)
+        .status
+        .success());
+    let folder = fixture.root.join("fixed intermediates");
+    fs::create_dir(&folder).unwrap();
+    fs::write(folder.join("module.ir"), "old IR").unwrap();
+    fs::write(folder.join("notes.txt"), "keep").unwrap();
+    let output = fixture.root.join("firmware.hex");
+    fs::write(&output, "old firmware").unwrap();
+    let result = fixture.run(
+        "build",
+        &[
+            "--intermediates",
+            folder.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ],
+        false,
+    );
+    assert!(!result.status.success());
+    assert_eq!(
+        fs::read_to_string(folder.join("module.ir")).unwrap(),
+        "old IR"
+    );
+    assert_eq!(fs::read_to_string(output).unwrap(), "old firmware");
+    assert_eq!(
+        fs::read_to_string(folder.join("notes.txt")).unwrap(),
+        "keep"
+    );
+    assert!(!fs::read_dir(&fixture.root).unwrap().any(|e| e
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with("llvm-")));
+}
+
+#[test]
+fn intermediates_cannot_replace_source_or_use_a_directory_as_a_file() {
+    let fixture = Fixture::new();
+    let folder = fixture.root.join("artifacts");
+    fs::create_dir(&folder).unwrap();
+    let source = folder.join("module.ir");
+    fs::write(&source, "loop{}").unwrap();
+    let result = fixture
+        .command()
+        .arg("build")
+        .arg(&source)
+        .args(["--mcu", "atmega328p", "--intermediates"])
+        .arg(&folder)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(
+        stderr(&result).contains("source file"),
+        "{}",
+        stderr(&result)
+    );
+    assert_eq!(fs::read_to_string(source).unwrap(), "loop{}");
+    fs::create_dir(folder.join("optimized.ll")).unwrap();
+    let result = fixture.run(
+        "build",
+        &["--intermediates", folder.to_str().unwrap()],
+        false,
+    );
+    assert!(!result.status.success());
+    assert!(
+        stderr(&result).contains("regular file"),
+        "{}",
+        stderr(&result)
+    );
+}
+
+#[test]
+#[ignore = "requires LLVM and AVR toolchain; does not flash hardware"]
+fn machine_build_intermediates_are_opt_in_and_repeatable() {
+    let fixture = Fixture::new();
+    fs::write(&fixture.source, "var result:u8=0;setup{result=7;}loop{}").unwrap();
+    let default = fixture.run("build", &["--opt", "size"], true);
+    assert!(default.status.success(), "{}", stderr(&default));
+    assert!(!String::from_utf8_lossy(&default.stdout).contains("Intermediates:"));
+    let parent = fixture.source.parent().unwrap().join("build");
+    assert_eq!(fs::read_dir(&parent).unwrap().count(), 1);
+    let generated = fixture.run("build", &["--intermediates", "--opt", "size"], true);
+    assert!(generated.status.success(), "{}", stderr(&generated));
+    let dir = fs::read_dir(&parent)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.is_dir())
+        .unwrap();
+    for name in ["module.ir", "module.ll", "optimized.ll", "program.hex"] {
+        assert!(dir.join(name).is_file(), "{name}");
+    }
+    let inspection = fixture.root.join("inspect.ir");
+    let emitted = fixture.run(
+        "build",
+        &["--emit", "ir", "-o", inspection.to_str().unwrap()],
+        false,
+    );
+    assert!(emitted.status.success());
+    assert_eq!(
+        fs::read(dir.join("module.ir")).unwrap(),
+        fs::read(inspection).unwrap()
+    );
+    let folder = fixture.root.join("fixed intermediates");
+    let output = folder.join("program.hex");
+    let custom = fixture.run(
+        "build",
+        &[
+            "--intermediates",
+            folder.to_str().unwrap(),
+            "--opt",
+            "size",
+            "-o",
+            output.to_str().unwrap(),
+        ],
+        true,
+    );
+    assert!(custom.status.success(), "{}", stderr(&custom));
+    fs::write(folder.join("notes.txt"), "keep").unwrap();
+    let old_ir = fs::read(folder.join("module.ir")).unwrap();
+    fs::write(folder.join("optimized.ll"), "stale").unwrap();
+    fs::write(&fixture.source, "var result:u8=0;setup{result=8;}loop{}").unwrap();
+    let custom = fixture.run(
+        "build",
+        &[
+            &format!("--intermediates={}", folder.display()),
+            "--opt",
+            "size",
+            "-o",
+            output.to_str().unwrap(),
+        ],
+        true,
+    );
+    assert!(custom.status.success(), "{}", stderr(&custom));
+    assert_ne!(fs::read(folder.join("module.ir")).unwrap(), old_ir);
+    assert_ne!(
+        fs::read_to_string(folder.join("optimized.ll")).unwrap(),
+        "stale"
+    );
+    assert_eq!(
+        fs::read_to_string(folder.join("notes.txt")).unwrap(),
+        "keep"
+    );
+    let assembly = fixture.root.join("output.s");
+    let custom = fixture.run(
+        "build",
+        &[
+            "--emit",
+            "asm",
+            "--intermediates",
+            folder.to_str().unwrap(),
+            "-o",
+            assembly.to_str().unwrap(),
+        ],
+        true,
+    );
+    assert!(custom.status.success(), "{}", stderr(&custom));
+    assert!(!folder.join("program.hex").exists());
+    assert!(folder.join("program.s").is_file());
+    assert!(!fs::read_dir(&folder)
+        .unwrap()
+        .any(|e| e.unwrap().path().is_dir()));
 }
 #[test]
 fn input_and_cli_errors_are_actionable() {

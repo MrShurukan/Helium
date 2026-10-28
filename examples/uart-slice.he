@@ -1,0 +1,35 @@
+import extension std::uart::UartText;
+device debug = UART0 { baud: 38400, mode: TX, }
+
+fn fill(data: &mut [u8]) {
+    var i: u16 = 0;
+    while i < data.len() {
+        data[i] = 65;
+        i = i + 1;
+    }
+}
+
+fn print_bytes(device out: UartTx, label: &str, data: &[u8]) {
+    out.print(label);
+    var i: u16 = 0;
+    while i < data.len() {
+        out.write_byte(data[i]);
+        i = i + 1;
+    }
+    out.newline();
+}
+
+setup {
+    var buffer: [u8; 4] = [0; 4];
+    fill(&mut buffer);
+    var copy = buffer.clone();
+    copy[1] = 66;
+    copy[2] = 67;
+    copy[3] = 68;
+    var small: [u8; 2] = [79, 75];
+    print_bytes(debug, "Original: ", &buffer);
+    print_bytes(debug, "Clone: ", &copy);
+    print_bytes(debug, "Short: ", &small);
+    debug.flush();
+}
+loop {}
