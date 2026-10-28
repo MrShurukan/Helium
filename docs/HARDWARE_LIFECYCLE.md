@@ -53,7 +53,8 @@ BeforeSetup используется для UART, доступного уже и
 `tests/hardware_lifecycle.rs`: порядок, отдельное включение IRQ, отсутствие лишних
 эффектов без устройств, 12 вариантов испорченного IR и общие аппаратные claims.
 Прежние Timer1/noInterrupt/GPIO машинные тесты остаются обязательным gate.
-Передаваемые параметры ресурсов и runtime reconfiguration пока не реализованы.
+Статические UartTx-параметры реализованы (STD_EXTENSIONS_PROPOSAL.md).
+Передаваемые GPIO/таймеры и runtime reconfiguration пока не реализованы.
 UART API и общие контракты вызовов добавлены следующим этапом.
 
 На подготовительном этапе lifecycle полный gate прошёл: fmt, Clippy, 146 тестов в debug и 146 в release, включая машинные.

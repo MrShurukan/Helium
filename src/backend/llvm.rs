@@ -8,6 +8,7 @@ use std::fmt::Write;
 fn ty(value: Type) -> &'static str {
     match value {
         Type::Text => super::text::LLVM_TYPE,
+        Type::TextIn(_) => "{ i16, i16 }",
         Type::Bool | Type::PinState => "i1",
         Type::U8 | Type::I8 => "i8",
         Type::U16 | Type::I16 => "i16",
@@ -23,6 +24,8 @@ fn result_type(value: Option<Type>) -> &'static str {
 /// Produce unoptimized LLVM IR from a well-formed Helium module.
 /// `export_symbols` is for differential tests, not a public C ABI contract.
 pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
+    let prepared = crate::ir::text::specialize(module)?;
+    let module = &prepared;
     let target = module.target;
     if module.devices.iter().any(|device| match &device.config {
         DeviceConfig::PeriodicTimer(t) => t.hardware != &target.timer,
@@ -90,6 +93,7 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
         }
     }
     for function in &module.functions {
+        writeln!(out, "; Helium function: {}", function.name).unwrap();
         let mut emitter = FunctionEmitter {
             module,
             target,
@@ -262,6 +266,18 @@ impl FunctionEmitter<'_> {
         Ok(())
     }
 
+    fn text_literal_result(
+        &mut self,
+        instruction: &Instruction,
+        id: usize,
+        pointer: &str,
+        length: usize,
+    ) -> Result<(), String> {
+        let v = instruction.result.unwrap().0.index;
+        self.line(&format!("%v{v} = select i1 true, {{ i16, i16 }} {{ i16 ptrtoint ({pointer} @helium_text{id} to i16), i16 {length} }}, {{ i16, i16 }} zeroinitializer"));
+        Ok(())
+    }
+
     fn instruction(&mut self, instruction: &Instruction) -> Result<(), String> {
         let expression = match &instruction.op {
             Op::TextLiteral { text, space } => {
@@ -275,19 +291,66 @@ impl FunctionEmitter<'_> {
                     "ptr"
                 };
                 let flag = u8::from(*space == TextSpace::Flash);
+                if matches!(instruction.result.unwrap().1, Type::TextIn(_)) {
+                    return self.text_literal_result(instruction, id, pointer, text.len());
+                }
                 format!("select i1 true, {{ i16, i16, i8 }} {{ i16 ptrtoint ({pointer} @helium_text{id} to i16), i16 {}, i8 {flag} }}, {{ i16, i16, i8 }} zeroinitializer", text.len())
+            }
+            Op::TextIsFlash(v) => {
+                let temp = self.temporary;
+                self.temporary += 1;
+                self.line(&format!(
+                    "%text_space{temp} = extractvalue {}, 2",
+                    self.value(*v)
+                ));
+                format!("icmp eq i8 %text_space{temp}, 1")
+            }
+            Op::TextNarrow(v, _) | Op::TextErase(v) => {
+                let temp = self.temporary;
+                self.temporary += 1;
+                self.line(&format!(
+                    "%text_addr{temp} = extractvalue {}, 0",
+                    self.value(*v)
+                ));
+                self.line(&format!(
+                    "%text_len{temp} = extractvalue {}, 1",
+                    self.value(*v)
+                ));
+                let out_type = ty(instruction.result.unwrap().1);
+                self.line(&format!(
+                    "%text_a{temp} = insertvalue {out_type} poison, i16 %text_addr{temp}, 0"
+                ));
+                if let Op::TextErase(_) = instruction.op {
+                    self.line(&format!("%text_b{temp} = insertvalue {out_type} %text_a{temp}, i16 %text_len{temp}, 1"));
+                    let Type::TextIn(space) = self.types[v] else {
+                        unreachable!()
+                    };
+                    format!(
+                        "insertvalue {out_type} %text_b{temp}, i8 {}, 2",
+                        u8::from(space == TextSpace::Flash)
+                    )
+                } else {
+                    format!("insertvalue {out_type} %text_a{temp}, i16 %text_len{temp}, 1")
+                }
             }
             Op::TextLen(v) => format!("extractvalue {}, 1", self.value(*v)),
             Op::TextByteOr {
                 text,
                 index,
                 fallback,
-            } => format!(
-                "call i8 @helium_text_byte({}, {}, {})",
-                self.value(*text),
-                self.value(*index),
-                self.value(*fallback)
-            ),
+            } => {
+                let suffix = match self.types[text] {
+                    Type::TextIn(TextSpace::Flash) => "_flash",
+                    Type::TextIn(TextSpace::Sram) => "_sram",
+                    _ => "",
+                };
+                format!(
+                    "call i8 @helium_text_byte{suffix}({}, {}, {})",
+                    self.value(*text),
+                    self.value(*index),
+                    self.value(*fallback)
+                )
+            }
             Op::Const(c) => format!("or {} 0, {}", ty(c.ty), c.bits),
             Op::Unary(Unary::Negate, v) => format!("sub {} 0, %v{}", ty(self.types[v]), v.index),
             Op::Unary(Unary::Not, v) => format!("xor {}, 1", self.value(*v)),

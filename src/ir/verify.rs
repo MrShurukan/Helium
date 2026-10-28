@@ -606,10 +606,56 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                         text.len() <= u16::MAX as usize,
                         "text exceeds u16 byte length",
                     )?;
+                    let ty = instruction.result.map(|(_, t)| t).unwrap_or(Type::Text);
+                    let Op::TextLiteral { space, .. } = instruction.op else {
+                        unreachable!()
+                    };
+                    require(
+                        ty == Type::Text || ty == Type::TextIn(space),
+                        "literal placement/type mismatch",
+                    )?;
+                    Some(ty)
+                }
+                Op::TextIsFlash(v) => {
+                    require(
+                        value_type(*v)? == Type::Text,
+                        "text dispatch requires universal text",
+                    )?;
+                    Some(Type::Bool)
+                }
+                Op::TextErase(v) => {
+                    require(
+                        matches!(value_type(*v)?, Type::TextIn(_)),
+                        "text erase requires concrete placement",
+                    )?;
                     Some(Type::Text)
                 }
+                Op::TextNarrow(v, space) => {
+                    require(
+                        value_type(*v)? == Type::Text,
+                        "text narrow requires universal text",
+                    )?;
+                    let guarded = function.blocks.iter().any(|test| {
+                        let Terminator::Branch { condition, yes, no } = test.terminator else {
+                            return false;
+                        };
+                        let target = if *space == TextSpace::Flash { yes } else { no };
+                        yes != no
+                            && target != function.entry
+                            && predecessors[&target] == [test.id]
+                            && dominators
+                                .get(&block.id)
+                                .is_some_and(|ds| ds.contains(&target))
+                            && test.instructions.iter().any(|i| {
+                                i.result == Some((condition, Type::Bool))
+                                    && matches!(i.op, Op::TextIsFlash(arg) if arg == *v)
+                            })
+                    });
+                    require(guarded, "text narrowing lacks a dominating placement guard")?;
+                    Some(Type::TextIn(*space))
+                }
                 Op::TextLen(v) => {
-                    require(value_type(*v)? == Type::Text, "text_len requires text")?;
+                    require(value_type(*v)?.is_text(), "text_len requires text")?;
                     Some(Type::U16)
                 }
                 Op::TextByteOr {
@@ -618,7 +664,7 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                     fallback,
                 } => {
                     require(
-                        value_type(*text)? == Type::Text
+                        value_type(*text)?.is_text()
                             && value_type(*index)? == Type::U16
                             && value_type(*fallback)? == Type::U8,
                         "invalid text_byte_or operands",
@@ -627,7 +673,7 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                 }
                 Op::Const(value) => {
                     require(
-                        value.ty != Type::Text,
+                        !value.ty.is_text(),
                         "text cannot be forged from scalar bits",
                     )?;
                     require(
@@ -654,7 +700,7 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                         "binary operands must have identical types",
                     )?;
                     require(
-                        ty != Type::Text
+                        !ty.is_text()
                             && (ty.integer().is_some()
                                 || matches!(op, Binary::Equal | Binary::NotEqual)),
                         "invalid binary operand type",
@@ -663,7 +709,7 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                 }
                 Op::Widen(value, target) => {
                     require(
-                        *target != Type::Text && value_type(*value)?.can_widen_to(*target),
+                        !target.is_text() && value_type(*value)?.can_widen_to(*target),
                         "conversion is not lossless widening",
                     )?;
                     Some(*target)

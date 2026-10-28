@@ -34,7 +34,7 @@ pub struct Interpreter<'a> {
     pub inputs: HashMap<PinId, VecDeque<bool>>,
     /// Physical level used when the scripted readings are exhausted; defaults to LOW.
     pub levels: HashMap<PinId, bool>,
-    texts: Vec<String>,
+    texts: Vec<(String, TextSpace)>,
     remaining: usize,
 }
 
@@ -153,24 +153,43 @@ impl<'a> Interpreter<'a> {
                         self.interrupts_enabled = get(value)?.bits != 0;
                         None
                     }
-                    Op::TextLiteral { text, .. } => {
-                        let index = if let Some(i) = self.texts.iter().position(|s| s == text) {
+                    Op::TextLiteral { text, space } => {
+                        let index = if let Some(i) = self
+                            .texts
+                            .iter()
+                            .position(|s| s.0 == *text && s.1 == *space)
+                        {
                             i
                         } else {
-                            self.texts.push(text.clone());
+                            self.texts.push((text.clone(), *space));
                             self.texts.len() - 1
                         };
                         Some(Constant {
-                            ty: Type::Text,
+                            ty: instruction.result.unwrap().1,
                             bits: index as u64,
                         })
+                    }
+                    Op::TextIsFlash(v) => {
+                        let text = self
+                            .texts
+                            .get(get(v)?.bits as usize)
+                            .ok_or(Error::InvalidInvocation)?;
+                        Some(Constant::new(
+                            Type::Bool,
+                            u64::from(text.1 == TextSpace::Flash),
+                        ))
+                    }
+                    Op::TextErase(v) | Op::TextNarrow(v, _) => {
+                        let mut value = get(v)?;
+                        value.ty = instruction.result.unwrap().1;
+                        Some(value)
                     }
                     Op::TextLen(v) => {
                         let text = self
                             .texts
                             .get(get(v)?.bits as usize)
                             .ok_or(Error::InvalidInvocation)?;
-                        Some(Constant::new(Type::U16, text.len() as u64))
+                        Some(Constant::new(Type::U16, text.0.len() as u64))
                     }
                     Op::TextByteOr {
                         text,
@@ -182,6 +201,7 @@ impl<'a> Interpreter<'a> {
                             .get(get(text)?.bits as usize)
                             .ok_or(Error::InvalidInvocation)?;
                         let byte = text
+                            .0
                             .as_bytes()
                             .get(get(index)?.bits as usize)
                             .copied()

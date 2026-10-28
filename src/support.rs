@@ -179,6 +179,14 @@ pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), 
                 body,
                 ..
             } => {
+                if parameters
+                    .iter()
+                    .filter(|p| p.static_type == T::Text)
+                    .count()
+                    > crate::ir::text::MAX_TEXT_PARAMETERS
+                {
+                    errors.push(Diagnostic::new(DiagnosticKind::TypedIrUnsupported { feature: format!("text specialization supports at most {} text parameters per function", crate::ir::text::MAX_TEXT_PARAMETERS) }, Some(s.source_location)));
+                }
                 for p in parameters {
                     check_type(p.static_type, p.type_location, machine, errors);
                 }
@@ -269,6 +277,31 @@ pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), 
     }
 
     let mut errors = Vec::new();
+    let variants: usize = statements
+        .iter()
+        .filter_map(|s| {
+            if let S::FunctionDeclaration { parameters, .. } = &s.statement_type {
+                let n = parameters
+                    .iter()
+                    .filter(|p| p.static_type == T::Text)
+                    .count();
+                (n > 0).then_some(1usize << n.min(crate::ir::text::MAX_TEXT_PARAMETERS))
+            } else {
+                None
+            }
+        })
+        .sum();
+    if variants > crate::ir::text::MAX_VARIANTS {
+        errors.push(Diagnostic::new(
+            DiagnosticKind::TypedIrUnsupported {
+                feature: format!(
+                    "text specialization exceeds {} variants",
+                    crate::ir::text::MAX_VARIANTS
+                ),
+            },
+            statements.first().map(|s| s.source_location),
+        ));
+    }
     for s in statements {
         if matches!(
             &s.statement_type,

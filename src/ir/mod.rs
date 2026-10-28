@@ -2,6 +2,7 @@
 pub mod interpret;
 mod lower;
 pub mod optimize;
+pub mod text;
 pub mod verify;
 
 use crate::frontend::utils::SourceLocation;
@@ -36,6 +37,7 @@ function_id!(ValueId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Type {
     Text,
+    TextIn(TextSpace),
     Bool,
     PinState,
     U8,
@@ -49,6 +51,10 @@ pub enum Type {
 }
 
 impl Type {
+    pub fn is_text(self) -> bool {
+        matches!(self, Self::Text | Self::TextIn(_))
+    }
+
     pub fn integer(self) -> Option<(u32, bool)> {
         match self {
             Self::U8 => Some((8, false)),
@@ -67,7 +73,7 @@ impl Type {
         match self.integer() {
             Some((64, _)) => u64::MAX,
             Some((bits, _)) => (1u64 << bits) - 1,
-            None if self == Self::Text => u64::MAX,
+            None if self.is_text() => u64::MAX,
             None => 1,
         }
     }
@@ -99,6 +105,8 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             Self::Text => "&str",
+            Self::TextIn(TextSpace::Flash) => "&str[Flash]",
+            Self::TextIn(TextSpace::Sram) => "&str[SRAM]",
             Self::Bool => "bool",
             Self::PinState => "PinState",
             Self::U8 => "u8",
@@ -198,6 +206,9 @@ pub enum Op {
         space: TextSpace,
     },
     TextLen(ValueId),
+    TextIsFlash(ValueId),
+    TextNarrow(ValueId, TextSpace),
+    TextErase(ValueId),
     TextByteOr {
         text: ValueId,
         index: ValueId,
@@ -233,7 +244,10 @@ pub enum Op {
 impl Op {
     pub fn operands(&self) -> Vec<ValueId> {
         match self {
-            Self::TextLen(v) => vec![*v],
+            Self::TextLen(v)
+            | Self::TextIsFlash(v)
+            | Self::TextNarrow(v, _)
+            | Self::TextErase(v) => vec![*v],
             Self::TextByteOr {
                 text,
                 index,
@@ -516,6 +530,9 @@ impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TextLiteral { text, space } => write!(f, "text {space:?} {text:?}"),
+            Self::TextIsFlash(v) => write!(f, "text_is_flash v{}", v.index),
+            Self::TextNarrow(v, space) => write!(f, "text_narrow v{} {space:?}", v.index),
+            Self::TextErase(v) => write!(f, "text_erase v{}", v.index),
             Self::TextLen(v) => write!(f, "text_len v{}", v.index),
             Self::TextByteOr {
                 text,

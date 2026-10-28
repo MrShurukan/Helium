@@ -77,4 +77,24 @@ missing:
 }
 "#);
     }
+    if used {
+        for (suffix, address_space) in [("flash", " addrspace(1)"), ("sram", "")] {
+            writeln!(out, r#"
+define internal i8 @helium_text_byte_{suffix}({{ i16, i16 }} %text, i16 %index, i8 %fallback) addrspace(1) alwaysinline {{
+entry:
+  %len = extractvalue {{ i16, i16 }} %text, 1
+  %valid = icmp ult i16 %index, %len
+  br i1 %valid, label %read, label %missing
+read:
+  %base = extractvalue {{ i16, i16 }} %text, 0
+  %address = add i16 %base, %index
+  %p = inttoptr i16 %address to ptr{address_space}
+  %byte = load i8, ptr{address_space} %p, align 1
+  ret i8 %byte
+missing:
+  ret i8 %fallback
+}}
+"#).unwrap();
+        }
+    }
 }

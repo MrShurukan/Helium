@@ -199,10 +199,12 @@ fn universal_text_print_n_executes_flash_sram_and_runtime_selection() {
         for level in [Optimization::None, Optimization::Speed, Optimization::Size] {
             let m = machine_program(scenario);
             let llvm = llvm::emit(&m, true).unwrap();
+            let prepared = ir::text::specialize(&m).unwrap();
             let destination = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join(format!("build/text-tests/{scenario}-{level:?}.hex"));
             let build =
                 llvm_toolchain::build(&llvm, &ATMEGA328P, &destination, "hex", level).unwrap();
+            std::fs::write(destination.with_extension("ir"), prepared.dump()).unwrap();
             let simulation =
                 Command::new(std::env::var_os("HELIUM_NODE").unwrap_or_else(|| "node".into()))
                     .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/simulate-avr.cjs"))
