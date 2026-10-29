@@ -1,6 +1,6 @@
 [package]
 name = "helium"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 
 [dependencies]
@@ -8,3 +8,5 @@ lazy_static = "1.5.0"
 colored = "3.0.0"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2.2"
+clap = { version = "4.6.7", features = ["derive", "color"] }
+clio = { version = "0.3.5", features = ["clap-parse"] }

@@ -3,6 +3,7 @@
 use crate::frontend::utils::SourceLocation;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
+use crate::diagnostic::{Diagnostic, RenderOptions};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileId(pub usize);
@@ -47,6 +48,14 @@ impl SourceFile<'_> {
             file: self.id,
             bytes: start..end,
         })
+    }
+
+    pub fn render_diagnostics(&self, diagnostics: Vec<Diagnostic>, color: bool) -> String {
+        diagnostics
+            .iter()
+            .map(|e| e.render_in(self, RenderOptions { color }))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 

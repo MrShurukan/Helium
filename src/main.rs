@@ -1,27 +1,31 @@
-use helium::diagnostic::{Diagnostic, DiagnosticKind, RenderOptions};
-use helium::{
-    backend::{flash, llvm_toolchain},
-    compile_project_ir, compile_project_llvm, ir,
-};
-use std::io::IsTerminal;
-use std::{env, fs, path::PathBuf, process::ExitCode};
+//! Welcome to Helium compiler! This language is an attempt to bring modern practices to
+//! microcontrollers of different types (mainly AVR). Language is designed to be simple to approach
+//! and safe at compile time, rather than at runtime. Things like I/O, Uart and Timers are recognized
+//! at language level, which reduces needs for workarounds like in other languages, while also
+//! reducing and simplifying std.
+//!
+//! This file is the entry point to helium, also covers the CLI usage. The orchestrator of the whole
+//! compilation process.
 
-const USAGE: &str = concat!(
-    "Usage:\n",
-    "  helium check <source.he> --mcu atmega328p\n",
-    "  helium build <source.he> --mcu atmega328p [--emit hex|elf|asm|llvm|ir|ast] [-o <file>]\n",
-    "  helium flash <file.hex> --mcu atmega328p --programmer <name>\n",
-    "  helium timer-options --mcu atmega328p --cpu-hz <Hz> --timer Timer1 --every <duration>\n",
-    "  --cpu-hz <Hz> (check/build; required for timers, does not change oscillator settings)\n",
-    "Options: --color auto|always|never (default: auto; NO_COLOR disables automatic color)\n",
-    "  --verify-ir (check/build; enabled by default in debug and release)\n",
-    "  --opt none|speed|size (machine output only; default: none)\n",
-    "  --intermediates [directory] (machine build only; retain IR, LLVM and toolchain artifacts)\n",
-    "  --optimize-ir (build --emit ir only; constant folding, CFG cleanup and dead values)"
-);
+mod cli;
+
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use std::sync::OnceLock;
+use std::{env, fs};
+
+use clap::Parser;
+
+use helium::backend::microcontroller::Microcontroller;
+use helium::backend::{flash as flash_backend, llvm_toolchain};
+use helium::diagnostic::{Diagnostic, DiagnosticKind, RenderOptions};
+use helium::{compile_project_ir, compile_project_llvm, ir};
+
+use crate::cli::Command;
 
 fn main() -> ExitCode {
-    match run(env::args().skip(1).collect()) {
+    match run(cli::CliArgs::parse()) {
         Ok(message) => {
             println!("{message}");
             ExitCode::SUCCESS
@@ -33,310 +37,398 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(args: Vec<String>) -> Result<String, String> {
-    if args.first().is_some_and(|arg| arg == "timer-options") {
-        return timer_options(&args[1..]);
-    }
-    if args.len() == 1 && matches!(args[0].as_str(), "--help" | "-h") {
-        return Ok(USAGE.into());
-    }
-    if args.len() < 2 {
-        return Err(USAGE.into());
-    }
+static COLOR_MODE: OnceLock<cli::ColorMode> = OnceLock::new();
 
-    let command = args[0].as_str();
-    if !matches!(command, "check" | "build" | "flash") {
-        return Err(USAGE.into());
-    }
-
-    let input = PathBuf::from(&args[1]);
-    let mut mcu = None;
-    let mut emit = None;
-    let mut output = None;
-    let mut programmer = None;
-    let mut color = None;
-    let mut optimization = None;
-    let mut cpu_hz = None;
-    let mut ir_options = ir::Options::default();
-    let mut explicit_verify = false;
-    let mut intermediates: Option<Option<PathBuf>> = None;
-
-    let mut options = args[2..].iter().peekable();
-    while let Some(option) = options.next() {
-        if (option == "--intermediates" || option.starts_with("--intermediates="))
-            && command == "build"
-        {
-            if intermediates.is_some() {
-                return Err("Repeated option --intermediates".into());
-            }
-            let directory = if let Some((_, path)) = option.split_once('=') {
-                if path.is_empty() {
-                    return Err("Intermediates directory must not be empty".into());
-                }
-                Some(PathBuf::from(path))
-            } else if options.peek().is_some_and(|next| !next.starts_with('-')) {
-                Some(PathBuf::from(options.next().unwrap()))
-            } else {
-                None
-            };
-            intermediates = Some(directory);
-            continue;
+fn is_color() -> bool {
+    match COLOR_MODE.get_or_init(|| cli::ColorMode::Auto) {
+        cli::ColorMode::Auto => {
+            std::io::stderr().is_terminal() && env::var_os("NO_COLOR").is_none()
         }
-        if option == "--verify-ir" && command != "flash" {
-            if explicit_verify {
-                return Err("Repeated option --verify-ir".into());
-            }
-            explicit_verify = true;
-            ir_options.verify = true;
-            continue;
-        }
-        if option == "--optimize-ir" && command == "build" {
-            if ir_options.optimize {
-                return Err("Repeated option --optimize-ir".into());
-            }
-            ir_options.optimize = true;
-            continue;
-        }
-        let value = options
-            .next()
-            .ok_or_else(|| format!("Missing value for {option}\n{USAGE}"))?;
-        let slot = match option.as_str() {
-            "--mcu" => &mut mcu,
-            "--emit" if command == "build" => &mut emit,
-            "-o" | "--output" if command == "build" => &mut output,
-            "--programmer" if command == "flash" => &mut programmer,
-            "--color" => &mut color,
-            "--opt" if command == "build" => &mut optimization,
-            "--cpu-hz" if command != "flash" => &mut cpu_hz,
-            _ => return Err(format!("Unknown or inapplicable option {option}\n{USAGE}")),
-        };
-
-        if slot.replace(value.clone()).is_some() {
-            return Err(format!("Repeated option {option}"));
-        }
+        cli::ColorMode::Always => true,
+        cli::ColorMode::Never => false,
     }
+}
 
-    let color = match color.as_deref().unwrap_or("auto") {
-        "auto" => std::io::stderr().is_terminal() && env::var_os("NO_COLOR").is_none(),
-        "always" => true,
-        "never" => false,
-        value => {
-            return Err(format!(
-                "Unknown color mode '{value}'; expected auto, always or never"
-            ))
-        }
-    };
+fn run(args: cli::CliArgs) -> Result<String, String> {
+    COLOR_MODE
+        .set(args.color)
+        .expect("value was never set before");
 
-    let mcu = mcu.ok_or("--mcu is required")?.to_lowercase();
-    ir_options.cpu_hz = cpu_hz
-        .map(|value| {
-            value
-                .parse::<u32>()
-                .map_err(|_| "--cpu-hz must be a positive integer".to_owned())
-        })
-        .transpose()?;
-    let Some(target) = helium::backend::microcontroller::get(&mcu) else {
+    match args.command {
+        Command::Check(args) => check(args),
+        Command::Build(args) => build(args),
+        Command::Flash(args) => flash(args),
+        Command::TimerOptions(args) => timer_options(args),
+    }
+}
+
+/// Verifies target mcu and cpu-hz for that target (if specified). Returns the selected target
+fn verify_common_args(args: &cli::CommonArgs) -> Result<&'static Microcontroller, String> {
+    let Some(target) = helium::backend::microcontroller::get(&args.mcu) else {
         return Err(
-            Diagnostic::new(DiagnosticKind::UnsupportedTarget { mcu }, None)
-                .render_with("", RenderOptions { color }),
+            Diagnostic::new(
+                DiagnosticKind::UnsupportedTarget {
+                    mcu: args.mcu.clone(),
+                },
+                None,
+            )
+                .render_with(
+                    "",
+                    RenderOptions {
+                        color: is_color(),
+                    },
+                ),
         );
     };
-    if let Some(cpu_hz) = ir_options.cpu_hz {
+
+    if let Some(cpu_hz) = args.cpu_hz {
         helium::timer::validate_clock(target, cpu_hz).map_err(|e| e.to_string())?;
     }
 
-    if command == "flash" {
-        flash::flash(
-            &input,
-            &mcu,
-            &programmer.ok_or("--programmer is required for flash")?,
-        )?;
-        return Ok(format!("Flashed {}", input.display()));
-    }
+    Ok(target)
+}
 
-    let source =
-        fs::read_to_string(&input).map_err(|e| format!("Cannot read {}: {e}", input.display()))?;
+/// Performs a lowering to llvm to check if any language level problems arise.
+/// Useful to check if the code compiles and has warnings or errors.
+///
+/// Sticks to default IR options except passed in --cpu-hz
+fn check(args: cli::CheckArgs) -> Result<String, String> {
+    let input = args.source.path().to_path_buf();
 
-    if ir_options.optimize && emit.as_deref() != Some("ir") {
-        return Err("--optimize-ir requires build --emit ir".into());
-    }
-    if explicit_verify && matches!(emit.as_deref(), Some("ast")) {
-        return Err("--verify-ir requires typed IR or AVR compilation".into());
-    }
+    let source = fs::read_to_string(&input)
+        .map_err(|e| format!("Cannot read {}: {e}", input.display()))?;
 
-    let mut project = helium::modules::Project::from_file(&input).map_err(|e| e.to_string())?;
+    let mut project =
+        helium::modules::Project::from_file(&input).map_err(|e| e.to_string())?;
+
+    // TODO: Get this from project somehow. I don't like how there are separate source sets
     let source_name = input.display().to_string();
     let source_file = helium::diagnostic::source::SourceFile {
         id: helium::diagnostic::source::FileId(0),
         name: &source_name,
         text: &source,
     };
-    let diagnostics = |errors: Vec<helium::diagnostic::Diagnostic>| {
-        errors
-            .iter()
-            .map(|e| e.render_in(&source_file, RenderOptions { color }))
-            .collect::<Vec<_>>()
-            .join("\n")
+
+    let target = verify_common_args(&args.common)?;
+
+    let options = ir::Options {
+        cpu_hz: args.common.cpu_hz,
+        ..Default::default()
     };
 
-    let emit = emit.as_deref().unwrap_or("hex");
-    if !matches!(emit, "ast" | "ir" | "llvm" | "asm" | "elf" | "hex") {
-        return Err(format!(
-            "Unknown emit format '{emit}'; expected ast, ir, llvm, asm, elf or hex"
-        ));
+    let llvm = compile_project_llvm(&mut project, target, options)
+        .map_err(|errs| source_file.render_diagnostics(errs, is_color()))?;
+
+    if !llvm.warnings.is_empty() {
+        // TODO: Remove this clone. Compilation should just give the warnings instead of storing
+        eprintln!(
+            "{}",
+            source_file.render_diagnostics(llvm.warnings.clone(), is_color())
+        );
     }
-    if optimization.is_some() && matches!(emit, "ast" | "ir" | "llvm") {
+
+    Ok(format!(
+        "Checked {}{}",
+        input.display(),
+        device_report(&llvm)
+    ))
+}
+
+fn build(args: cli::BuildArgs) -> Result<String, String> {
+    // TODO: This block is identical in check function and this has to get unified
+    let input = args.source.path().to_path_buf();
+
+    let source = fs::read_to_string(&input)
+        .map_err(|e| format!("Cannot read {}: {e}", input.display()))?;
+
+    let mut project =
+        helium::modules::Project::from_file(&input).map_err(|e| e.to_string())?;
+
+    // TODO: Get this from project somehow. I don't like how there are separate source sets
+    let source_name = input.display().to_string();
+    let source_file = helium::diagnostic::source::SourceFile {
+        id: helium::diagnostic::source::FileId(0),
+        name: &source_name,
+        text: &source,
+    };
+
+    let target = verify_common_args(&args.common)?;
+
+    // Check and validate options make sense together
+
+    if args.optimize_ir && args.emit != cli::Emit::Ir {
+        return Err("--optimize-ir requires build --emit ir".into());
+    }
+
+    if args.opt.is_some() && !is_machine_output(args.emit) {
         return Err("--opt applies only to machine output (asm, elf, hex)".into());
     }
-    if intermediates.is_some() && !matches!(emit, "asm" | "elf" | "hex") {
+
+    if args.intermediates.is_some() && !is_machine_output(args.emit) {
         return Err("--intermediates requires machine output (asm, elf, hex)".into());
     }
-    let level = llvm_toolchain::Optimization::parse(optimization.as_deref().unwrap_or("none"))?;
-    if command == "check" {
-        let llvm = compile_project_llvm(&mut project, target, ir_options).map_err(diagnostics)?;
-        if !llvm.warnings.is_empty() {
-            eprintln!("{}", diagnostics(llvm.warnings.clone()));
-        }
-        return Ok(format!(
-            "Checked {}{}",
-            input.display(),
-            device_report(&llvm)
-        ));
-    }
+
+    let options = ir::Options {
+        cpu_hz: args.common.cpu_hz,
+        optimize: args.optimize_ir,
+        ..Default::default()
+    };
+
+    let optimization= args.opt.unwrap_or(cli::Optimization::None).into();
+
+    /*
+     * AST and internal IR don't require LLVM output.
+     *
+     * LLVM / ASM / ELF / HEX all start from the same project artifact compilation.
+     * Machine output then continues through the external LLVM / AVR toolchain.
+     */
 
     let mut internal_ir = None;
-    let content = match emit {
-        "ast" => {
-            let program = project.analyze().map_err(diagnostics)?;
+
+    let content = match args.emit {
+        cli::Emit::Ast => {
+            let program = project
+                .analyze()
+                .map_err(|errs| source_file.render_diagnostics(errs, is_color()))?;
+
+            // TODO: Inconsistencies in warnings. This is a slice, while module has a vec
             if !program.warnings().is_empty() {
-                eprintln!("{}", diagnostics(program.warnings().to_vec()));
+                eprintln!(
+                    "{}",
+                    source_file.render_diagnostics(
+                        program.warnings().to_vec(),
+                        is_color()
+                    )
+                );
             }
+
             format!("{program:#?}\n")
         }
-        "ir" => {
-            let module =
-                compile_project_ir(&mut project, target, ir_options).map_err(diagnostics)?;
+
+        cli::Emit::Ir => {
+            let module = compile_project_ir(&mut project, target, options)
+                .map_err(|errs| source_file.render_diagnostics(errs, is_color()))?;
+
             if !module.warnings.is_empty() {
-                eprintln!("{}", diagnostics(module.warnings.clone()));
+                // TODO: Remove this clone. Compilation should just give the warnings instead of storing
+                eprintln!(
+                    "{}",
+                    source_file.render_diagnostics(
+                        module.warnings.clone(),
+                        is_color()
+                    )
+                );
             }
+
             module.dump()
         }
-        _ => {
-            let artifacts = helium::compile_project_artifacts(&mut project, target, ir_options)
-                .map_err(diagnostics)?;
+
+        cli::Emit::Llvm
+        | cli::Emit::Asm
+        | cli::Emit::Elf
+        | cli::Emit::Hex => {
+            let artifacts =
+                helium::compile_project_artifacts(&mut project, target, options)
+                    .map_err(|errs| {
+                        source_file.render_diagnostics(errs, is_color())
+                    })?;
+
             internal_ir = Some(artifacts.ir);
-            let result = artifacts.llvm;
-            if !result.warnings.is_empty() {
-                eprintln!("{}", diagnostics(result.warnings));
+
+            if !artifacts.llvm.warnings.is_empty() {
+                // TODO: Remove this clone. Compilation should just give the warnings instead of storing
+                eprintln!(
+                    "{}",
+                    source_file.render_diagnostics(
+                        artifacts.llvm.warnings.clone(),
+                        is_color()
+                    )
+                );
             }
-            result.output
+
+            artifacts.llvm.output
         }
     };
+
     let report = device_report(&content);
 
-    let extension = if emit == "llvm" { "ll" } else { emit };
-    let destination = output.map(PathBuf::from).unwrap_or_else(|| {
-        input
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("build")
-            .join(format!(
-                "{}.{extension}",
-                input.file_stem().unwrap_or_default().to_string_lossy()
-            ))
-    });
+    let destination = args
+        .output
+        .as_ref()
+        .map(|output| output.path().path().to_path_buf())
+        .unwrap_or_else(|| default_output_path(&input, args.emit));
 
     let protected_paths: Vec<_> = project
         .sources
         .files
         .iter()
-        .map(|f| PathBuf::from(&f.name))
+        .map(|file| PathBuf::from(&file.name))
         .collect();
+
     helium::backend::output::check(&destination, &protected_paths)?;
 
-    if matches!(emit, "asm" | "elf" | "hex") {
-        let retention = match &intermediates {
+    /*
+     * ASM / ELF / HEX require the external toolchain.
+     *
+     * AST / IR / LLVM are already final textual outputs and can simply be
+     * written to the selected destination.
+     */
+    if is_machine_output(args.emit) {
+        let retention = match &args.intermediates {
             None => llvm_toolchain::Intermediates::Discard,
             Some(None) => llvm_toolchain::Intermediates::Generated,
-            Some(Some(path)) => llvm_toolchain::Intermediates::Directory(path),
+            Some(Some(path)) => {
+                llvm_toolchain::Intermediates::Directory(path)
+            }
         };
+
         let result = llvm_toolchain::build_with_options(
             &content,
             target,
             &destination,
-            emit,
-            level,
+            emit_name(args.emit),
+            optimization,
             llvm_toolchain::BuildOptions {
                 intermediates: retention,
                 internal_ir: internal_ir.as_deref(),
                 protected_paths: &protected_paths,
             },
         )?;
+
         let retained = result
             .retained_directory
             .as_ref()
-            .map(|p| format!("\nIntermediates: {}", p.display()))
+            .map(|path| format!("\nIntermediates: {}", path.display()))
             .unwrap_or_default();
+
+        let memory = result.memory.map_or_else(
+            || {
+                "Memory: unavailable for assembly output; \
+                 link ELF/HEX for a final report\n"
+                    .into()
+            },
+            |memory| memory.render(),
+        );
+
         return Ok(format!(
-            "Built {} (external stages: {} ms){}\n{}",
+            "Built {} (external stages: {} ms){}\n{}{}",
             destination.display(),
             result.elapsed_ms,
             retained,
-            result.memory.map(|m| m.render()).unwrap_or_else(|| {
-                "Memory: unavailable for assembly output; link ELF/HEX for a final report\n".into()
-            }) + &report
+            memory,
+            report,
         ));
     }
 
-    helium::backend::output::write(&destination, content.as_bytes(), &protected_paths)?;
-    Ok(format!("Built {}{report}", destination.display()))
+    helium::backend::output::write(
+        &destination,
+        content.as_bytes(),
+        &protected_paths,
+    )?;
+
+    Ok(format!(
+        "Built {}{}",
+        destination.display(),
+        report
+    ))
 }
 
+fn flash(args: cli::FlashArgs) -> Result<String, String> {
+    let input = args.file.path().to_path_buf();
+
+    let _target = verify_common_args(&args.common)?;
+
+    flash_backend::flash(
+        &input,
+        &args.common.mcu,
+        &args.programmer,
+    )?;
+
+    Ok(format!("Flashed {}", input.display()))
+}
+
+fn emit_name(emit: cli::Emit) -> &'static str {
+    match emit {
+        cli::Emit::Ast => "ast",
+        cli::Emit::Ir => "ir",
+        cli::Emit::Llvm => "llvm",
+        cli::Emit::Asm => "asm",
+        cli::Emit::Elf => "elf",
+        cli::Emit::Hex => "hex",
+    }
+}
+
+fn emit_extension(emit: cli::Emit) -> &'static str {
+    match emit {
+        cli::Emit::Llvm => "ll",
+        other => emit_name(other),
+    }
+}
+
+fn is_machine_output(emit: cli::Emit) -> bool {
+    matches!(
+        emit,
+        cli::Emit::Asm | cli::Emit::Elf | cli::Emit::Hex
+    )
+}
+
+fn default_output_path(input: &Path, emit: cli::Emit) -> PathBuf {
+    input
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("build")
+        .join(format!(
+            "{}.{}",
+            input
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy(),
+            emit_extension(emit),
+        ))
+}
+
+// TODO: Yuck. Manual filters? This has to be done from structs
 fn device_report(content: &str) -> String {
     content
         .lines()
         .filter_map(|line| line.strip_prefix("; "))
-        .filter(|line| line.starts_with("Timer1:") || line.starts_with("UART0:"))
+        .filter(|line| {
+            line.starts_with("Timer1:")
+                || line.starts_with("UART0:")
+        })
         .map(|line| format!("\n{line}"))
         .collect()
 }
 
-fn timer_options(args: &[String]) -> Result<String, String> {
-    let mut values = std::collections::BTreeMap::new();
-    let mut args = args.iter();
-    while let Some(option) = args.next() {
-        if !matches!(
-            option.as_str(),
-            "--mcu" | "--cpu-hz" | "--timer" | "--every"
-        ) {
-            return Err(format!("Unknown timer-options option {option}"));
-        }
-        let value = args
-            .next()
-            .ok_or_else(|| format!("Missing value for {option}"))?;
-        if values.insert(option.as_str(), value.as_str()).is_some() {
-            return Err(format!("Repeated option {option}"));
-        }
-    }
-    let required = |key| {
-        values
-            .get(key)
-            .copied()
-            .ok_or_else(|| format!("{key} is required"))
-    };
-    let target = helium::backend::microcontroller::get(required("--mcu")?)
-        .ok_or("Unsupported MCU for timer-options")?;
-    if required("--timer")? != target.timer.name {
+fn timer_options(args: cli::TimerOptionsArgs) -> Result<String, String> {
+    let target = verify_common_args(&args.common)?;
+
+    if args.timer != target.timer.name {
         return Err(format!(
             "timer-options currently supports {} {} only",
-            target.name, target.timer.name
+            target.name,
+            target.timer.name,
         ));
     }
-    let hz = required("--cpu-hz")?
-        .parse()
-        .map_err(|_| "--cpu-hz must be an integer")?;
-    let period = helium::timer::parse_duration(required("--every")?)?;
+
+    let hz = args
+        .common
+        .cpu_hz
+        .expect("--cpu-hz is required for timer-options");
+
+    let period = helium::timer::parse_duration(&args.every)?;
+
     let candidates =
-        helium::timer::candidates(target, hz, period).map_err(|error| error.to_string())?;
-    Ok(format!("Requested: {period}ns; candidates ordered by absolute error, then prescaler.\n{}\nCalculated periods assume the stated CPU clock; oscillator error and ISR latency are not included.", candidates.iter().map(helium::timer::TimerConfig::report).collect::<Vec<_>>().join("\n")))
+        helium::timer::candidates(target, hz, period)
+            .map_err(|error| error.to_string())?;
+
+    Ok(format!(
+        "Requested: {period}ns; candidates ordered by absolute error, then prescaler.\n{}\n\
+         Calculated periods assume the stated CPU clock; oscillator error and ISR latency are not included.",
+        candidates
+            .iter()
+            .map(helium::timer::TimerConfig::report)
+            .collect::<Vec<_>>()
+            .join("\n")
+    ))
 }
