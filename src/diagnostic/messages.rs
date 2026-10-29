@@ -25,6 +25,7 @@ impl crate::timer::TimerError {
 impl DiagnosticKind {
     pub fn message(&self) -> String {
         match self {
+            Self::Numeric { detail } => detail.clone(),
             Self::Array { detail } => detail.clone(),
             Self::MovedValue { name } => format!("Value '{name}' may already have been moved; assign a new value before using it again"),
             Self::GlobalMove { name } => format!("Cannot move global owner '{name}'; access global storage through a temporary borrow"),

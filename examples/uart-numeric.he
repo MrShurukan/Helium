@@ -1,0 +1,39 @@
+device debug=UART0{baud:38400,mode:TX,}
+def input=PortB.0 INPUT;
+
+fn check8(a:i8,b:i8):bool{return a/b==-10 and a%b==-3 and a>>2==-19;}
+fn check16(a:i16,b:i16):bool{return a/b==-10 and a%b==-3 and a>>2==-19;}
+fn check32(a:i32,b:i32):bool{return a/b==-10 and a%b==-3 and a>>2==-19;}
+fn check64(a:i64,b:i64):bool{return a/b==-10 and a%b==-3 and a>>2==-19;}
+fn unsigned8(a:u8,b:u8):bool{return (a/b)*b+a%b==a;}
+fn unsigned16(a:u16,b:u16):bool{return (a/b)*b+a%b==a;}
+fn unsigned32(a:u32,b:u32):bool{return (a/b)*b+a%b==a;}
+fn unsigned64(a:u64,b:u64):bool{return (a/b)*b+a%b==a;}
+fn increment(x:&mut u64){*x=*x+1;}
+
+setup{
+    // Physical input keeps these values dynamic even at LLVM -O2/-Oz.
+    var divisor:u8=7;if input==HIGH{divisor=0;}
+    var signed:i8=-73;
+    var a:[u64;2]=[4294967296;2];increment(&mut a[1]);
+    var value:u64=18446744073709551615;
+    if a[1]==4294967297 and (u8)300==44 and (u16)(i8)255==65535 {
+        debug.write_byte(67);
+    }else{debug.write_byte(70);}
+    debug.flush();
+    if check8(signed,(i8)divisor){debug.write_byte(49);}else{debug.write_byte(70);}
+    if check16(signed,divisor){debug.write_byte(50);}else{debug.write_byte(70);}
+    if check32(signed,divisor){debug.write_byte(51);}else{debug.write_byte(70);}
+    if check64(signed,divisor){debug.write_byte(52);}else{debug.write_byte(70);}
+    if unsigned8(201,divisor){debug.write_byte(53);}else{debug.write_byte(70);}
+    if unsigned16(65535,divisor){debug.write_byte(54);}else{debug.write_byte(70);}
+    if unsigned32(4294967295,divisor){debug.write_byte(55);}else{debug.write_byte(70);}
+    if unsigned64(value,divisor){debug.write_byte(56);}else{debug.write_byte(70);}
+    var count:u16=3;
+    var bits:u8=3;
+    if ((bits<<count)|1)==25 and ((~bits)&15)==12 and (bits^1)==2 {
+        debug.write_byte(66);
+    }else{debug.write_byte(70);}
+    debug.flush();
+}
+loop{}

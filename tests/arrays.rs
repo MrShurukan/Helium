@@ -100,7 +100,7 @@ fn dynamic_bounds_fail_before_out_of_range_memory_access() {
     let mut interpreter = Interpreter::new(&m, 1000).unwrap();
     assert_eq!(
         interpreter.invoke(id, &[ir::Constant::new(ir::Type::U16, 2)]),
-        Err(ir::interpret::Error::Bounds)
+        Err(ir::interpret::Error::Panic(ir::PanicReason::Bounds))
     );
 }
 
@@ -335,7 +335,7 @@ fn slice_bounds_are_dynamic_and_checked() {
     let id = m.functions.iter().find(|f| f.name == "run").unwrap().id;
     assert!(matches!(
         Interpreter::new(&m, 1000).unwrap().invoke(id, &[]),
-        Err(ir::interpret::Error::Bounds)
+        Err(ir::interpret::Error::Panic(ir::PanicReason::Bounds))
     ));
 }
 

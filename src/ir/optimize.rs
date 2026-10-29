@@ -47,8 +47,8 @@ fn fold_constants(module: &mut Module) {
                         Op::Binary(op, left, right) => constants
                             .get(&left)
                             .zip(constants.get(&right))
-                            .map(|(a, b)| interpret::eval_binary(op, *a, *b)),
-                        Op::Widen(value, target) => constants
+                            .and_then(|(a, b)| interpret::eval_binary(op, *a, *b).ok()),
+                        Op::NumericCast(value, target) | Op::Widen(value, target) => constants
                             .get(&value)
                             .map(|v| Constant::new(target, v.ty.numeric_value(v.bits) as u64)),
                         _ => None,

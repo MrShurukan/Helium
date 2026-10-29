@@ -134,14 +134,14 @@ fn argument_and_return_errors_link_to_the_declared_type() {
 
 #[test]
 fn unsupported_machine_type_is_located_before_tool_execution() {
-    let source = "var counter:u32=1; loop {}";
+    let source = "var counter:f32=1.5; loop {}";
     let errors = check(source, "atmega328p").unwrap_err();
     assert_eq!(errors.len(), 1);
     assert!(matches!(
         *errors[0].kind,
-        DiagnosticKind::UnsupportedType { machine: true, .. }
+        DiagnosticKind::UnsupportedType { machine: false, .. }
     ));
-    assert_eq!(excerpt(source, errors[0].location.unwrap()), "u32");
+    assert_eq!(excerpt(source, errors[0].location.unwrap()), "f32");
 }
 
 #[test]
@@ -241,7 +241,7 @@ fn operators_are_primary_and_operands_are_related_locations() {
     let e = error(source, DiagnosticCode::UnaryType);
     assert_eq!(excerpt(source, e.location.unwrap()), "!");
 
-    let source = "loop { var x:u8=4 / 2; }";
+    let source = "loop { var x:u8=4 / 0; }";
     let errors = check(source, "atmega328p").unwrap_err();
     assert_eq!(excerpt(source, errors[0].location.unwrap()), "/");
 }
@@ -276,8 +276,8 @@ fn incomplete_unicode_programs_keep_every_range_inside_the_file() {
 }
 
 #[test]
-fn unsupported_features_are_rejected_even_after_a_return() {
-    let source = "fn f() { return; var x:u8=4/2; } loop {}";
+fn invalid_constant_arithmetic_is_rejected_even_after_a_return() {
+    let source = "fn f() { return; var x:u8=4/0; } loop {}";
     let errors = check(source, "atmega328p").unwrap_err();
     assert_eq!(excerpt(source, errors[0].location.unwrap()), "/");
 }

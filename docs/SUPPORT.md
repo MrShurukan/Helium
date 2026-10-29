@@ -7,7 +7,7 @@ AVRA, the old linear IR and hand-written AVR assembly generation have been remov
 | --- | --- | --- | --- |
 | bool, PinState | Yes | Yes | Yes |
 | i8/u8, i16/u16 | Yes | Yes | Yes |
-| i32/u32, i64/u64 | Yes | Yes | Located unsupported-type diagnostic |
+| i32/u32, i64/u64 | Yes | Yes | Yes; AVR machine regression coverage |
 | Float and legacy `string` type | Basic type checks | Not implemented | Not implemented |
 | UTF-8 literals, `&str` parameters/locals, len/byte_or | Yes; no escaping references | Universal Flash/SRAM text; byte interpreter | Yes; source literals in Flash |
 | std::uart print/println | Ordinary Helium extension functions | UART requires machine simulator | Yes |
@@ -16,13 +16,14 @@ AVRA, the old linear IR and hand-written AVR assembly generation have been remov
 | Temporary `&[T]` / `&mut [T]` slices | Whole-array loans, runtime element count; no subranges | Yes | Yes; SRAM pointer + u16 length |
 | `.clone()` on scalar arrays and Copy values | Resolved Clone capability; owners remain Move | Independent aggregate value | Yes |
 | Temporary `&[T; N]` / `&mut [T; N]` parameters and reborrow | Whole-array alias checks, helpers/globals/ISR | Yes; no escaping refs | Yes |
-| Temporary scalar references, dereference/write, element references | Whole-object loans, reborrow, no escaping refs; referent Clone | Yes; element bounds at address creation | Yes; SRAM pointers, 8/16-bit scalars |
+| Temporary scalar references, dereference/write, element references | Whole-object loans, reborrow, no escaping refs; referent Clone | Yes; element bounds at address creation | Yes; SRAM pointers, integer scalars through 64 bits |
 | Comparisons, short-circuit and/or, ternary, if, while | Yes | Yes | Yes |
 | fn, arguments by value, explicit return | Yes | Yes | Yes for supported types |
 | Direct or indirect recursion | Rejected | — | — |
 | Shadowing | Rejected | — | — |
 | for ranges | Integer bound checks | Not implemented | Not implemented |
-| Division | Numeric type checks | Not implemented | Not implemented |
+| Integer division/remainder, shifts, bitwise operations | Checked operands and constant failures | Yes; classified panic | Yes; guarded operations |
+| Explicit `(T)value` integer cast | Numeric-only; target width controls truncation | NumericCast, distinct from Widen | Yes |
 | GPIO reads/writes, !Pin, INPUT_PULLUP | Yes | Yes | Yes |
 | Internal pull-down on ATmega328P | Recognized | Rejected | Rejected |
 | Stored/computed PinMode values | Basic type checks | Not implemented | Not implemented |
@@ -45,13 +46,16 @@ Restrictions apply to unreachable source too, so optimization does not silently 
 whether an unsupported feature is accepted.
 
 After analysis, all expression types are concrete, including operands of comparisons
-and statements after return. Unconstrained integer expressions default to i32 before
-the machine support check and receive located unsupported-type diagnostics. A signed
+and statements after return. Unconstrained integer expressions default to executable i32 before
+the machine support check. A signed
 literal such as -128:i8 is validated as a whole, not as a separate positive i8 token.
 Computed PinMode expressions and first-class pin selection are rejected before lowering;
 constant (including grouped/chained) pin mode statements remain supported.
 
 ## Semantic rules
+
+Integer operations, explicit casts, panic and future numeric stages: [NUMERIC.md](NUMERIC.md).
+Float casts remain non-executable until N3; usize/isize and custom panic remain planned.
 
 Array syntax, ownership, call-scoped borrows and bounds failure policy: [ARRAYS.md](ARRAYS.md).
 Temporary scalar/element references and explicit dereference are described in [REFERENCES.md](REFERENCES.md).
@@ -60,7 +64,7 @@ Reference variables/returns (except existing local &str), subranges, references 
 - Names cannot shadow a visible variable, parameter, pin or function. Separate sibling scopes
   can reuse local names. Functions can be called before declaration.
 - Integer literals must fit their contextual type. Unsuffixed, unconstrained integers default
-  to i32, which currently needs an explicit smaller type for machine compilation.
+  to i32, including machine compilation.
 - Implicit integer conversions must be lossless. Arithmetic wraps in the operation's width;
   widening its result does not undo an earlier overflow.
 - Arguments and expression operands evaluate left to right. `and`, `or` and ternary evaluate

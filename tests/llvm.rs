@@ -49,9 +49,9 @@ fn llvm_adapter_preserves_effects_and_wrapping_contract() {
 }
 
 #[test]
-fn unsupported_machine_width_is_reported_before_running_tools() {
+fn wider_machine_width_is_supported() {
     let module = compile("var x:u32=1; loop { x=x+1; }");
-    assert!(llvm::emit(&module, false).unwrap_err().contains("8/16-bit"));
+    assert!(llvm::emit(&module, false).unwrap().contains("add i32"));
 }
 
 #[test]

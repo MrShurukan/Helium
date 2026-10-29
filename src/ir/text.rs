@@ -126,6 +126,7 @@ fn values(op: &mut Op, mut apply: impl FnMut(&mut ValueId)) {
         | Op::TextErase(v)
         | Op::InterruptRestore(v)
         | Op::Unary(_, v)
+        | Op::NumericCast(v, _)
         | Op::Widen(v, _)
         | Op::StoreLocal(_, v)
         | Op::StoreGlobal(_, v)

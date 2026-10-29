@@ -1,4 +1,4 @@
-use helium::diagnostic::{DiagnosticCode, DiagnosticKind};
+use helium::diagnostic::DiagnosticCode;
 use helium::frontend::{
     expression::Expression,
     static_type::{FloatType, IntegerType, StaticType},
@@ -32,17 +32,8 @@ fn analyzed_expressions_have_concrete_types_in_every_source_context() {
 }
 
 #[test]
-fn unconstrained_literal_comparison_has_a_located_user_error() {
-    let source = "loop {if 1 < 2 {}}";
-    let errors = check(source, "atmega328p").unwrap_err();
-    assert!(matches!(
-        *errors[0].kind,
-        DiagnosticKind::UnsupportedType { machine: true, .. }
-    ));
-    let location = errors[0].location.unwrap();
-    assert_eq!(location.start_offset, source.find('1').unwrap());
-    assert_eq!(location.end_offset, location.start_offset + 1);
-    assert!(errors.iter().all(|e| e.code() != DiagnosticCode::Internal));
+fn unconstrained_literal_comparison_uses_executable_i32() {
+    check("loop {if 1 < 2 {}}", "atmega328p").unwrap();
 }
 
 #[test]
@@ -50,12 +41,8 @@ fn unsupported_forms_are_rejected_before_dead_code_lowering() {
     for statement in [
         "Led=true ? INPUT : OUTPUT;",
         "INPUT==OUTPUT;",
-        "if 1<2 {}",
-        "take(1<2);",
-        "var test:bool=1<2;",
         "if (true ? Led : Other)==HIGH {}",
         "var mode:PinMode=INPUT;",
-        "var quotient:u8=4/2;",
     ] {
         for prefix in ["", "return;"] {
             let source = format!(
@@ -95,7 +82,7 @@ fn unsupported_forms_are_rejected_before_dead_code_lowering() {
         "fn f():bool {return 1<2;} loop {}",
         "fn f():bool {return true; return 1<2;} loop {}",
     ] {
-        assert!(check(source, "atmega328p").is_err());
+        assert!(check(source, "atmega328p").is_ok());
     }
 }
 

@@ -24,6 +24,10 @@ impl LocatableInSource for Expression {
 
 #[derive(Debug, Clone)]
 pub enum ExpressionType {
+    Cast {
+        target: StaticType,
+        expression: Box<Expression>,
+    },
     Deref(Box<Expression>),
     DerefAssignment {
         reference: Box<Expression>,
@@ -131,7 +135,7 @@ impl Expression {
     /// Visit immediate operands in source evaluation order (not recursively).
     pub fn for_each_child(&self, mut visit: impl FnMut(&Expression)) {
         match &self.expression_type {
-            ExpressionType::Deref(e) => visit(e),
+            ExpressionType::Cast { expression: e, .. } | ExpressionType::Deref(e) => visit(e),
             ExpressionType::DerefAssignment { reference, value } => {
                 visit(reference);
                 visit(value);
@@ -177,7 +181,7 @@ impl Expression {
     /// Mutable counterpart for type finalization.
     pub fn for_each_child_mut(&mut self, mut visit: impl FnMut(&mut Expression)) {
         match &mut self.expression_type {
-            ExpressionType::Deref(e) => visit(e),
+            ExpressionType::Cast { expression: e, .. } | ExpressionType::Deref(e) => visit(e),
             ExpressionType::DerefAssignment { reference, value } => {
                 visit(reference);
                 visit(value);
@@ -367,6 +371,7 @@ impl Display for Expression {
         }
 
         match &self.expression_type {
+            ExpressionType::Cast { target, expression } => write!(f, "({target}){expression}"),
             ExpressionType::Deref(e) => write!(f, "*({e})"),
             ExpressionType::DerefAssignment { reference, value } => {
                 write!(f, "*({reference}) = {value}")

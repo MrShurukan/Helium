@@ -86,9 +86,10 @@ impl Scanner<'_> {
         use TokenType::Punctuation as P;
 
         let grapheme = Self::advance(peekable, position_info)
-            .ok_or_else(|| SE::new(SET::NoMoreTokens, position_info, source))?;
+            .ok_or_else(|| SE::new(SET::NoMoreTokens, position_info, source))?
+            .to_owned();
 
-        let token = match grapheme {
+        let token = match grapheme.as_str() {
             // Single char punctuation
             "(" => Some(Self::produce_token(P(PT::LeftParen), position_info)),
             ")" => Some(Self::produce_token(P(PT::RightParen), position_info)),
@@ -105,6 +106,10 @@ impl Scanner<'_> {
             "?" => Some(Self::produce_token(P(PT::Question), position_info)),
             ":" => Some(Self::produce_token(P(PT::Colon), position_info)),
 
+            "%" => Some(Self::produce_token(P(PT::Percent), position_info)),
+            "|" => Some(Self::produce_token(P(PT::Pipe), position_info)),
+            "^" => Some(Self::produce_token(P(PT::Caret), position_info)),
+            "~" => Some(Self::produce_token(P(PT::Tilde), position_info)),
             // Check for multichar punctuation (by checking the next char)
             "!" => Some(Self::next_grapheme_check(
                 "=",
@@ -120,6 +125,9 @@ impl Scanner<'_> {
                 peekable,
                 position_info,
             )),
+            "<" if Self::consume_if_matches("<", peekable, position_info) => {
+                Some(Self::produce_token(P(PT::ShiftLeft), position_info))
+            }
             "<" => Some(Self::next_grapheme_check(
                 "=",
                 P(PT::LessEqual),
@@ -127,6 +135,9 @@ impl Scanner<'_> {
                 peekable,
                 position_info,
             )),
+            ">" if Self::consume_if_matches(">", peekable, position_info) => {
+                Some(Self::produce_token(P(PT::ShiftRight), position_info))
+            }
             ">" => Some(Self::next_grapheme_check(
                 "=",
                 P(PT::GreaterEqual),
@@ -185,7 +196,7 @@ impl Scanner<'_> {
             }
 
             _ => {
-                let error_type = ScannerErrorType::UnknownToken(String::from(grapheme));
+                let error_type = ScannerErrorType::UnknownToken(grapheme);
                 return Err(SE::new(error_type, position_info, source));
             }
         };

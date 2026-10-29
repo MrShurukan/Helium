@@ -37,12 +37,16 @@ assignment      -> IDENTIFIER "=" assignment | indexed "=" assignment | "*" unar
 indexed         -> primary "[" expression "]" ;
 ternary         -> logic_or ( "?" logic_or ":" logic_or )? ;
 logic_or        -> logic_and ( "or" logic_and )* ;
-logic_and       -> equality ( "and" equality )* ;
+logic_and       -> bit_or ( "and" bit_or )* ;
+bit_or          -> bit_xor ( "|" bit_xor )* ;
+bit_xor         -> bit_and ( "^" bit_and )* ;
+bit_and         -> equality ( "&" equality )* ;
 equality        -> comparison ( ( "!=" | "==" ) comparison )* ;
-comparison      -> term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
+comparison      -> shift ( ( ">" | ">=" | "<" | "<=" ) shift )* ;
+shift           -> term ( ( "<<" | ">>" ) term )* ;
 term            -> factor ( ( "-" | "+" ) factor )* ;
-factor          -> unary ( ( "*" | "/" ) unary )* ;
-unary           -> ( "!" | "-" | "*" ) unary | "&" "mut"? unary | call ;
+factor          -> unary ( ( "*" | "/" | "%" ) unary )* ;
+unary           -> ( "!" | "~" | "-" | "*" ) unary | "&" "mut"? unary | "(" TYPE ")" unary | call ;
 call            -> qualifiedName "(" arguments? ")" | IDENTIFIER "." IDENTIFIER "(" arguments? ")" | primary "." "clone" "(" ")" | indexed | primary ;
 arguments       -> expression ( "," expression )* ;
 primary         -> INTEGER | FLOAT | STRING | BOOLEAN | PINSTATE | PINMODE
@@ -95,3 +99,5 @@ modeField       -> "mode" ":" "TX" "," ;
 // Value contracts: docs/VALUES.md. .clone() resolves Clone in the common registry.
 // Scalar arrays clone their contents; shared views clone the view. User markers remain future work.
 // Fixed arrays and temporary array references: docs/ARRAYS.md.
+
+// Numeric cast/arithmetic/panic contract and future stages: docs/NUMERIC.md.

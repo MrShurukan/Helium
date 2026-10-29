@@ -66,27 +66,20 @@ pub fn validate_pins(
 
 /// Catch source limitations before lowering discards source syntax or dead code.
 pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), Vec<Diagnostic>> {
-    use crate::frontend::{
-        static_type::{IntegerType as I, SignedIntegerType as SI, UnsignedIntegerType as UI},
-        utils::SourceLocation,
-    };
-    fn check_type(ty: T, span: SourceLocation, machine: bool, errors: &mut Vec<Diagnostic>) {
+    use crate::frontend::utils::SourceLocation;
+    fn check_type(ty: T, span: SourceLocation, _machine: bool, errors: &mut Vec<Diagnostic>) {
         if let T::Ref(element, _) = ty {
-            check_type(element.ty(), span, machine, errors);
+            check_type(element.ty(), span, _machine, errors);
             return;
         }
         if let Some((element, _)) = ty.sequence() {
-            check_type(element.ty(), span, machine, errors);
+            check_type(element.ty(), span, _machine, errors);
             return;
         }
-        let unsupported =
-            match ty {
-                T::Integer(
-                    I::Signed(SI::Int32 | SI::Int64) | I::Unsigned(UI::Uns32 | UI::Uns64),
-                ) if machine => Some(true),
-                T::Float(_) | T::String | T::Array(_) | T::PinMode | T::Pin => Some(false),
-                _ => None,
-            };
+        let unsupported = match ty {
+            T::Float(_) | T::String | T::Array(_) | T::PinMode | T::Pin => Some(false),
+            _ => None,
+        };
         if let Some(machine) = unsupported {
             errors.push(Diagnostic::new(
                 DiagnosticKind::UnsupportedType { ty, machine },
@@ -123,21 +116,6 @@ pub fn validate_features(statements: &[Statement], machine: bool) -> Result<(), 
     }
 
     fn expr(e: &Expression, machine: bool, errors: &mut Vec<Diagnostic>) {
-        use crate::frontend::token_type::{PunctuationType as P, TokenType};
-        if let E::Binary {
-            operator: TokenType::Punctuation(P::Slash),
-            operator_location,
-            ..
-        } = &e.expression_type
-        {
-            errors.push(Diagnostic::new(
-                DiagnosticKind::TypedIrUnsupported {
-                    feature: "division (rounding and zero-divisor semantics are not defined yet)"
-                        .into(),
-                },
-                Some(*operator_location),
-            ));
-        }
         // Direct/grouped pins are physical reads. Selecting a first-class pin is
         // not supported, even if the whole expression will later be discarded.
         if e.static_type != T::Pin || matches!(e.expression_type, E::Ternary { .. }) {

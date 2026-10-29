@@ -175,6 +175,42 @@ impl Analyzer {
             self.coerce(expr, target);
         }
         expr.for_each_child_mut(|child| self.finalize_expression(child));
+        if let E::Binary {
+            operator: Token::Punctuation(op),
+            left,
+            right,
+            operator_location,
+        } = &expr.expression_type
+        {
+            let count = constant_integer(right);
+            let bounds = integer_bounds(left.static_type);
+            let problem = match op {
+                P::Slash | P::Percent if count == Some(0) => Some("Division or remainder by zero"),
+                P::Slash
+                    if bounds
+                        .is_some_and(|(min, _)| min < 0 && constant_integer(left) == Some(min))
+                        && count == Some(-1) =>
+                {
+                    Some("Signed division result does not fit the operand type (MIN / -1)")
+                }
+                P::ShiftLeft | P::ShiftRight
+                    if bounds.is_some_and(|(min, max)| {
+                        count.is_some_and(|n| n < 0 || n >= i128::from((max - min + 1).ilog2()))
+                    }) =>
+                {
+                    Some("Shift count must be nonnegative and smaller than the left operand width")
+                }
+                _ => None,
+            };
+            if let Some(detail) = problem {
+                self.error(
+                    DiagnosticKind::Numeric {
+                        detail: detail.into(),
+                    },
+                    *operator_location,
+                );
+            }
+        }
     }
 
     fn resolve(&self, name: &str) -> Option<SymbolId> {
@@ -759,6 +795,18 @@ impl Analyzer {
                 );
                 T::Unknown
             }),
+            E::Cast { target, expression } => {
+                let source = self.expression(expression);
+                if !numeric(source) || !numeric(*target) {
+                    self.error(
+                        DiagnosticKind::Numeric {
+                            detail: "Numeric cast requires numeric source and target types".into(),
+                        },
+                        span,
+                    );
+                }
+                *target
+            }
             E::Grouping { expression } => self.expression(expression),
             E::Unary {
                 operator, right, ..
@@ -766,6 +814,7 @@ impl Analyzer {
                 let operand = self.expression(right);
 
                 match (operator, operand) {
+                    (P::Tilde, T::Integer(_)) => operand,
                     (P::Bang, T::Boolean) => T::Boolean,
                     (P::Bang, T::Pin | T::PinState) => T::PinState,
                     (P::Minus, T::Integer(I::Signed(_) | I::Literal) | T::Float(_)) => operand,
@@ -796,6 +845,16 @@ impl Analyzer {
                     match operator {
                         Token::Keyword(K::And | K::Or) if a == T::Boolean && b == T::Boolean => {
                             T::Boolean
+                        }
+                        Token::Punctuation(P::ShiftLeft | P::ShiftRight)
+                            if matches!(a, T::Integer(_)) && matches!(b, T::Integer(_)) =>
+                        {
+                            a
+                        }
+                        Token::Punctuation(P::Percent | P::Ampersand | P::Pipe | P::Caret)
+                            if matches!(a, T::Integer(_)) && matches!(b, T::Integer(_)) =>
+                        {
+                            self.common_numeric(left, right)
                         }
                         Token::Punctuation(P::Plus | P::Minus | P::Star | P::Slash)
                             if numeric(a) && numeric(b) =>
@@ -990,6 +1049,12 @@ impl Analyzer {
             b
         } else if widening(b, a) {
             a
+        } else if let Some(t) = [SI::Int8, SI::Int16, SI::Int32, SI::Int64]
+            .into_iter()
+            .map(|s| T::Integer(I::Signed(s)))
+            .find(|t| widening(a, *t) && widening(b, *t))
+        {
+            t
         } else {
             self.errors.push(
                 Diagnostic::new(
@@ -1117,6 +1182,11 @@ impl Analyzer {
             match &mut expr.expression_type {
                 E::Grouping { expression } => self.coerce(expression, target),
                 E::Unary {
+                    operator: P::Tilde,
+                    right,
+                    ..
+                } => self.coerce(right, target),
+                E::Unary {
                     operator: P::Minus,
                     right,
                     ..
@@ -1127,9 +1197,16 @@ impl Analyzer {
                         self.coerce(right, target);
                     }
                 }
-                E::Binary { left, right, .. } => {
+                E::Binary {
+                    left,
+                    right,
+                    operator,
+                    ..
+                } => {
                     self.coerce(left, target);
-                    self.coerce(right, target);
+                    if !matches!(operator, Token::Punctuation(P::ShiftLeft | P::ShiftRight)) {
+                        self.coerce(right, target);
+                    }
                 }
                 E::Ternary { second, third, .. } => {
                     self.coerce(second, target);
@@ -1234,6 +1311,11 @@ fn constant_integer(expr: &Expression) -> Option<i128> {
     }
     let raw = match &expr.expression_type {
         E::Grouping { expression } => return constant_integer(expression),
+        E::Cast { target, expression } => {
+            let value = constant_integer(expression)?;
+            let (min, max) = integer_bounds(*target)?;
+            return Some((value - min).rem_euclid(max - min + 1) + min);
+        }
         E::Binary {
             left,
             right,

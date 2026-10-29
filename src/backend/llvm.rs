@@ -38,38 +38,6 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
         return Err("Device configuration belongs to a different target description".into());
     }
 
-    // Reject wider integers until their machine-level behavior is covered by tests.
-    let types = module
-        .globals
-        .iter()
-        .map(|s| s.ty)
-        .chain(module.functions.iter().flat_map(|f| {
-            f.locals
-                .iter()
-                .map(|s| s.ty)
-                .chain(f.parameters.iter().map(|(_, t)| *t))
-                .chain(f.return_type)
-                .chain(
-                    f.blocks
-                        .iter()
-                        .flat_map(|b| b.instructions.iter())
-                        .filter_map(|i| i.result.map(|(_, t)| t)),
-                )
-        }));
-    if types.into_iter().any(|t| {
-        t.sequence()
-            .map_or_else(
-                || t.reference().map_or(t, |(t, _)| t),
-                |(e, _)| Type::element(e),
-            )
-            .integer()
-            .is_some_and(|(w, _)| w > 16)
-    }) {
-        return Err(
-            "LLVM prototype currently supports only bool, PinState and 8/16-bit integers".into(),
-        );
-    }
-
     let linkage = if export_symbols { "" } else { "internal " };
     let mut out = format!("; Helium LLVM prototype: wrapping arithmetic, explicit hardware effects\ntarget triple = \"{}\"\n\n", target.llvm_triple);
     for device in &module.devices {
@@ -87,6 +55,7 @@ pub fn emit(module: &Module, export_symbols: bool) -> Result<String, String> {
         writeln!(out, "; helium-timing: {line}").unwrap();
     }
     super::text::emit(module, &mut out);
+    super::numeric::emit_helpers(module, &mut out);
     if module
         .functions
         .iter()
@@ -108,10 +77,8 @@ entry:
 ok:
   ret void
 fail:
-  call void asm sideeffect "cli", "~{memory}"()
-  br label %halt
-halt:
-  br label %halt
+  call addrspace(1) void @helium_panic(i8 1)
+  unreachable
 }
 "#,
         );
@@ -450,14 +417,34 @@ impl FunctionEmitter<'_> {
                 )
             }
             Op::Const(c) => format!("or {} 0, {}", ty(c.ty), c.bits),
+            Op::Unary(Unary::BitNot, v) => format!("xor {}, -1", self.value(*v)),
             Op::Unary(Unary::Negate, v) => format!("sub {} 0, %v{}", ty(self.types[v]), v.index),
             Op::Unary(Unary::Not, v) => format!("xor {}, 1", self.value(*v)),
+            Op::Binary(
+                op @ (Binary::Divide | Binary::Remainder | Binary::ShiftLeft | Binary::ShiftRight),
+                a,
+                b,
+            ) => {
+                format!(
+                    "call addrspace(1) {} @{}({}, {})",
+                    ty(self.types[a]),
+                    super::numeric::helper_name(*op, self.types[a], self.types[b]),
+                    self.value(*a),
+                    self.value(*b)
+                )
+            }
             Op::Binary(op, a, b) => {
                 let signed = self.types[a].integer().is_some_and(|(_, signed)| signed);
                 let name = match op {
                     Binary::Add => "add",
                     Binary::Subtract => "sub",
                     Binary::Multiply => "mul",
+                    Binary::BitAnd => "and",
+                    Binary::BitOr => "or",
+                    Binary::BitXor => "xor",
+                    Binary::Divide | Binary::Remainder | Binary::ShiftLeft | Binary::ShiftRight => {
+                        unreachable!()
+                    }
                     Binary::Equal => "icmp eq",
                     Binary::NotEqual => "icmp ne",
                     Binary::Less => {
@@ -490,6 +477,36 @@ impl FunctionEmitter<'_> {
                     }
                 };
                 format!("{name} {}, %v{}", self.value(*a), b.index)
+            }
+            Op::NumericCast(v, target) | Op::Widen(v, target)
+                if target.integer().is_some_and(|(w, _)| w == 64)
+                    && self.types[v].integer().is_some_and(|(w, s)| s && w < 64) =>
+            {
+                let bits = self.types[v].integer().unwrap().0;
+                format!(
+                    "call addrspace(1) i64 @helium_sext{bits}_64({})",
+                    self.value(*v)
+                )
+            }
+            Op::NumericCast(v, target) => {
+                let from = self.types[v].integer().ok_or("cast source")?;
+                let to = target.integer().ok_or("cast target")?;
+                if from.0 == to.0 {
+                    format!("or {}, 0", self.value(*v))
+                } else {
+                    format!(
+                        "{} {} to {}",
+                        if from.0 > to.0 {
+                            "trunc"
+                        } else if from.1 {
+                            "sext"
+                        } else {
+                            "zext"
+                        },
+                        self.value(*v),
+                        ty(*target)
+                    )
+                }
             }
             Op::Widen(v, target) => {
                 if self.types[v] == *target {

@@ -816,6 +816,11 @@ impl<'a> Builder<'a> {
                 Type::Text,
                 origin.clone(),
             ),
+            E::Cast { target, expression } => {
+                let v = self.value(expression)?;
+                let target = ty(*target, expr.source_location)?;
+                self.emit(Op::NumericCast(v, target), target, origin.clone())
+            }
             E::CapabilityCall {
                 arguments,
                 implementation,
@@ -911,6 +916,7 @@ impl<'a> Builder<'a> {
             } => {
                 let value = self.value(right)?;
                 let op = match operator {
+                    P::Tilde => Unary::BitNot,
                     P::Minus => Unary::Negate,
                     P::Bang => Unary::Not,
                     _ => return Err(invalid("unary operator", expr.source_location)),
@@ -972,6 +978,13 @@ impl<'a> Builder<'a> {
                         P::Plus => Binary::Add,
                         P::Minus => Binary::Subtract,
                         P::Star => Binary::Multiply,
+                        P::Slash => Binary::Divide,
+                        P::Percent => Binary::Remainder,
+                        P::ShiftLeft => Binary::ShiftLeft,
+                        P::ShiftRight => Binary::ShiftRight,
+                        P::Ampersand => Binary::BitAnd,
+                        P::Pipe => Binary::BitOr,
+                        P::Caret => Binary::BitXor,
                         P::EqualEqual => Binary::Equal,
                         P::BangEqual => Binary::NotEqual,
                         P::Less => Binary::Less,

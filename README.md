@@ -3,6 +3,9 @@
 Helium is a small, statically typed language for AVR microcontrollers, implemented in Rust.
 The current executable target is **ATmega328P**. LLVM is the only machine backend.
 See [supported language features](docs/SUPPORT.md) before using a feature.
+Integer arithmetic through 64 bits, explicit `(T)value` casts, bit operations and
+planned stages are described in [the numeric contract](docs/NUMERIC.md).
+See [the executable UART example](examples/uart-numeric.he).
 For architecture, decisions, review priorities and current limitations, start with
 the [review handoff](docs/HANDOFF.md).
 

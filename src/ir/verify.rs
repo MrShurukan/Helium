@@ -890,6 +890,7 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                     let ty = value_type(*value)?;
                     require(
                         match op {
+                            Unary::BitNot => ty.integer().is_some(),
                             Unary::Negate => ty.integer().is_some_and(|(_, signed)| signed),
                             Unary::Not => matches!(ty, Type::Bool | Type::PinState),
                         },
@@ -900,7 +901,11 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                 Op::Binary(op, left, right) => {
                     let ty = value_type(*left)?;
                     require(
-                        ty == value_type(*right)?,
+                        if matches!(op, Binary::ShiftLeft | Binary::ShiftRight) {
+                            value_type(*right)?.integer().is_some()
+                        } else {
+                            ty == value_type(*right)?
+                        },
                         "binary operands must have identical types",
                     )?;
                     require(
@@ -912,6 +917,13 @@ fn verify_function(module: &Module, function: &Function) -> Result<(), Error> {
                         "invalid binary operand type",
                     )?;
                     Some(if op.comparison() { Type::Bool } else { ty })
+                }
+                Op::NumericCast(value, target) => {
+                    require(
+                        value_type(*value)?.integer().is_some() && target.integer().is_some(),
+                        "numeric cast requires integers",
+                    )?;
+                    Some(*target)
                 }
                 Op::Widen(value, target) => {
                     require(

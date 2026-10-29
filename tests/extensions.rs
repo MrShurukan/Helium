@@ -162,7 +162,7 @@ fn unused_generic_bodies_are_checked_even_without_any_real_devices() {
     assert!(p.analyze().is_err());
     let mut p = Project::memory("main.he", "import extension std::uart::UartText; loop{}");
     assert!(compile(&mut p).devices.is_empty());
-    let mut p = Project::memory("main.he", "fn unused(device d:UartTx){var x:u32=1;} loop{}");
+    let mut p = Project::memory("main.he", "fn unused(device d:UartTx){var x:f32=1;} loop{}");
     assert!(helium::compile_project_llvm(&mut p, &ATMEGA328P, options()).is_err());
 }
 

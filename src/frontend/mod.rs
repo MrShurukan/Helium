@@ -1134,9 +1134,42 @@ impl Parser<'_> {
     }
 
     fn logic_and(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
-        let expr = parse_binary_with_error_produce!(self, TT::Keyword(KT::And), tokens, equality);
+        let expr = parse_binary_with_error_produce!(self, TT::Keyword(KT::And), tokens, bit_or);
 
         Some(expr)
+    }
+
+    fn bit_or(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
+        Some(parse_binary_with_error_produce!(
+            self,
+            TT::Punctuation(PT::Pipe),
+            tokens,
+            bit_xor
+        ))
+    }
+
+    fn bit_xor(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
+        Some(parse_binary_with_error_produce!(
+            self,
+            TT::Punctuation(PT::Caret),
+            tokens,
+            bit_and
+        ))
+    }
+
+    fn bit_and(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
+        let mut expr = self.equality(tokens)?;
+        parse_binary!(self, TT::Punctuation(PT::Ampersand), expr, tokens, equality);
+        Some(expr)
+    }
+
+    fn shift(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
+        Some(parse_binary_with_error_produce!(
+            self,
+            TT::Punctuation(PT::ShiftLeft | PT::ShiftRight),
+            tokens,
+            term
+        ))
     }
 
     // != ==
@@ -1157,7 +1190,7 @@ impl Parser<'_> {
             self,
             TT::Punctuation(PT::Greater | PT::GreaterEqual | PT::Less | PT::LessEqual),
             tokens,
-            term
+            shift
         );
 
         Some(expr)
@@ -1181,7 +1214,7 @@ impl Parser<'_> {
     fn factor(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
         let expr = parse_binary_with_error_produce!(
             self,
-            TT::Punctuation(PT::Star | PT::Slash),
+            TT::Punctuation(PT::Star | PT::Slash | PT::Percent),
             TT::Punctuation(PT::Slash),
             tokens,
             unary
@@ -1192,6 +1225,38 @@ impl Parser<'_> {
 
     // ! - (as unary operator)
     fn unary(&mut self, tokens: &mut TokenIterator) -> Option<Expression> {
+        if matches!(
+            tokens.lookahead(0).map(|t| &t.token_type),
+            Some(TT::Punctuation(PT::LeftParen))
+        ) && matches!(
+            tokens.lookahead(1).map(|t| &t.token_type),
+            Some(TT::Type(_))
+        ) {
+            let start = tokens.advance()?.source_location;
+            let TT::Type(target) = tokens.advance()?.token_type else {
+                unreachable!()
+            };
+            check_and_consume!(
+                self,
+                tokens,
+                TT::Punctuation(PT::RightParen),
+                "Expected ')' after cast type"
+            );
+            let expression = self.unary(tokens)?;
+            return Some(Expression {
+                symbol: None,
+                static_type: target,
+                source_location: utils::SourceLocation::new_from_start_end(
+                    start,
+                    expression.source_location,
+                ),
+                expression_type: ExpressionType::Cast {
+                    target,
+                    expression: Box::new(expression),
+                },
+            });
+        }
+
         if matches!(self.peek(tokens)?.token_type, TT::Punctuation(PT::Star)) {
             let start = tokens.advance()?.source_location;
             let reference = self.unary(tokens)?;
@@ -1229,7 +1294,7 @@ impl Parser<'_> {
             });
         }
         let token = self.peek(tokens)?;
-        if let TT::Punctuation(PT::Bang | PT::Minus) = &token.token_type {
+        if let TT::Punctuation(PT::Bang | PT::Minus | PT::Tilde) = &token.token_type {
             let token = token.clone();
             tokens.advance();
             let right = self.unary(tokens)?;

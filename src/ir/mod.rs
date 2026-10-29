@@ -200,6 +200,16 @@ impl fmt::Display for Type {
     }
 }
 
+/// Stable reasons shared by runtime guards and the interpreter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PanicReason {
+    Bounds = 1,
+    DivisionByZero = 2,
+    DivisionOverflow = 3,
+    InvalidShift = 4,
+}
+
 /// Canonical bit pattern; signed integers use two's complement. No host overflow semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Constant {
@@ -221,6 +231,13 @@ pub enum Binary {
     Add,
     Subtract,
     Multiply,
+    Divide,
+    Remainder,
+    ShiftLeft,
+    ShiftRight,
+    BitAnd,
+    BitOr,
+    BitXor,
     Equal,
     NotEqual,
     Less,
@@ -231,13 +248,22 @@ pub enum Binary {
 
 impl Binary {
     pub fn comparison(self) -> bool {
-        !matches!(self, Self::Add | Self::Subtract | Self::Multiply)
+        matches!(
+            self,
+            Self::Equal
+                | Self::NotEqual
+                | Self::Less
+                | Self::LessEqual
+                | Self::Greater
+                | Self::GreaterEqual
+        )
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unary {
     Negate,
+    BitNot,
     Not,
 }
 
@@ -321,6 +347,7 @@ pub enum Op {
     Unary(Unary, ValueId),
     Binary(Binary, ValueId, ValueId),
     Widen(ValueId, Type),
+    NumericCast(ValueId, Type),
     LoadLocal(LocalId),
     StoreLocal(LocalId, ValueId),
     LoadGlobal(GlobalId),
@@ -355,6 +382,7 @@ impl Op {
             Self::Intrinsic { arguments, .. } => arguments.clone(),
             Self::InterruptRestore(a)
             | Self::Unary(_, a)
+            | Self::NumericCast(a, _)
             | Self::Widen(a, _)
             | Self::StoreLocal(_, a)
             | Self::StoreGlobal(_, a)
@@ -371,7 +399,22 @@ impl Op {
             self,
             Self::Const(_)
                 | Self::Unary(..)
-                | Self::Binary(..)
+                | Self::Binary(
+                    Binary::Add
+                        | Binary::Subtract
+                        | Binary::Multiply
+                        | Binary::BitAnd
+                        | Binary::BitOr
+                        | Binary::BitXor
+                        | Binary::Equal
+                        | Binary::NotEqual
+                        | Binary::Less
+                        | Binary::LessEqual
+                        | Binary::Greater
+                        | Binary::GreaterEqual,
+                    ..
+                )
+                | Self::NumericCast(..)
                 | Self::Widen(..)
                 | Self::LoadLocal(_)
         )
@@ -677,6 +720,7 @@ impl fmt::Display for Op {
                 match op {
                     Unary::Negate => "neg",
                     Unary::Not => "not",
+                    Unary::BitNot => "bitnot",
                 },
                 value.index
             ),
@@ -685,6 +729,14 @@ impl fmt::Display for Op {
                     Binary::Add => "add",
                     Binary::Subtract => "sub",
                     Binary::Multiply => "mul",
+                    Binary::Divide => "divide",
+                    Binary::Remainder => "remainder",
+                    Binary::ShiftLeft => "shiftleft",
+                    Binary::ShiftRight => "shiftright",
+                    Binary::BitAnd => "bitand",
+                    Binary::BitOr => "bitor",
+                    Binary::BitXor => "bitxor",
+
                     Binary::Equal => "eq",
                     Binary::NotEqual => "ne",
                     Binary::Less => "lt",
@@ -694,6 +746,7 @@ impl fmt::Display for Op {
                 };
                 write!(f, "{name} v{}, v{}", left.index, right.index)
             }
+            Self::NumericCast(value, target) => write!(f, "cast v{} to {target}", value.index),
             Self::Widen(value, target) => write!(f, "widen v{} to {target}", value.index),
             Self::LoadLocal(local) => write!(f, "load_local l{}", local.index),
             Self::StoreLocal(local, value) => {

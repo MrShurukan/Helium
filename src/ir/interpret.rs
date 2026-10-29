@@ -11,7 +11,7 @@ pub enum Event {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    Bounds,
+    Panic(PanicReason),
     StepLimit,
     CallDepthLimit,
     InvalidInvocation,
@@ -239,7 +239,7 @@ impl<'a> Interpreter<'a> {
                     Op::ElementAddress(a, i, _) => {
                         let (a, i) = (get(a)?.bits as usize, get(i)?.bits as usize);
                         if self.arrays.get(a).and_then(|a| a.get(i)).is_none() {
-                            return Err(Error::Bounds);
+                            return Err(Error::Panic(crate::ir::PanicReason::Bounds));
                         }
                         Some(
                             self.reference(instruction.result.unwrap().1, Reference::Element(a, i)),
@@ -286,7 +286,7 @@ impl<'a> Interpreter<'a> {
                             .arrays
                             .get(get(a)?.bits as usize)
                             .and_then(|a| a.get(get(i).ok()?.bits as usize))
-                            .ok_or(Error::Bounds)?,
+                            .ok_or(Error::Panic(crate::ir::PanicReason::Bounds))?,
                     ),
                     Op::ArrayWrite(a, i, v) => {
                         let (a, i, v) = (get(a)?.bits as usize, get(i)?.bits as usize, get(v)?);
@@ -294,7 +294,7 @@ impl<'a> Interpreter<'a> {
                             .arrays
                             .get_mut(a)
                             .and_then(|a| a.get_mut(i))
-                            .ok_or(Error::Bounds)? = v;
+                            .ok_or(Error::Panic(crate::ir::PanicReason::Bounds))? = v;
                         None
                     }
                     Op::InterruptDisable => {
@@ -377,8 +377,10 @@ impl<'a> Interpreter<'a> {
                     }
                     Op::Const(value) => Some(*value),
                     Op::Unary(op, value) => Some(eval_unary(*op, get(value)?)),
-                    Op::Binary(op, left, right) => Some(eval_binary(*op, get(left)?, get(right)?)),
-                    Op::Widen(value, target) => {
+                    Op::Binary(op, left, right) => {
+                        Some(eval_binary(*op, get(left)?, get(right)?).map_err(Error::Panic)?)
+                    }
+                    Op::NumericCast(value, target) | Op::Widen(value, target) => {
                         let value = get(value)?;
                         Some(Constant::new(
                             *target,
@@ -453,16 +455,42 @@ impl<'a> Interpreter<'a> {
 
 pub(crate) fn eval_unary(op: Unary, value: Constant) -> Constant {
     let bits = match op {
+        Unary::BitNot => !value.bits,
         Unary::Negate => value.bits.wrapping_neg(),
         Unary::Not => u64::from(value.bits == 0),
     };
     Constant::new(value.ty, bits)
 }
 
-pub(crate) fn eval_binary(op: Binary, left: Constant, right: Constant) -> Constant {
+pub(crate) fn eval_binary(
+    op: Binary,
+    left: Constant,
+    right: Constant,
+) -> Result<Constant, PanicReason> {
     let a = left.ty.numeric_value(left.bits);
     let b = right.ty.numeric_value(right.bits);
+    let width = left.ty.integer().map_or(1, |(w, _)| w);
+    if matches!(op, Binary::Divide | Binary::Remainder) && b == 0 {
+        return Err(PanicReason::DivisionByZero);
+    }
+    if op == Binary::Divide
+        && left.ty.integer().is_some_and(|(_, s)| s)
+        && a == -(1i128 << (width - 1))
+        && b == -1
+    {
+        return Err(PanicReason::DivisionOverflow);
+    }
+    if matches!(op, Binary::ShiftLeft | Binary::ShiftRight) && (b < 0 || b >= i128::from(width)) {
+        return Err(PanicReason::InvalidShift);
+    }
     let bits = match op {
+        Binary::Divide => (a / b) as u64,
+        Binary::Remainder => (a % b) as u64,
+        Binary::ShiftLeft => left.bits.wrapping_shl(b as u32),
+        Binary::ShiftRight => (a >> b) as u64,
+        Binary::BitAnd => left.bits & right.bits,
+        Binary::BitOr => left.bits | right.bits,
+        Binary::BitXor => left.bits ^ right.bits,
         Binary::Add => left.bits.wrapping_add(right.bits),
         Binary::Subtract => left.bits.wrapping_sub(right.bits),
         Binary::Multiply => left.bits.wrapping_mul(right.bits),
@@ -473,5 +501,8 @@ pub(crate) fn eval_binary(op: Binary, left: Constant, right: Constant) -> Consta
         Binary::Greater => u64::from(a > b),
         Binary::GreaterEqual => u64::from(a >= b),
     };
-    Constant::new(if op.comparison() { Type::Bool } else { left.ty }, bits)
+    Ok(Constant::new(
+        if op.comparison() { Type::Bool } else { left.ty },
+        bits,
+    ))
 }

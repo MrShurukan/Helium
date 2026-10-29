@@ -166,7 +166,6 @@ fn optimizations_remove_only_dead_pure_work_and_unreachable_effects() {
 fn unsupported_features_fail_with_source_diagnostics() {
     for source in [
         "loop { var x:f32=1.5; }",
-        "loop {var x=4/2;}",
         "loop {for i=0 to 3 {}}",
         "loop { var mode:PinMode=INPUT; }",
     ] {

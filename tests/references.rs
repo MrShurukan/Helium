@@ -56,7 +56,7 @@ fn references_to_elements_check_bounds_and_whole_array_replacement() {
         Interpreter::new(&m, 1000)
             .unwrap()
             .invoke(id, &[ir::Constant::new(ir::Type::U16, 2)]),
-        Err(ir::interpret::Error::Bounds)
+        Err(ir::interpret::Error::Panic(ir::PanicReason::Bounds))
     );
 }
 

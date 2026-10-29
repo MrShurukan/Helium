@@ -202,7 +202,7 @@ fn target_and_support_errors_are_explicit() {
     for source in [
         "loop {var x:f32=1.5;}",
         "loop {for i=0 to 3 {}}",
-        "loop {var x:u8=4/2;}",
+        "loop {var x:u8=4/0;}",
     ] {
         let errors = check(source, "atmega328p").unwrap_err();
         assert!(errors.iter().all(|d| d.location.is_some()), "{source}");

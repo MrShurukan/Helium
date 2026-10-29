@@ -99,6 +99,9 @@ pub enum SharedAccessReason {
 /// Structured facts about an error. Add translations at the presentation layer.
 #[derive(Debug, Clone)]
 pub enum DiagnosticKind {
+    Numeric {
+        detail: String,
+    },
     Array {
         detail: String,
     },
@@ -231,6 +234,7 @@ pub enum DiagnosticKind {
 impl DiagnosticKind {
     pub fn code(&self) -> DiagnosticCode {
         match self {
+            Self::Numeric { .. } => DiagnosticCode::NumericType,
             Self::Array { .. } => DiagnosticCode::Type,
             Self::MovedValue { .. } | Self::GlobalMove { .. } => DiagnosticCode::Ownership,
             Self::Module { .. } => DiagnosticCode::Module,
