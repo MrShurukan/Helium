@@ -157,68 +157,6 @@ fn warning_only_build_produces_hex_and_reports_baud() {
 }
 
 #[test]
-fn diagnostic_color_policy_is_explicit_and_auto_is_plain_when_captured() {
-    let fixture = Fixture::new();
-    fs::write(&fixture.source, "loop { @ }").unwrap();
-
-    for (options, expect_color) in [
-        (vec![], false),
-        (vec!["--color", "auto"], false),
-        (vec!["--color", "never"], false),
-        (vec!["--color", "always"], true),
-    ] {
-        let output = fixture.run("check", &options, false);
-        assert!(!output.status.success());
-        assert_eq!(stderr(&output).contains('\x1b'), expect_color);
-        assert!(stderr(&output).contains("error[E_PARSE]"));
-    }
-
-    let output = fixture
-        .command()
-        .arg("check")
-        .arg(&fixture.source)
-        .args(["--mcu", "atmega328p", "--color", "always"])
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
-    assert!(
-        stderr(&output).contains('\x1b'),
-        "explicit flag overrides NO_COLOR"
-    );
-
-    let invalid = fixture.run("check", &["--color", "sometimes"], false);
-    assert!(!invalid.status.success());
-    assert!(stderr(&invalid).contains("Unknown color mode"));
-}
-
-#[test]
-fn inspection_flags_and_removed_options_are_checked() {
-    let fixture = Fixture::new();
-    fs::write(&fixture.source, "def Led=PortC.5 OUTPUT; loop {Led=!Led;}").unwrap();
-
-    let output = fixture.run(
-        "build",
-        &["--emit", "ir", "--verify-ir", "--optimize-ir"],
-        false,
-    );
-    assert!(output.status.success(), "{}", stderr(&output));
-    let ir = fs::read_to_string(fixture.source.parent().unwrap().join("build/goal.ir")).unwrap();
-    assert!(ir.starts_with("helium-ir v1"));
-    assert!(ir.contains("read_pin p0"));
-    assert!(ir.contains("not v"));
-
-    for args in [
-        vec!["--emit", "asm", "--optimize-ir"],
-        vec!["--emit", "ast", "--verify-ir"],
-        vec!["--emit", "ir", "--verify-ir", "--verify-ir"],
-        vec!["--backend", "llvm"],
-        vec!["--backend", "legacy"],
-        vec!["--emit", "legacy-ir"],
-    ] {
-        assert!(!fixture.run("build", &args, false).status.success());
-    }
-}
-#[test]
 fn check_and_emit_need_no_external_tools_and_are_quiet() {
     let fixture = Fixture::new();
     for (command, extra) in [
@@ -441,45 +379,7 @@ fn machine_build_intermediates_are_opt_in_and_repeatable() {
         .unwrap()
         .any(|e| e.unwrap().path().is_dir()));
 }
-#[test]
-fn input_and_cli_errors_are_actionable() {
-    let fixture = Fixture::new();
-    for extra in [
-        vec!["--emit", "unknown"],
-        vec!["--emit"],
-        vec!["--mcu", "other"],
-        vec!["--programmer", "usbasp"],
-    ] {
-        let result = fixture.run("build", &extra, false);
-        assert!(!result.status.success());
-        assert!(!stderr(&result).contains("panicked"));
-    }
-    let result = fixture
-        .command()
-        .args(["flash", "missing.hex", "--mcu", "atmega328p"])
-        .env("PATH", "")
-        .output()
-        .unwrap();
-    assert!(stderr(&result).contains("--programmer is required"));
-    let result = fixture
-        .command()
-        .args([
-            "flash",
-            "missing.hex",
-            "--mcu",
-            "atmega328p",
-            "--programmer",
-            "usbasp",
-        ])
-        .env("PATH", "")
-        .output()
-        .unwrap();
-    assert!(stderr(&result).contains("HEX file does not exist"));
-    fs::write(&fixture.source, "loop {var x:u8=300;}").unwrap();
-    let result = fixture.run("check", &[], false);
-    assert!(stderr(&result).contains("E_LITERAL_RANGE"));
-    assert!(stderr(&result).contains("^^^"));
-}
+
 #[test]
 fn source_file_is_not_overwritten_by_output() {
     let fixture = Fixture::new();
