@@ -1,9 +1,10 @@
+use helium::backend::microcontroller::SupportedMicrocontroller;
 use helium::ir::{self, Constant, FunctionId, Op, Options, TextSpace, Type};
 
 fn compile(source: &str) -> ir::Module {
     helium::compile_typed_ir(
         source,
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         Options {
             cpu_hz: Some(16_000_000),
             ..Options::default()
@@ -240,7 +241,7 @@ fn protected_call_contract_survives_dispatch_and_specialization() {
 #[test]
 fn specialization_limit_is_explicit_and_does_not_mutate_input() {
     let source = "fn many(a:&str,b:&str,c:&str,d:&str,e:&str,f:&str,g:&str){}loop{}";
-    let errors = helium::compile_llvm(source, "atmega328p", Options::default()).unwrap_err();
+    let errors = helium::compile_llvm(source, SupportedMicrocontroller::Atmega328P, Options::default()).unwrap_err();
     assert!(errors
         .iter()
         .any(|e| e.message().contains("6 text parameters")));

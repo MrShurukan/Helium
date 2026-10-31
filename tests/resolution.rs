@@ -5,6 +5,7 @@ use helium::{
     ir::{self, Options},
     semantic::{BodyId, SymbolKind},
 };
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 #[test]
 fn sibling_names_have_distinct_identities_and_correct_storage() {
@@ -33,7 +34,7 @@ fn sibling_names_have_distinct_identities_and_correct_storage() {
     for optimize in [false, true] {
         let module = compile_typed_ir(
             source,
-            "atmega328p",
+            SupportedMicrocontroller::Atmega328P,
             Options {
                 optimize,
                 ..Options::default()
@@ -142,7 +143,7 @@ fn shared_graph_uses_resource_ids_and_preserves_protection_and_calls() {
         .all(|a| a.protection == Protection::FunctionContract));
     let module = compile_typed_ir(
         source,
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         Options {
             cpu_hz: Some(16_000_000),
             ..Options::default()

@@ -7,11 +7,12 @@ use helium::ir::{
     *,
 };
 use std::{collections::HashMap, fs, path::Path, process::Command};
+use helium::backend::microcontroller::{SupportedMicrocontroller, ATMEGA328P};
 
 fn compile(source: &str) -> Module {
     helium::compile_typed_ir(
         source,
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         Options {
             cpu_hz: None,
             verify: true,
@@ -63,7 +64,7 @@ fn llvm_cli_emits_ir_without_external_tools_and_protects_source() {
     fs::write(&source, text).unwrap();
     let run = |extra: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_helium"))
-            .args(["build", source.to_str().unwrap(), "--mcu", "atmega328p"])
+            .args(["build", source.to_str().unwrap(), "--mcu", ATMEGA328P.name])
             .args(extra)
             .env("PATH", "")
             .env_remove("HELIUM_LLVM_BIN")

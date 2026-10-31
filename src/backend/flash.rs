@@ -1,5 +1,6 @@
 //! External tools are explicit operations; compilation never calls this module.
 use std::{path::Path, process::Command};
+use crate::backend::microcontroller_def::SupportedMicrocontroller;
 
 fn run(tool: &str, command: &mut Command) -> Result<(), String> {
     let output = command
@@ -18,9 +19,8 @@ fn run(tool: &str, command: &mut Command) -> Result<(), String> {
     }
 }
 
-pub fn flash(hex: &Path, mcu: &str, programmer: &str) -> Result<(), String> {
-    let target =
-        super::microcontroller::get(mcu).ok_or_else(|| format!("Unsupported MCU '{mcu}'"))?;
+pub fn flash(hex: &Path, mcu: SupportedMicrocontroller, programmer: &str) -> Result<(), String> {
+    let target = super::microcontroller::get(mcu);
 
     if !hex.is_file() {
         return Err(format!("HEX file does not exist: {}", hex.display()));
@@ -29,6 +29,7 @@ pub fn flash(hex: &Path, mcu: &str, programmer: &str) -> Result<(), String> {
     let hex = hex.canonicalize().map_err(|e| e.to_string())?;
 
     // Explicit Intel HEX format avoids guessing from the filename.
+    // TODO: Maybe change the programmer to an enum too
     run(
         "avrdude",
         Command::new("avrdude").args([

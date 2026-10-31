@@ -4,6 +4,7 @@ use helium::{
     ir::{self, Options},
     timer,
 };
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 #[test]
 fn selected_descriptor_controls_planning_validation_and_emission() {
@@ -52,12 +53,12 @@ fn selected_descriptor_controls_planning_validation_and_emission() {
 #[ignore = "requires LLVM AVR and AVR GNU toolchain"]
 fn toolchain_memory_report_uses_the_supplied_capacity() {
     use helium::backend::llvm_toolchain::{build, Optimization};
-    let text = compile_llvm("loop {}", "atmega328p", Options::default()).unwrap();
+    let llvm = compile_llvm("loop {}", SupportedMicrocontroller::Atmega328P, Options::default()).unwrap();
     let mut descriptor = ATMEGA328P.clone();
     descriptor.flash_bytes = 1;
     let output =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("build/target-capacity/rejected.hex");
-    let error = build(&text, &descriptor, &output, "hex", Optimization::Size).unwrap_err();
+    let error = build(&llvm.output, &descriptor, &output, "hex", Optimization::Size).unwrap_err();
     assert!(error.contains("capacity exceeded"), "{error}");
 }
 
@@ -72,14 +73,14 @@ fn source_verifier_and_emitter_agree_on_every_gpio_boundary() {
             };
             let source = format!("def Pin=Port{port}.{bit} INPUT; loop {{Pin=OUTPUT; Pin=!Pin;}}");
             assert_eq!(
-                compile_llvm(&source, "atmega328p", Options::default()).is_ok(),
+                compile_llvm(&source, SupportedMicrocontroller::Atmega328P, Options::default()).is_ok(),
                 expected,
                 "{port}.{bit}"
             );
             // Forge the same pin in otherwise valid IR to exercise independent boundaries.
             let mut module = compile_typed_ir(
                 "def Pin=PortB.0 INPUT; loop {Pin=OUTPUT; Pin=!Pin;}",
-                "atmega328p",
+                SupportedMicrocontroller::Atmega328P,
                 Options::default(),
             )
             .unwrap();
@@ -106,24 +107,24 @@ fn gpio_operations_use_correct_input_direction_and_latch_addresses() {
     for (port, input, direction, output) in
         [("B", 35, 36, 37), ("C", 38, 39, 40), ("D", 41, 42, 43)]
     {
-        let text = compile_llvm(
+        let llvm = compile_llvm(
             &format!("def Pin=Port{port}.0 INPUT; loop {{Pin=OUTPUT; Pin=!Pin;}}"),
-            "atmega328p",
+            SupportedMicrocontroller::Atmega328P,
             Options::default(),
         )
         .unwrap();
-        assert!(text.contains(&format!(
+        assert!(llvm.output.contains(&format!(
             "load volatile i8, ptr inttoptr (i16 {input} to ptr)"
         )));
-        assert!(!text
+        assert!(!llvm.output
             .lines()
             .any(|l| l.contains("store volatile") && l.contains(&format!("i16 {input} to ptr"))));
         for address in [direction, output] {
             let io = address - 32;
             assert!(
-                text.contains(&format!("sbi {io}, 0")) || text.contains(&format!("cbi {io}, 0"))
+                llvm.output.contains(&format!("sbi {io}, 0")) || llvm.output.contains(&format!("cbi {io}, 0"))
             );
-            assert!(!text
+            assert!(!llvm.output
                 .lines()
                 .any(|l| l.contains("store volatile")
                     && l.contains(&format!("i16 {address} to ptr"))));
@@ -138,7 +139,7 @@ fn timer_limits_encodings_and_register_write_order_remain_exact() {
         let source = format!("timer clock=Timer1 {{every:{period}ns, interrupt {{}}}} loop {{}}");
         let module = compile_typed_ir(
             &source,
-            "atmega328p",
+            SupportedMicrocontroller::Atmega328P,
             Options {
                 cpu_hz: Some(1_000_000),
                 ..Options::default()

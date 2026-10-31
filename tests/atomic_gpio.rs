@@ -3,6 +3,7 @@ use helium::{
     diagnostic::{DiagnosticCode, DiagnosticKind, SharedAccessReason},
     ir::Options,
 };
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 #[test]
 fn pin_conflicts_are_pairwise_and_explain_the_actual_operation() {
@@ -94,7 +95,7 @@ fn gpio_updates_survive_isr_at_every_main_instruction_boundary() {
         for optimize in [false, true] {
             let module = compile_typed_ir(
                 &source,
-                "atmega328p",
+                SupportedMicrocontroller::Atmega328P,
                 Options {
                     optimize,
                     cpu_hz: Some(16_000_000),

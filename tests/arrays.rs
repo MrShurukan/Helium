@@ -2,11 +2,12 @@ use helium::{
     compile_typed_ir,
     ir::{self, interpret::Interpreter, Options},
 };
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 fn compile(source: &str, optimize: bool) -> ir::Module {
     compile_typed_ir(
         source,
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         Options {
             optimize,
             verify: true,

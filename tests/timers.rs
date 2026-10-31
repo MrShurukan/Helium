@@ -4,6 +4,7 @@ use helium::{
     ir::{self, Module, Options},
     timer,
 };
+use helium::backend::microcontroller::{SupportedMicrocontroller, ATMEGA328P};
 
 fn options() -> Options {
     Options {
@@ -13,7 +14,7 @@ fn options() -> Options {
     }
 }
 fn compile(source: &str) -> Module {
-    compile_typed_ir(source, "atmega328p", options()).unwrap_or_else(|e| panic!("{source}\n{e:#?}"))
+    compile_typed_ir(source, SupportedMicrocontroller::Atmega328P, options()).unwrap_or_else(|e| panic!("{source}\n{e:#?}"))
 }
 const TIMER: &str = "timer clock=Timer1 { every: 1s, interrupt { seconds=seconds+1; } }";
 
@@ -92,7 +93,7 @@ fn exact_timer_selection_and_tolerance_use_integer_arithmetic() {
 #[test]
 fn timer_declarations_require_clock_unique_resource_and_supported_target() {
     let source = format!("var seconds:u16=0; {TIMER} loop {{}}");
-    let error = compile_typed_ir(&source, "atmega328p", Options::default()).unwrap_err();
+    let error = compile_typed_ir(&source, SupportedMicrocontroller::Atmega328P, Options::default()).unwrap_err();
     assert_eq!(error[0].code(), DiagnosticCode::Timer);
     assert!(error[0].message().contains("--cpu-hz"));
     for declaration in [
@@ -100,7 +101,7 @@ fn timer_declarations_require_clock_unique_resource_and_supported_target() {
         format!("{TIMER} {}", TIMER.replace("clock", "other")),
     ] {
         let source = format!("var seconds:u16=0; {declaration} loop {{}}");
-        assert!(compile_typed_ir(&source, "atmega328p", options())
+        assert!(compile_typed_ir(&source, SupportedMicrocontroller::Atmega328P, options())
             .unwrap_err()
             .iter()
             .any(|e| e.code() == DiagnosticCode::Timer));
@@ -201,8 +202,8 @@ fn branching_initializers_preserve_startup_and_verification_policy() {
                 optimize,
                 ..options()
             };
-            let module = compile_typed_ir(source, "atmega328p", settings).unwrap();
-            helium::compile_llvm(source, "atmega328p", settings).unwrap();
+            let module = compile_typed_ir(source, SupportedMicrocontroller::Atmega328P, settings).unwrap();
+            helium::compile_llvm(source, SupportedMicrocontroller::Atmega328P, settings).unwrap();
             ir::verify::verify(&module).unwrap();
             let mut runner = ir::interpret::Interpreter::new(&module, 200).unwrap();
             assert_eq!(runner.run_entry(), Err(ir::interpret::Error::StepLimit));
@@ -248,14 +249,14 @@ fn configurable_check_matches_cli_clock_policy() {
     for cpu_hz in [None, Some(0), Some(16_000_000), Some(20_000_001)] {
         let result = helium::check_with_options(
             source,
-            "atmega328p",
+            SupportedMicrocontroller::Atmega328P,
             Options {
                 cpu_hz,
                 ..Options::default()
             },
         );
         let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_helium"));
-        command.args(["check", "examples/timer-seconds.he", "--mcu", "atmega328p"]);
+        command.args(["check", "examples/timer-seconds.he", "--mcu", ATMEGA328P.name]);
         if let Some(hz) = cpu_hz {
             command.args(["--cpu-hz", &hz.to_string()]);
         }
@@ -263,10 +264,10 @@ fn configurable_check_matches_cli_clock_policy() {
         assert_eq!(result.is_ok(), cli.status.success(), "clock {cpu_hz:?}");
         assert_eq!(result.is_ok(), cpu_hz == Some(16_000_000));
     }
-    assert!(helium::check("loop {}", "atmega328p").is_ok());
+    assert!(helium::check("loop {}", SupportedMicrocontroller::Atmega328P).is_ok());
     assert!(helium::check_with_options(
         "loop {}",
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         Options {
             cpu_hz: Some(0),
             ..Options::default()
@@ -283,7 +284,7 @@ fn calculator_and_build_reports_are_available_without_external_tools() {
         .args([
             "timer-options",
             "--mcu",
-            "atmega328p",
+            ATMEGA328P.name,
             "--cpu-hz",
             "16000000",
             "--timer",
@@ -302,7 +303,7 @@ fn calculator_and_build_reports_are_available_without_external_tools() {
             "check",
             "examples/timer-seconds.he",
             "--mcu",
-            "atmega328p",
+            ATMEGA328P.name,
             "--cpu-hz",
             "16000000",
         ])
@@ -339,7 +340,7 @@ fn timer_interrupts_execute_and_resume_main_at_all_optimization_levels() {
     for optimize in [false, true] {
         let mut settings = options();
         settings.optimize = optimize;
-        let module = compile_typed_ir(source, "atmega328p", settings).unwrap();
+        let module = compile_typed_ir(source, SupportedMicrocontroller::Atmega328P, settings).unwrap();
         for level in [Optimization::None, Optimization::Speed, Optimization::Size] {
             let mut text = llvm::emit(&module, true).unwrap();
             // Keep an actual call from the interrupt context to a user function.
@@ -515,7 +516,7 @@ fn timer_diagnostics_locate_period_resource_and_shared_access() {
         name: "timer.he",
         text: source,
     };
-    let error = compile_typed_ir(source, "atmega328p", options())
+    let error = compile_typed_ir(source, SupportedMicrocontroller::Atmega328P, options())
         .unwrap_err()
         .remove(0);
     assert_eq!(error.code(), DiagnosticCode::Timer);

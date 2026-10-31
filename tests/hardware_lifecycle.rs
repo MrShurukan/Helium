@@ -2,11 +2,12 @@ use helium::{
     compile_typed_ir,
     ir::{self, DeviceId, Op, Options, StartupPhase},
 };
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 fn timer_module() -> ir::Module {
     compile_typed_ir(
         "timer clock=Timer1 {every:1s, interrupt {}} setup {} loop {}",
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         Options {
             cpu_hz: Some(16_000_000),
             ..Options::default()
@@ -35,7 +36,7 @@ fn startup_has_separate_device_and_cpu_irq_effects() {
         .unwrap();
     assert!(start < text.find("asm sideeffect \"sei\"").unwrap());
     // No artificial device or IRQ enable is added to ordinary programs.
-    let plain = compile_typed_ir("loop {}", "atmega328p", Options::default()).unwrap();
+    let plain = compile_typed_ir("loop {}", SupportedMicrocontroller::Atmega328P, Options::default()).unwrap();
     assert!(plain.devices.is_empty() && plain.interrupts.is_empty());
     assert_eq!(
         plain.functions[plain.entry.0].blocks[0].instructions.len(),

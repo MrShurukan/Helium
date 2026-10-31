@@ -61,13 +61,15 @@ pub fn inventory(module: &Module) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::backend::microcontroller_def::SupportedMicrocontroller;
+
     #[test]
     fn inventory_tracks_retained_ir_not_removed_source() {
         let source = "fn dead() { return; noInterrupt {} } fn branch() { if false { noInterrupt {} } } loop {}";
         for optimize in [false, true] {
             let m = crate::compile_typed_ir(
                 source,
-                "atmega328p",
+                SupportedMicrocontroller::Atmega328P,
                 crate::ir::Options {
                     optimize,
                     ..Default::default()
@@ -83,7 +85,9 @@ mod tests {
     #[test]
     fn reports_helper_and_source_without_promising_duration() {
         let source = "noInterrupt fn helper() {}\nloop { noInterrupt { helper(); } }";
-        let m = crate::compile_typed_ir(source, "atmega328p", Default::default()).unwrap();
+        let m = crate::compile_typed_ir(source, SupportedMicrocontroller::Atmega328P,
+                                        Default::default()).unwrap();
+
         let report = super::inventory(&m).join("\n");
         assert!(report.contains("helper: requires noInterrupt"));
         assert!(report.contains("IRQ mask at line 2:"));

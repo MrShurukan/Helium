@@ -9,6 +9,7 @@ use helium::ir::{
 };
 use helium::{analyze, check, compile_typed_ir};
 use std::collections::HashMap;
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 fn errors(source: &str) -> Vec<DiagnosticCode> {
     analyze(source)
@@ -107,7 +108,7 @@ fn boolean_operators_and_pin_inversion_have_explicit_types() {
         panic!()
     };
     assert_eq!(*ty, T::Boolean);
-    check("def Led=PortC.5 OUTPUT; loop { Led=!Led; }", "atmega328p").unwrap();
+    check("def Led=PortC.5 OUTPUT; loop { Led=!Led; }", SupportedMicrocontroller::Atmega328P).unwrap();
 }
 #[test]
 fn ternary_and_default_initializer_are_typed() {
@@ -180,20 +181,16 @@ fn malformed_input_returns_errors_without_panicking() {
 }
 #[test]
 fn target_and_support_errors_are_explicit() {
-    assert_eq!(
-        check(GPIO, "unknown").unwrap_err()[0].code(),
-        DiagnosticCode::Target
-    );
     for pin in ["PortA.0", "PortB.8", "PortC.7"] {
         assert_eq!(
-            check(&format!("def Led={pin} OUTPUT; loop {{}}"), "atmega328p").unwrap_err()[0].code(),
+            check(&format!("def Led={pin} OUTPUT; loop {{}}"), SupportedMicrocontroller::Atmega328P).unwrap_err()[0].code(),
             DiagnosticCode::Pin
         );
     }
     assert_eq!(
         check(
             "def A=PortB.0 OUTPUT; def B=PortB.0 INPUT; loop {}",
-            "atmega328p"
+            SupportedMicrocontroller::Atmega328P
         )
         .unwrap_err()[0]
             .code(),
@@ -204,14 +201,14 @@ fn target_and_support_errors_are_explicit() {
         "loop {for i=0 to 3 {}}",
         "loop {var x:u8=4/0;}",
     ] {
-        let errors = check(source, "atmega328p").unwrap_err();
+        let errors = check(source, SupportedMicrocontroller::Atmega328P).unwrap_err();
         assert!(errors.iter().all(|d| d.location.is_some()), "{source}");
     }
 }
 fn compile(source: &str) -> Module {
     compile_typed_ir(
         source,
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         ir::Options {
             cpu_hz: None,
             verify: true,
@@ -227,7 +224,7 @@ fn gpio_names_multiple_defs_and_deterministic_ir() {
     assert_eq!(module.dump(), compile(GPIO).dump());
     assert_eq!(module.pins[0].name, "Key");
     assert_eq!(module.pins[1].name, "Led");
-    check(GPIO, "atmega328p").unwrap();
+    check(GPIO, SupportedMicrocontroller::Atmega328P).unwrap();
 }
 
 #[test]
@@ -288,7 +285,7 @@ fn setup_must_precede_loop() {
 }
 #[test]
 fn latch_is_supported_by_the_only_backend() {
-    check(include_str!("../examples/functions-latch.he"), "atmega328p").unwrap();
+    check(include_str!("../examples/functions-latch.he"), SupportedMicrocontroller::Atmega328P).unwrap();
 }
 
 #[test]

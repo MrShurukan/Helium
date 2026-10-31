@@ -1,6 +1,7 @@
 //! Independent review probes and regressions for the resolved CLI findings.
 use helium::ir::{self, interpret::Interpreter, Options};
 use std::{fs, process::Command};
+use helium::backend::microcontroller::{SupportedMicrocontroller, ATMEGA328P};
 
 fn options(optimize: bool) -> Options {
     Options {
@@ -51,7 +52,7 @@ fn review_snapshots_reinitialization_and_text_remapping() {
     ];
     for (source, expected) in sources {
         for optimize in [false, true] {
-            let module = helium::compile_typed_ir(source, "atmega328p", options(optimize)).unwrap();
+            let module = helium::compile_typed_ir(source, SupportedMicrocontroller::Atmega328P, options(optimize)).unwrap();
             for module in [&module, &ir::text::specialize(&module).unwrap()] {
                 let run = module
                     .functions
@@ -90,7 +91,7 @@ fn review_output_must_preserve_imported_source() {
     let result = Command::new(env!("CARGO_BIN_EXE_helium"))
         .arg("build")
         .arg(&main)
-        .args(["--mcu", "atmega328p", "--emit", "llvm", "-o"])
+        .args(["--mcu", ATMEGA328P.name, "--emit", "llvm", "-o"])
         .arg(&helper)
         .output()
         .unwrap();
@@ -120,7 +121,7 @@ fn review_output_must_preserve_hard_linked_source() {
     let result = Command::new(env!("CARGO_BIN_EXE_helium"))
         .arg("build")
         .arg(&main)
-        .args(["--mcu", "atmega328p", "--emit", "hex", "--intermediates"])
+        .args(["--mcu", ATMEGA328P.name, "--emit", "hex", "--intermediates"])
         .arg(&intermediate)
         .arg("-o")
         .arg(&output)
@@ -152,7 +153,7 @@ fn review_assembly_can_target_its_own_intermediate() {
     let result = Command::new(env!("CARGO_BIN_EXE_helium"))
         .arg("build")
         .arg(&main)
-        .args(["--mcu", "atmega328p", "--emit", "asm", "--intermediates"])
+        .args(["--mcu", ATMEGA328P.name, "--emit", "asm", "--intermediates"])
         .arg(&intermediate)
         .arg("-o")
         .arg(&output)

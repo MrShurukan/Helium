@@ -4,11 +4,12 @@ use helium::diagnostic::{
 };
 use helium::ir::{interpret::Interpreter, *};
 use helium::{analyze, compile_typed_ir};
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 fn compile(source: &str, optimize: bool) -> Module {
     compile_typed_ir(
         source,
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         Options {
             cpu_hz: None,
             verify: true,

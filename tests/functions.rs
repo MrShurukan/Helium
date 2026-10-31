@@ -3,11 +3,12 @@ use helium::{
     analyze, compile_typed_ir,
     ir::{self, interpret::Interpreter, *},
 };
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 fn compile(source: &str, optimize: bool) -> Module {
     compile_typed_ir(
         source,
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         Options {
             cpu_hz: None,
             verify: true,
@@ -186,7 +187,7 @@ fn recursion_is_rejected_even_in_unused_or_unreachable_code() {
 
 #[test]
 fn default_compilation_accepts_functions() {
-    helium::check("fn f() {} loop { f(); }", "atmega328p").unwrap();
+    helium::check("fn f() {} loop { f(); }", SupportedMicrocontroller::Atmega328P).unwrap();
 }
 
 #[test]

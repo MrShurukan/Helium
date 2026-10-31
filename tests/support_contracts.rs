@@ -4,6 +4,7 @@ use helium::frontend::{
     static_type::{FloatType, IntegerType, StaticType},
 };
 use helium::{analyze, check, compile_llvm, compile_typed_ir, ir::Options};
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 #[test]
 fn analyzed_expressions_have_concrete_types_in_every_source_context() {
@@ -33,7 +34,7 @@ fn analyzed_expressions_have_concrete_types_in_every_source_context() {
 
 #[test]
 fn unconstrained_literal_comparison_uses_executable_i32() {
-    check("loop {if 1 < 2 {}}", "atmega328p").unwrap();
+    check("loop {if 1 < 2 {}}", SupportedMicrocontroller::Atmega328P).unwrap();
 }
 
 #[test]
@@ -53,7 +54,7 @@ fn unsupported_forms_are_rejected_before_dead_code_lowering() {
                 for optimize in [false, true] {
                     let errors = compile_llvm(
                         &source,
-                        "atmega328p",
+                        SupportedMicrocontroller::Atmega328P,
                         Options {
                             verify,
                             optimize,
@@ -76,13 +77,13 @@ fn unsupported_forms_are_rejected_before_dead_code_lowering() {
         let source = format!(
             "def Led=PortB.0 OUTPUT; fn f() {{{prefix}Led=true ? INPUT : OUTPUT;}} loop {{}}"
         );
-        assert!(compile_typed_ir(&source, "atmega328p", Options::default()).is_err());
+        assert!(compile_typed_ir(&source, SupportedMicrocontroller::Atmega328P, Options::default()).is_err());
     }
     for source in [
         "fn f():bool {return 1<2;} loop {}",
         "fn f():bool {return true; return 1<2;} loop {}",
     ] {
-        assert!(check(source, "atmega328p").is_ok());
+        assert!(check(source, SupportedMicrocontroller::Atmega328P).is_ok());
     }
 }
 
@@ -93,7 +94,7 @@ fn constant_modes_and_contextual_integer_widths_remain_supported() {
         fn minimum():i8 {return -128;}
         loop {A=(B=INPUT_PULLUP); var small:u8=255; var other:u8=1;
             var wrapped:u16=small+other; var result:i16=minimum();}",
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
     )
     .unwrap();
     for source in ["loop {2147483648;}", "fn f() {return; 2147483648;} loop {}"] {

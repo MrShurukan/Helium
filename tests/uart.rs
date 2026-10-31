@@ -4,6 +4,7 @@ use helium::{
     diagnostic::{DiagnosticCode, Severity},
     ir::{self, DeviceConfig, Op, Options, StartupPhase},
 };
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 const DEVICE: &str = "device debug=UART0 {baud:38400, mode:TX,}";
 fn options() -> Options {
@@ -30,7 +31,7 @@ fn baud_selection_and_clock_contract() {
         );
     }
     assert!(
-        compile_typed_ir(&source("loop {}"), "atmega328p", Options::default())
+        compile_typed_ir(&source("loop {}"), SupportedMicrocontroller::Atmega328P, Options::default())
             .unwrap_err()
             .iter()
             .any(|d| d.code() == DiagnosticCode::Device)
@@ -39,7 +40,7 @@ fn baud_selection_and_clock_contract() {
 
 #[test]
 fn uart_startup_and_intrinsics_have_explicit_ir() {
-    let m=compile_typed_ir(&source("setup {debug.flush(); debug.write_byte(65);} loop {var ready:bool=debug.try_write_byte(66);}"),"atmega328p",options()).unwrap();
+    let m=compile_typed_ir(&source("setup {debug.flush(); debug.write_byte(65);} loop {var ready:bool=debug.try_write_byte(66);}"),SupportedMicrocontroller::Atmega328P,options()).unwrap();
     assert!(matches!(m.devices[0].config, DeviceConfig::UartTx(_)));
     assert_eq!(m.devices[0].phase, StartupPhase::BeforeSetup);
     let ops = &m.functions[m.entry.0].blocks[0].instructions;
@@ -70,7 +71,7 @@ fn blocking_warning_propagates_through_real_functions_and_survives_optimization(
     for optimize in [false, true] {
         let c = compile_llvm(
             &s,
-            "atmega328p",
+            SupportedMicrocontroller::Atmega328P,
             Options {
                 optimize,
                 ..options()
@@ -83,7 +84,7 @@ fn blocking_warning_propagates_through_real_functions_and_survives_optimization(
         "setup{debug.flush();} loop{noInterrupt{debug.write_byte(65);}}",
         "timer t=Timer1 {every:1ms, interrupt {var ok:bool=debug.try_write_byte(65);}} loop{}",
     ] {
-        assert!(compile_llvm(&source(body), "atmega328p", options())
+        assert!(compile_llvm(&source(body), SupportedMicrocontroller::Atmega328P, options())
             .unwrap()
             .warnings
             .is_empty());
@@ -103,13 +104,13 @@ fn uart_signature_resources_and_shared_access_are_checked() {
         "timer t=Timer1{every:1ms,interrupt{debug.write_byte(65);}} loop{debug.write_byte(66);}",
     ] {
         assert!(
-            compile_llvm(&source(body), "atmega328p", options()).is_err(),
+            compile_llvm(&source(body), SupportedMicrocontroller::Atmega328P, options()).is_err(),
             "{body}"
         );
     }
     let shared=source("noInterrupt fn send(){debug.write_byte(65);} timer t=Timer1{every:1ms,interrupt{send();}} loop{noInterrupt{send();}}");
     assert_eq!(
-        compile_llvm(&shared, "atmega328p", options())
+        compile_llvm(&shared, SupportedMicrocontroller::Atmega328P, options())
             .unwrap()
             .warnings
             .len(),
@@ -137,7 +138,7 @@ fn malformed_device_and_truncated_calls_do_not_panic() {
 fn verifier_rejects_invalid_uart_devices_and_calls() {
     let m = compile_typed_ir(
         &source("setup{debug.write_byte(65);} loop{}"),
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         options(),
     )
     .unwrap();
@@ -207,7 +208,7 @@ fn uart_polling_and_isr_execute_at_all_optimization_levels() {
         for level in [Optimization::None, Optimization::Speed, Optimization::Size] {
             let module = compile_typed_ir(
                 &s,
-                "atmega328p",
+                SupportedMicrocontroller::Atmega328P,
                 Options {
                     optimize: matches!(level, Optimization::Speed),
                     ..options()

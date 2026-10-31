@@ -1,6 +1,7 @@
 use helium::diagnostic::{Diagnostic, DiagnosticCode, DiagnosticKind, RenderOptions};
 use helium::frontend::{utils::SourceLocation, ParserErrorType};
 use helium::{analyze, check};
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 #[test]
 fn structured_errors_keep_names_types_and_spans() {
@@ -97,7 +98,7 @@ fn missing_source_location_and_multiline_spans_render_without_panics() {
 #[test]
 fn support_errors_use_the_same_renderer() {
     let source = "loop { var x:f32=1.5; }";
-    let errors = check(source, "atmega328p").unwrap_err();
+    let errors = check(source, SupportedMicrocontroller::Atmega328P).unwrap_err();
     assert!(matches!(
         errors[0].kind.as_ref(),
         DiagnosticKind::UnsupportedType { .. }

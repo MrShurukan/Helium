@@ -3,6 +3,7 @@ use helium::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticKind, LabelKind,
 };
 use helium::{analyze, check};
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 fn excerpt(source: &str, location: helium::frontend::utils::SourceLocation) -> &str {
     let file = SourceFile {
@@ -135,7 +136,7 @@ fn argument_and_return_errors_link_to_the_declared_type() {
 #[test]
 fn unsupported_machine_type_is_located_before_tool_execution() {
     let source = "var counter:f32=1.5; loop {}";
-    let errors = check(source, "atmega328p").unwrap_err();
+    let errors = check(source, SupportedMicrocontroller::Atmega328P).unwrap_err();
     assert_eq!(errors.len(), 1);
     assert!(matches!(
         *errors[0].kind,
@@ -147,12 +148,12 @@ fn unsupported_machine_type_is_located_before_tool_execution() {
 #[test]
 fn pin_diagnostics_identify_the_pin_or_mode_and_original_binding() {
     let source = "def A=PortB.0 OUTPUT; def B=PortB.0 INPUT; loop {}";
-    let errors = check(source, "atmega328p").unwrap_err();
+    let errors = check(source, SupportedMicrocontroller::Atmega328P).unwrap_err();
     let e = &errors[0];
     assert_eq!(excerpt(source, e.location.unwrap()), "PortB.0");
     assert_eq!(excerpt(source, e.labels[0].location), "PortB.0");
     let source = "def A=PortB.0 INPUT_PULLDOWN; loop {}";
-    let errors = check(source, "atmega328p").unwrap_err();
+    let errors = check(source, SupportedMicrocontroller::Atmega328P).unwrap_err();
     assert_eq!(
         excerpt(source, errors[0].location.unwrap()),
         "INPUT_PULLDOWN"
@@ -242,7 +243,7 @@ fn operators_are_primary_and_operands_are_related_locations() {
     assert_eq!(excerpt(source, e.location.unwrap()), "!");
 
     let source = "loop { var x:u8=4 / 0; }";
-    let errors = check(source, "atmega328p").unwrap_err();
+    let errors = check(source, SupportedMicrocontroller::Atmega328P).unwrap_err();
     assert_eq!(excerpt(source, errors[0].location.unwrap()), "/");
 }
 
@@ -278,6 +279,6 @@ fn incomplete_unicode_programs_keep_every_range_inside_the_file() {
 #[test]
 fn invalid_constant_arithmetic_is_rejected_even_after_a_return() {
     let source = "fn f() { return; var x:u8=4/0; } loop {}";
-    let errors = check(source, "atmega328p").unwrap_err();
+    let errors = check(source, SupportedMicrocontroller::Atmega328P).unwrap_err();
     assert_eq!(excerpt(source, errors[0].location.unwrap()), "/");
 }

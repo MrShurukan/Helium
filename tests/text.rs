@@ -2,6 +2,7 @@ use helium::{
     backend::microcontroller::ATMEGA328P,
     ir::{self, Op, Options, TextSpace, Type},
 };
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 fn options() -> Options {
     Options {
@@ -10,7 +11,7 @@ fn options() -> Options {
     }
 }
 fn compile(s: &str) -> ir::Module {
-    helium::compile_typed_ir(s, "atmega328p", options()).unwrap_or_else(|e| panic!("{e:#?}"))
+    helium::compile_typed_ir(s, SupportedMicrocontroller::Atmega328P, options()).unwrap_or_else(|e| panic!("{e:#?}"))
 }
 
 #[test]
@@ -48,7 +49,7 @@ fn reference_restrictions_and_invalid_operations_are_diagnosed() {
         "loop{var s=\"bad\\q\";}",
     ] {
         assert!(
-            helium::compile_llvm(s, "atmega328p", options()).is_err(),
+            helium::compile_llvm(s, SupportedMicrocontroller::Atmega328P, options()).is_err(),
             "{s}"
         );
     }
@@ -63,7 +64,7 @@ fn utf8_byte_limit_and_truncated_reference_syntax_are_checked() {
         let _ = helium::analyze(&source[..end]);
     }
     let oversized = format!("setup{{var text=\"{}\";}}loop{{}}", "Я".repeat(32768));
-    let errors = helium::compile_llvm(&oversized, "atmega328p", options()).unwrap_err();
+    let errors = helium::compile_llvm(&oversized, SupportedMicrocontroller::Atmega328P, options()).unwrap_err();
     assert!(errors.iter().any(|e| e.message().contains("65535")));
 }
 

@@ -3,6 +3,7 @@ use helium::{
     ir::{self, Options},
     timer::{self, TimerError, ToleranceDirection as D},
 };
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 #[test]
 fn direction_filters_before_selecting_the_nearest_period() {
@@ -175,7 +176,7 @@ fn signed_tolerance_survives_source_ir_reports_and_verification() {
         for optimize in [false, true] {
             let mut module = compile_typed_ir(
                 &source,
-                "atmega328p",
+                SupportedMicrocontroller::Atmega328P,
                 Options {
                     cpu_hz: Some(16_000_000),
                     optimize,
@@ -197,7 +198,7 @@ fn signed_tolerance_survives_source_ir_reports_and_verification() {
             &format!(
                 "timer t=Timer1 {{every:125ns, tolerance:{tolerance}, interrupt {{}}}} loop {{}}"
             ),
-            "atmega328p",
+            SupportedMicrocontroller::Atmega328P,
             Options {
                 cpu_hz: Some(16_000_000),
                 ..Options::default()

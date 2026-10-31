@@ -1,11 +1,12 @@
 use helium::ir::interpret::{Event, Interpreter};
 use helium::ir::verify::{verify, ErrorKind};
 use helium::{compile_typed_ir, ir::*};
+use helium::backend::microcontroller::SupportedMicrocontroller;
 
 fn compile(source: &str) -> Module {
     compile_typed_ir(
         source,
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         Options {
             cpu_hz: None,
             verify: true,
@@ -18,7 +19,7 @@ fn compile(source: &str) -> Module {
 fn optimized(source: &str) -> Module {
     compile_typed_ir(
         source,
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         Options {
             cpu_hz: None,
             verify: true,
@@ -169,7 +170,7 @@ fn unsupported_features_fail_with_source_diagnostics() {
         "loop {for i=0 to 3 {}}",
         "loop { var mode:PinMode=INPUT; }",
     ] {
-        let errors = compile_typed_ir(source, "atmega328p", Options::default()).unwrap_err();
+        let errors = compile_typed_ir(source, SupportedMicrocontroller::Atmega328P, Options::default()).unwrap_err();
         assert!(errors
             .iter()
             .all(|e| e.code() != helium::diagnostic::DiagnosticCode::Internal));
@@ -185,7 +186,7 @@ fn verifier_defaults_on_in_every_profile_and_can_be_disabled_in_api() {
         compile(source).dump(),
         compile_typed_ir(
             source,
-            "atmega328p",
+            SupportedMicrocontroller::Atmega328P,
             Options {
                 cpu_hz: None,
                 verify: false,
@@ -445,7 +446,7 @@ fn all_integer_widths_have_explicit_wrapping_and_literal_ranges() {
 
     // Unconstrained integer expressions default to i32; they must not silently truncate.
     let errors =
-        compile_typed_ir("loop {4294967296==0;}", "atmega328p", Options::default()).unwrap_err();
+        compile_typed_ir("loop {4294967296==0;}", SupportedMicrocontroller::Atmega328P, Options::default()).unwrap_err();
     assert_eq!(
         errors[0].code(),
         helium::diagnostic::DiagnosticCode::LiteralRange

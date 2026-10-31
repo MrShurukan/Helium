@@ -19,7 +19,6 @@ use clap::Parser;
 
 use helium::backend::microcontroller::Microcontroller;
 use helium::backend::{flash as flash_backend, llvm_toolchain};
-use helium::diagnostic::{Diagnostic, DiagnosticKind, RenderOptions};
 use helium::{compile_project_ir, compile_project_llvm, ir};
 
 use crate::cli::Command;
@@ -64,22 +63,7 @@ fn run(args: cli::CliArgs) -> Result<String, String> {
 
 /// Verifies target mcu and cpu-hz for that target (if specified). Returns the selected target
 fn verify_common_args(args: &cli::CommonArgs) -> Result<&'static Microcontroller, String> {
-    let Some(target) = helium::backend::microcontroller::get(&args.mcu) else {
-        return Err(
-            Diagnostic::new(
-                DiagnosticKind::UnsupportedTarget {
-                    mcu: args.mcu.clone(),
-                },
-                None,
-            )
-                .render_with(
-                    "",
-                    RenderOptions {
-                        color: is_color(),
-                    },
-                ),
-        );
-    };
+    let target = helium::backend::microcontroller::get(args.mcu);
 
     if let Some(cpu_hz) = args.cpu_hz {
         helium::timer::validate_clock(target, cpu_hz).map_err(|e| e.to_string())?;
@@ -130,7 +114,7 @@ fn check(args: cli::CheckArgs) -> Result<String, String> {
     Ok(format!(
         "Checked {}{}",
         input.display(),
-        device_report(&llvm)
+        device_report(&llvm.output)
     ))
 }
 
@@ -340,7 +324,7 @@ fn flash(args: cli::FlashArgs) -> Result<String, String> {
 
     flash_backend::flash(
         &input,
-        &args.common.mcu,
+        args.common.mcu,
         &args.programmer,
     )?;
 

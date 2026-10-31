@@ -3,6 +3,7 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use clio::{InputPath, OutputPath};
 use helium::backend::llvm_toolchain;
+use helium::backend::microcontroller_def::SupportedMicrocontroller;
 
 #[derive(Debug, Parser)]
 #[command(name = "helium")]
@@ -41,9 +42,8 @@ pub enum Command {
 #[derive(Debug, Args)]
 pub struct CommonArgs {
     /// Target MCU.
-    // TODO: Make this an enum of supported variants
-    #[arg(long)]
-    pub mcu: String,
+    #[arg(long, ignore_case = true)]
+    pub mcu: SupportedMicrocontroller,
 
     /// CPU frequency in Hz.
     ///

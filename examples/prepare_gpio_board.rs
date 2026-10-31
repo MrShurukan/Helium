@@ -5,7 +5,7 @@ fn main() {
     let optimize = std::env::args().any(|a| a == "--optimize-ir");
     let module = compile_typed_ir(
         include_str!("../tools/board-gpio/program.he"),
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         Options {
             optimize,
             cpu_hz: Some(16_000_000),

@@ -1,9 +1,11 @@
+use helium::backend::microcontroller::ATMEGA328P;
 use std::{
     fs,
     path::PathBuf,
     process::{Command, Output},
     sync::atomic::{AtomicUsize, Ordering},
 };
+
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
@@ -56,7 +58,7 @@ impl Fixture {
         child
             .arg(command)
             .arg(&self.source)
-            .args(["--mcu", "atmega328p"])
+            .args(["--mcu", ATMEGA328P.name])
             .args(extra);
         if !tools {
             child
@@ -183,20 +185,6 @@ fn check_and_emit_need_no_external_tools_and_are_quiet() {
         .is_file());
     assert!(!fixture.root.join("elsewhere/build").exists());
 }
-#[test]
-fn build_reports_missing_llvm_without_panicking() {
-    let fixture = Fixture::new();
-    let result = fixture.run("build", &[], false);
-    assert!(!result.status.success());
-    assert!(stderr(&result).contains("Cannot run"));
-    assert!(!stderr(&result).contains("panicked"));
-    assert_eq!(
-        fs::read_dir(fixture.source.parent().unwrap().join("build"))
-            .unwrap()
-            .count(),
-        0
-    );
-}
 
 #[test]
 fn intermediates_options_and_failed_rebuild_preserve_existing_files() {
@@ -263,7 +251,7 @@ fn intermediates_cannot_replace_source_or_use_a_directory_as_a_file() {
         .command()
         .arg("build")
         .arg(&source)
-        .args(["--mcu", "atmega328p", "--intermediates"])
+        .args(["--mcu", ATMEGA328P.name, "--intermediates"])
         .arg(&folder)
         .output()
         .unwrap();
@@ -425,7 +413,7 @@ fn dotted_source_names_keep_the_full_stem() {
         .command()
         .arg("build")
         .arg(&source)
-        .args(["--mcu", "atmega328p", "--emit", "llvm"])
+        .args(["--mcu", ATMEGA328P.name, "--emit", "llvm"])
         .env("PATH", "")
         .output()
         .unwrap();

@@ -1,3 +1,4 @@
+use helium::backend::microcontroller::SupportedMicrocontroller;
 use helium::ir::{
     self,
     interpret::{Error, Interpreter},
@@ -7,7 +8,7 @@ use helium::ir::{
 fn compile(source: &str, optimize: bool) -> ir::Module {
     helium::compile_typed_ir(
         source,
-        "atmega328p",
+        SupportedMicrocontroller::Atmega328P,
         Options {
             optimize,
             verify: true,
@@ -54,7 +55,7 @@ fn numeric_casts_preserve_source_width_and_evaluate_once() {
         "setup{var a:[u8;2]=[1;2];var x=(u8)a;}loop{}",
         "setup{var x=(bool)1;}loop{}",
     ] {
-        assert!(helium::compile_typed_ir(source, "atmega328p", Options::default()).is_err());
+        assert!(helium::compile_typed_ir(source, SupportedMicrocontroller::Atmega328P, Options::default()).is_err());
     }
 }
 
@@ -193,7 +194,7 @@ fn numeric_diagnostics_and_mixed_widths() {
         for prefix in ["", "return;"] {
             let source = format!("fn f(){{{prefix}{statement}}}setup{{}}loop{{}}");
             let errors =
-                helium::compile_typed_ir(&source, "atmega328p", Options::default()).unwrap_err();
+                helium::compile_typed_ir(&source, SupportedMicrocontroller::Atmega328P, Options::default()).unwrap_err();
             assert!(
                 errors.iter().any(|e| matches!(
                     *e.kind,
